@@ -1,0 +1,1620 @@
+import * as vscode from 'vscode';
+import { scanForImages } from './fileService';
+import { ThumbnailService } from './thumbnailService';
+import {
+  ScanResult,
+  TupleInfo,
+  ImageTuple,
+  ImageFile,
+  WebViewMessage,
+  ExtensionMessage,
+  LoadedImage,
+  MODALITY_COLORS,
+  isImageFile
+} from './types';
+
+/**
+ * Info about a recently deleted file (for rename detection)
+ */
+interface DeletedFileInfo {
+  uri: vscode.Uri;
+  tupleIndex: number;
+  modalityIndex: number;
+  timestamp: number;
+}
+
+/**
+ * State associated with a single panel instance
+ */
+interface PanelState {
+  panel: vscode.WebviewPanel;
+  scanResult: ScanResult;
+  loadedImages: Map<string, LoadedImage>;
+  currentTupleIndex: number;
+  fileWatchers: vscode.FileSystemWatcher[];
+  watchedDirs: Set<string>;
+  baseUri?: vscode.Uri; // Root directory for single-directory mode (mode 1)
+  modalityDirs: Map<string, vscode.Uri>; // Modality name -> directory URI (for mode 2)
+  recentlyDeleted: DeletedFileInfo[];
+}
+
+/**
+ * Provider for the ImageCompare WebView panel
+ */
+export class ImageCompareProvider {
+  public static readonly viewType = 'imageCompare.viewer';
+
+  private thumbnailService: ThumbnailService;
+  private disposables: vscode.Disposable[] = [];
+  // Track all open panels (for cleanup on deactivate)
+  private panels: Set<PanelState> = new Set();
+  private panelCounter = 0; // For fallback naming
+
+  constructor(
+    private readonly context: vscode.ExtensionContext
+  ) {
+    this.thumbnailService = new ThumbnailService(context);
+  }
+
+  /**
+   * Initialize the provider
+   */
+  async initialize(): Promise<void> {
+    await this.thumbnailService.initialize();
+  }
+
+  /**
+   * Open the ImageCompare viewer for the given URIs
+   * Each call creates a new independent panel/tab
+   */
+  async openCompare(uris: vscode.Uri[]): Promise<void> {
+    try {
+      // Scan for images
+      const scanResult = await scanForImages(uris);
+
+      if (scanResult.tuples.length === 0) {
+        vscode.window.showErrorMessage('No image tuples found');
+        return;
+      }
+
+      // Derive a title - use common prefix from tuple names or folder name
+      const title = this.deriveTitle(scanResult, uris);
+
+      // Create a new panel
+      const panel = vscode.window.createWebviewPanel(
+        ImageCompareProvider.viewType,
+        title,
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: [
+            vscode.Uri.joinPath(this.context.extensionUri, 'dist')
+          ]
+        }
+      );
+
+      // Collect directories to watch
+      const watchedDirs = this.collectWatchedDirs(scanResult, uris);
+
+      // Determine mode and set up directory tracking
+      // Mode 1: Single directory with subdirectories -> baseUri is set
+      // Mode 2: Multiple directories selected -> modalityDirs maps modality -> directory
+      // Mode 3: Multiple files selected -> neither (no directory structure)
+      let baseUri: vscode.Uri | undefined;
+      const modalityDirs = new Map<string, vscode.Uri>();
+
+      if (uris.length === 1) {
+        // Mode 1: Single directory
+        baseUri = uris[0];
+      } else if (uris.length >= 2 && scanResult.isMultiTupleMode) {
+        // Mode 2: Multiple directories - map modality names to directory URIs
+        // The modality names are the directory names
+        for (const uri of uris) {
+          const dirName = uri.path.split('/').pop() || '';
+          if (scanResult.modalities.includes(dirName)) {
+            modalityDirs.set(dirName, uri);
+          }
+        }
+      }
+      // Mode 3: Multiple files - no directory tracking needed
+
+      // Create panel-specific state
+      const panelState: PanelState = {
+        panel,
+        scanResult,
+        loadedImages: new Map<string, LoadedImage>(),
+        currentTupleIndex: 0,
+        fileWatchers: [],
+        watchedDirs,
+        baseUri,
+        modalityDirs,
+        recentlyDeleted: []
+      };
+
+      // Set up file system watcher
+      this.setupFileWatcher(panelState);
+
+      // Track this panel
+      this.panels.add(panelState);
+
+      // Handle messages from webview (with panel-specific state)
+      // IMPORTANT: Set up listener BEFORE setting HTML to avoid race condition
+      panel.webview.onDidReceiveMessage(
+        (message: WebViewMessage) => this.handlePanelMessage(panelState, message),
+        null,
+        this.disposables
+      );
+
+      // Set HTML content (this triggers webview JS to run and send 'ready')
+      panel.webview.html = this.getHtmlContent(panel.webview);
+
+      // Handle panel disposal
+      panel.onDidDispose(
+        () => {
+          panelState.loadedImages.clear();
+          panelState.fileWatchers.forEach(w => w.dispose());
+          this.panels.delete(panelState);
+        },
+        null,
+        this.disposables
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      vscode.window.showErrorMessage(`ImageCompare: ${message}`);
+    }
+  }
+
+
+  /**
+   * Handle messages from the webview (panel-specific)
+   */
+  private async handlePanelMessage(state: PanelState, message: WebViewMessage): Promise<void> {
+    switch (message.type) {
+      case 'ready':
+        await this.sendInitData(state);
+        break;
+
+      case 'requestThumbnails':
+        await this.sendThumbnails(state, message.tupleIndices);
+        break;
+
+      case 'requestImage':
+        await this.sendImage(state, message.tupleIndex, message.modalityIndex);
+        break;
+
+      case 'navigateTo':
+        state.currentTupleIndex = message.tupleIndex;
+        // Don't prefetch immediately - wait for tuple to fully load first
+        break;
+
+      case 'setCurrentTuple':
+        // Immediately update current tuple (used to cancel stale loads)
+        state.currentTupleIndex = message.tupleIndex;
+        break;
+
+      case 'tupleFullyLoaded':
+        // Only prefetch if this is still the current tuple (user hasn't navigated away)
+        if (message.tupleIndex === state.currentTupleIndex) {
+          await this.prefetchAround(state, message.tupleIndex);
+        }
+        break;
+
+      case 'log':
+        // WebView debug messages (disabled in production)
+        break;
+    }
+  }
+
+  /**
+   * Find an image file in a tuple for a specific modality
+   */
+  private findImageForModality(tuple: ImageTuple, modality: string): ImageFile | undefined {
+    return tuple.images.find(img => img.modality === modality);
+  }
+
+  /**
+   * Send initialization data to webview
+   */
+  private async sendInitData(state: PanelState): Promise<void> {
+    const config = vscode.workspace.getConfiguration('imageCompare');
+    const thumbnailSize = config.get<number>('thumbnailSize', 100);
+    const prefetchCount = config.get<number>('prefetchCount', 3);
+
+    const allModalities = state.scanResult.modalities;
+
+    const tuples: TupleInfo[] = state.scanResult.tuples.map((tuple, tupleIndex) => ({
+      name: tuple.name,
+      images: allModalities.map((modality, modalityIndex) => {
+        const img = this.findImageForModality(tuple, modality);
+        return {
+          name: img?.name || '',
+          modality,
+          tupleIndex,
+          modalityIndex
+        };
+      })
+    }));
+
+    const initMessage: ExtensionMessage = {
+      type: 'init',
+      tuples,
+      modalities: allModalities,
+      config: { thumbnailSize, prefetchCount }
+    };
+
+    state.panel.webview.postMessage(initMessage);
+    this.generateAllThumbnails(state);
+  }
+
+  /**
+   * Generate thumbnails for all images in background
+   */
+  private generateAllThumbnails(state: PanelState): void {
+    const config = vscode.workspace.getConfiguration('imageCompare');
+    const thumbnailSize = config.get<number>('thumbnailSize', 100);
+    const allModalities = state.scanResult.modalities;
+
+    // Build list of all images to thumbnail (using global modality indices)
+    const items: Array<{ uri: vscode.Uri; tupleIndex: number; modalityIndex: number }> = [];
+    // Track which slots are missing (no image file)
+    const missingSlots: Array<{ tupleIndex: number; modalityIndex: number }> = [];
+
+    for (let tupleIndex = 0; tupleIndex < state.scanResult.tuples.length; tupleIndex++) {
+      const tuple = state.scanResult.tuples[tupleIndex];
+      
+      for (let modalityIndex = 0; modalityIndex < allModalities.length; modalityIndex++) {
+        const modality = allModalities[modalityIndex];
+        const imageFile = this.findImageForModality(tuple, modality);
+        
+        if (imageFile) {
+          items.push({
+            uri: imageFile.uri,
+            tupleIndex,
+            modalityIndex
+          });
+        } else {
+          // Mark as missing - will send error immediately
+          missingSlots.push({ tupleIndex, modalityIndex });
+        }
+      }
+    }
+
+    // Send errors for missing slots immediately
+    for (const { tupleIndex, modalityIndex } of missingSlots) {
+      this.sendThumbnailErrorMessage(state, tupleIndex, modalityIndex, 'Image not available');
+    }
+
+    // Queue thumbnail generation for existing images
+    this.thumbnailService.queueThumbnails(
+      items,
+      thumbnailSize * 2, // Generate at 2x for retina
+      (tupleIndex, modalityIndex, dataUrl) => {
+        this.sendThumbnailMessage(state, tupleIndex, modalityIndex, dataUrl);
+      },
+      (tupleIndex, modalityIndex, error) => {
+        this.sendThumbnailErrorMessage(state, tupleIndex, modalityIndex, error);
+      },
+      (current, total) => {
+        // Adjust progress to include missing slots as already "done"
+        this.sendProgressMessage(state, current + missingSlots.length, total + missingSlots.length);
+      }
+    );
+  }
+
+  /**
+   * Send thumbnails for specific tuple indices
+   */
+  private async sendThumbnails(state: PanelState, tupleIndices: number[]): Promise<void> {
+    const config = vscode.workspace.getConfiguration('imageCompare');
+    const thumbnailSize = config.get<number>('thumbnailSize', 100);
+    const allModalities = state.scanResult.modalities;
+
+    for (const tupleIndex of tupleIndices) {
+      if (tupleIndex < 0 || tupleIndex >= state.scanResult.tuples.length) continue;
+
+      const tuple = state.scanResult.tuples[tupleIndex];
+      
+      for (let modalityIndex = 0; modalityIndex < allModalities.length; modalityIndex++) {
+        const modality = allModalities[modalityIndex];
+        const imageFile = this.findImageForModality(tuple, modality);
+        
+        if (!imageFile) {
+          this.sendThumbnailErrorMessage(state, tupleIndex, modalityIndex, 'Image not available');
+          continue;
+        }
+        
+        try {
+          const dataUrl = await this.thumbnailService.getThumbnail(imageFile.uri, thumbnailSize * 2);
+          this.sendThumbnailMessage(state, tupleIndex, modalityIndex, dataUrl);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown error';
+          this.sendThumbnailErrorMessage(state, tupleIndex, modalityIndex, message);
+        }
+      }
+    }
+  }
+
+  /**
+   * Send a full image to the webview
+   */
+  private async sendImage(state: PanelState, tupleIndex: number, modalityIndex: number): Promise<void> {
+    const cacheKey = `${tupleIndex}-${modalityIndex}`;
+
+    // Check cache first
+    if (state.loadedImages.has(cacheKey)) {
+      const cached = state.loadedImages.get(cacheKey)!;
+      const msg: ExtensionMessage = {
+        type: 'image',
+        tupleIndex,
+        modalityIndex,
+        dataUrl: cached.dataUrl,
+        width: cached.width,
+        height: cached.height
+      };
+      state.panel.webview.postMessage(msg);
+      return;
+    }
+
+    // Skip loading if user has navigated away from this tuple
+    if (tupleIndex !== state.currentTupleIndex) {
+      return;
+    }
+
+    // Look up image by modality
+    const tuple = state.scanResult.tuples[tupleIndex];
+    const modality = state.scanResult.modalities[modalityIndex];
+    const imageFile = this.findImageForModality(tuple, modality);
+
+    if (!imageFile) {
+      const msg: ExtensionMessage = {
+        type: 'imageError',
+        tupleIndex,
+        modalityIndex,
+        error: 'Image not available'
+      };
+      state.panel.webview.postMessage(msg);
+      return;
+    }
+
+    try {
+      const { dataUrl, width, height } = await this.thumbnailService.loadFullImage(imageFile.uri);
+      state.loadedImages.set(cacheKey, { dataUrl, width, height });
+
+      if (tupleIndex === state.currentTupleIndex) {
+        const msg: ExtensionMessage = {
+          type: 'image',
+          tupleIndex,
+          modalityIndex,
+          dataUrl,
+          width,
+          height
+        };
+        state.panel.webview.postMessage(msg);
+      }
+    } catch (error) {
+      if (tupleIndex === state.currentTupleIndex) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        const msg: ExtensionMessage = {
+          type: 'imageError',
+          tupleIndex,
+          modalityIndex,
+          error: message
+        };
+        state.panel.webview.postMessage(msg);
+      }
+    }
+  }
+
+  /**
+   * Prefetch images around the current tuple
+   */
+  private async prefetchAround(state: PanelState, centerIndex: number): Promise<void> {
+    const config = vscode.workspace.getConfiguration('imageCompare');
+    const prefetchCount = config.get<number>('prefetchCount', 3);
+    const allModalities = state.scanResult.modalities;
+
+    // Prefetch ahead and behind
+    for (let offset = 0; offset <= prefetchCount; offset++) {
+      const indices = offset === 0 ? [centerIndex] : [centerIndex + offset, centerIndex - offset];
+
+      for (const tupleIndex of indices) {
+        if (tupleIndex >= 0 && tupleIndex < state.scanResult.tuples.length) {
+          // Iterate over all modalities (using global indices)
+          for (let modalityIndex = 0; modalityIndex < allModalities.length; modalityIndex++) {
+            const cacheKey = `${tupleIndex}-${modalityIndex}`;
+            if (!state.loadedImages.has(cacheKey)) {
+              // Load in background (don't await)
+              this.loadImageToCache(state, tupleIndex, modalityIndex);
+            }
+          }
+        }
+      }
+    }
+
+    // Evict distant tuples from memory
+    this.evictDistantTuples(state, centerIndex, prefetchCount + 2);
+  }
+
+  /**
+   * Load an image into cache without sending to webview
+   */
+  private async loadImageToCache(state: PanelState, tupleIndex: number, modalityIndex: number): Promise<void> {
+    const cacheKey = `${tupleIndex}-${modalityIndex}`;
+    if (state.loadedImages.has(cacheKey)) return;
+
+    const tuple = state.scanResult.tuples[tupleIndex];
+    const modality = state.scanResult.modalities[modalityIndex];
+    const imageFile = this.findImageForModality(tuple, modality);
+    
+    if (!imageFile) return;
+
+    try {
+      const { dataUrl, width, height } = await this.thumbnailService.loadFullImage(imageFile.uri);
+      state.loadedImages.set(cacheKey, { dataUrl, width, height });
+    } catch {
+      // Silently fail for prefetch
+    }
+  }
+
+  /**
+   * Evict images that are too far from current position
+   */
+  private evictDistantTuples(state: PanelState, centerIndex: number, maxDistance: number): void {
+    const keysToDelete: string[] = [];
+
+    for (const key of state.loadedImages.keys()) {
+      const tupleIndex = parseInt(key.split('-')[0], 10);
+      if (Math.abs(tupleIndex - centerIndex) > maxDistance) {
+        keysToDelete.push(key);
+      }
+    }
+
+    for (const key of keysToDelete) {
+      state.loadedImages.delete(key);
+    }
+  }
+
+  /**
+   * Send thumbnail message to webview
+   */
+  private sendThumbnailMessage(state: PanelState, tupleIndex: number, modalityIndex: number, dataUrl: string): void {
+    const msg: ExtensionMessage = { type: 'thumbnail', tupleIndex, modalityIndex, dataUrl };
+    state.panel.webview.postMessage(msg);
+  }
+
+  /**
+   * Send thumbnail error message to webview
+   */
+  private sendThumbnailErrorMessage(state: PanelState, tupleIndex: number, modalityIndex: number, error: string): void {
+    const msg: ExtensionMessage = { type: 'thumbnailError', tupleIndex, modalityIndex, error };
+    state.panel.webview.postMessage(msg);
+  }
+
+  /**
+   * Send progress message to webview
+   */
+  private sendProgressMessage(state: PanelState, current: number, total: number): void {
+    const msg: ExtensionMessage = { type: 'thumbnailProgress', current, total };
+    state.panel.webview.postMessage(msg);
+  }
+
+  /**
+   * Get HTML content for the webview
+   */
+  private getHtmlContent(webview: vscode.Webview): string {
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
+    );
+
+    const nonce = this.getNonce();
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
+  <title>ImageCompare</title>
+  <style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--vscode-editor-background, #1a1a1a);
+  color: var(--vscode-editor-foreground, #fff);
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground, #888);
+}
+#loading.hidden { display: none; }
+
+#viewer {
+  display: none;
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+}
+#viewer.active { display: block; }
+#viewer.dragging { cursor: grabbing; }
+
+#canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+#image-loader {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  z-index: 5;
+  pointer-events: none;
+}
+#image-loader.active { display: flex; }
+#viewer.has-carousel #image-loader {
+  left: calc(50% + var(--carousel-offset, 0px) / 2);
+}
+#loader-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--vscode-editor-background, #333);
+  border-top-color: var(--vscode-textLink-foreground, #0af);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+#canvas.preview {
+  opacity: 0.5;
+  filter: blur(2px);
+}
+
+#thumbnail {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid var(--vscode-panel-border, #444);
+  border-radius: 4px;
+  padding: 4px;
+  display: none;
+}
+#thumbnail.active { display: block; }
+#thumb-canvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+#thumb-viewport {
+  position: absolute;
+  border: 2px solid #f0f;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+#info {
+  background: var(--vscode-sideBar-background, #2a2a2a);
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  flex-shrink: 0;
+  min-height: 36px;
+  gap: 12px;
+  border-top: 1px solid var(--vscode-panel-border, #333);
+}
+#info.hidden { display: none; }
+
+#modality-selector {
+  display: flex;
+  gap: 2px 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+  min-width: 0;
+}
+
+#status {
+  color: var(--vscode-descriptionForeground, #888);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  line-height: 1.2;
+}
+#status-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+#status-info {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.modality-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+  border: none;
+  color: #000;
+  user-select: none;
+  position: relative;
+  flex-shrink: 0;
+}
+.modality-btn:hover { transform: scale(1.05); }
+.modality-btn.active {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--vscode-focusBorder, #fff);
+}
+.modality-btn.inactive { opacity: 0.4; }
+
+#reorder-buttons {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  align-items: center;
+}
+.reorder-btn {
+  background: var(--vscode-button-secondaryBackground, #444);
+  color: var(--vscode-button-secondaryForeground, #fff);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.reorder-btn:hover { background: var(--vscode-button-secondaryHoverBackground, #555); }
+.reorder-btn:disabled { opacity: 0.3; cursor: default; }
+
+#help-btn {
+  background: var(--vscode-button-secondaryBackground, #444);
+  color: var(--vscode-button-secondaryForeground, #fff);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+#help-btn:hover { background: var(--vscode-button-secondaryHoverBackground, #555); }
+
+#progress-container {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--vscode-notifications-background, rgba(0, 0, 0, 0.8));
+  border: 1px solid var(--vscode-panel-border, #444);
+  border-radius: 8px;
+  padding: 12px 20px;
+  z-index: 50;
+  display: none;
+  min-width: 250px;
+  text-align: center;
+}
+#progress-container.active { display: block; }
+#progress-text {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #aaa);
+}
+#progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--vscode-progressBar-background, #333);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#progress-fill {
+  height: 100%;
+  background: var(--vscode-progressBar-background, #0af);
+  width: 0%;
+  transition: width 0.1s;
+}
+
+/* Carousel styles */
+#carousel {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--vscode-sideBar-background, rgba(0, 0, 0, 0.85));
+  border-right: 1px solid var(--vscode-panel-border, #333);
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 10;
+}
+#carousel.active { display: block; }
+#carousel::-webkit-scrollbar { width: 6px; }
+#carousel::-webkit-scrollbar-track { background: var(--vscode-scrollbarSlider-background, #1a1a1a); }
+#carousel::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-activeBackground, #444);
+  border-radius: 3px;
+}
+
+.carousel-row {
+  display: flex;
+  gap: 2px;
+  padding: 4px 12px 4px 6px; /* Extra right padding for scrollbar */
+  cursor: pointer;
+  border-bottom: 1px solid var(--vscode-panel-border, #222);
+  transition: background 0.15s;
+}
+.carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
+.carousel-row.current { background: rgba(255, 255, 255, 0.1); }
+
+.carousel-thumb {
+  object-fit: contain;
+  background: #111;
+  border-radius: 3px;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, opacity 0.15s;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.carousel-thumb:hover { opacity: 1; }
+.carousel-thumb.active { opacity: 1; }
+.carousel-thumb.selected { border-color: #f0f; }
+.carousel-thumb.placeholder {
+  background: var(--vscode-input-background, #333);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground, #666);
+  font-size: 10px;
+}
+.carousel-thumb.missing {
+  opacity: 0.5;
+  filter: grayscale(1);
+}
+.carousel-thumb.missing.selected {
+  filter: grayscale(1) drop-shadow(0 0 2px #f0f);
+  opacity: 0.8;
+}
+.carousel-thumb.selected {
+  outline: 2px solid #f0f;
+  outline-offset: -2px;
+}
+
+#carousel-resize {
+  display: none;
+  position: absolute;
+  left: 216px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 11;
+}
+#carousel-resize.active { display: block; }
+#carousel-resize:hover,
+#carousel-resize.dragging { background: var(--vscode-focusBorder, rgba(0, 170, 255, 0.3)); }
+
+#help-modal {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.8);
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+#help-modal.active { display: flex; }
+.modal-content {
+  background: var(--vscode-notifications-background, #2a2a2a);
+  padding: 30px;
+  border-radius: 12px;
+  text-align: center;
+  max-width: 450px;
+  border: 1px solid var(--vscode-panel-border, #444);
+}
+.modal-content h3 {
+  color: var(--vscode-textLink-foreground, #0af);
+  margin-bottom: 15px;
+}
+.modal-content table {
+  width: 100%;
+  text-align: left;
+  border-collapse: collapse;
+}
+.modal-content td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+}
+.modal-content td:first-child {
+  color: var(--vscode-textLink-foreground, #0af);
+  font-family: monospace;
+  white-space: nowrap;
+}
+.btn {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.btn-primary {
+  background: var(--vscode-button-background, #0af);
+  color: var(--vscode-button-foreground, #000);
+}
+.btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading images...</div>
+
+  <div id="viewer">
+    <div id="carousel"></div>
+    <div id="carousel-resize"></div>
+    <div id="progress-container">
+      <div id="progress-text">Loading thumbnails...</div>
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+    </div>
+    <canvas id="canvas"></canvas>
+    <div id="image-loader">
+      <div id="loader-spinner"></div>
+    </div>
+    <div id="thumbnail">
+      <canvas id="thumb-canvas"></canvas>
+      <div id="thumb-viewport"></div>
+    </div>
+  </div>
+
+  <div id="info" class="hidden">
+    <div id="reorder-buttons">
+      <button id="reorder-left" class="reorder-btn" title="Move modality left ([)">\u2190</button>
+      <button id="reorder-right" class="reorder-btn" title="Move modality right (])">\u2192</button>
+    </div>
+    <div id="modality-selector"></div>
+    <span id="status"><span id="status-name">Loading...</span><span id="status-info"></span></span>
+    <button id="help-btn" title="Keyboard shortcuts">?</button>
+  </div>
+
+  <div id="help-modal">
+    <div class="modal-content">
+      <h3>Keyboard Shortcuts</h3>
+      <table>
+        <tr><td>\u2190 \u2192</td><td>Switch modality</td></tr>
+        <tr><td>\u2191 \u2193</td><td>Previous/next tuple</td></tr>
+        <tr><td>Space</td><td>Flip to previous modality (hold)</td></tr>
+        <tr><td>1-9</td><td>Jump to modality N</td></tr>
+        <tr><td>[ ]</td><td>Reorder current modality</td></tr>
+        <tr><td>Scroll</td><td>Zoom in/out</td></tr>
+        <tr><td>Drag</td><td>Pan image</td></tr>
+        <tr><td>Esc</td><td>Reset zoom</td></tr>
+      </table>
+      <div style="margin-top: 20px;">
+        <button class="btn btn-primary" id="close-help-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+
+  /**
+   * Generate a nonce for Content Security Policy
+   */
+  private getNonce(): string {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+      text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+  }
+
+  /**
+   * Dispose of resources
+   */
+  /**
+   * Collect directories to watch for file changes
+   */
+  private collectWatchedDirs(scanResult: ScanResult, uris: vscode.Uri[]): Set<string> {
+    const dirs = new Set<string>();
+    
+    // Add directories from URIs
+    for (const uri of uris) {
+      const dir = uri.path.substring(0, uri.path.lastIndexOf('/'));
+      if (dir) dirs.add(dir);
+    }
+    
+    // Add directories from all image files
+    for (const tuple of scanResult.tuples) {
+      for (const img of tuple.images) {
+        const dir = img.uri.path.substring(0, img.uri.path.lastIndexOf('/'));
+        if (dir) dirs.add(dir);
+      }
+    }
+    
+    return dirs;
+  }
+
+  /**
+   * Set up file system watchers for a panel
+   * Creates one watcher per directory to support multiple independent directories
+   */
+  private setupFileWatcher(state: PanelState): void {
+    if (state.watchedDirs.size === 0) return;
+
+    // Get scheme from first available image URI
+    const firstUri = state.scanResult.tuples[0]?.images[0]?.uri;
+    if (!firstUri) return;
+    const scheme = firstUri.scheme;
+
+    // Create a watcher for each directory
+    for (const dir of state.watchedDirs) {
+      const pattern = new vscode.RelativePattern(
+        vscode.Uri.file(dir).with({ scheme }),
+        '**/*'
+      );
+
+      const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+      watcher.onDidDelete(uri => this.handleFileDeleted(state, uri));
+      watcher.onDidCreate(uri => this.handleFileCreated(state, uri));
+      watcher.onDidChange(uri => this.handleFileChanged(state, uri));
+
+      state.fileWatchers.push(watcher);
+    }
+  }
+
+  /**
+   * Clean up old entries from recentlyDeleted (older than 2 seconds)
+   */
+  private cleanupRecentlyDeleted(state: PanelState): void {
+    const now = Date.now();
+    state.recentlyDeleted = state.recentlyDeleted.filter(d => now - d.timestamp < 2000);
+  }
+
+  /**
+   * Handle a file being deleted
+   */
+  private handleFileDeleted(state: PanelState, uri: vscode.Uri): void {
+    const uriStr = uri.toString();
+    
+    // Check if this is a modality directory being deleted
+    const deletedPath = uri.path;
+    const modalityIndex = state.scanResult.modalities.findIndex(modality => {
+      // Mode 1: Check against baseUri + modality name
+      if (state.baseUri) {
+        const modalityPath = vscode.Uri.joinPath(state.baseUri, modality).path;
+        if (deletedPath === modalityPath) return true;
+      }
+      // Mode 2: Check against modalityDirs mapping
+      const modalityUri = state.modalityDirs.get(modality);
+      if (modalityUri && deletedPath === modalityUri.path) return true;
+      return false;
+    });
+    
+    if (modalityIndex >= 0) {
+      // A modality directory was deleted
+      this.removeModality(state, modalityIndex);
+      return;
+    }
+    
+    // Find which tuple/modality this file belongs to
+    for (let tupleIndex = 0; tupleIndex < state.scanResult.tuples.length; tupleIndex++) {
+      const tuple = state.scanResult.tuples[tupleIndex];
+      for (let modIdx = 0; modIdx < tuple.images.length; modIdx++) {
+        if (tuple.images[modIdx].uri.toString() === uriStr) {
+          // Capture modality name before any async operations
+          const modalityName = tuple.images[modIdx].modality;
+          
+          // Found the deleted file - track it for potential rename detection
+          this.cleanupRecentlyDeleted(state);
+          state.recentlyDeleted.push({
+            uri,
+            tupleIndex,
+            modalityIndex: modIdx,
+            timestamp: Date.now()
+          });
+
+          // Remove from loaded images cache
+          const cacheKey = `${tupleIndex}-${modIdx}`;
+          state.loadedImages.delete(cacheKey);
+          
+          // Wait a short time to see if this is a rename (create will follow quickly)
+          setTimeout(() => {
+            // Check if this file was "resurrected" (renamed to new location)
+            const stillDeleted = state.recentlyDeleted.some(
+              d => d.tupleIndex === tupleIndex && d.modalityIndex === modIdx
+            );
+            
+            if (stillDeleted) {
+              // It's a real deletion, notify webview
+              const msg: ExtensionMessage = {
+                type: 'fileDeleted',
+                tupleIndex,
+                modalityIndex: modIdx
+              };
+              state.panel.webview.postMessage(msg);
+              
+              // Remove from recentlyDeleted
+              state.recentlyDeleted = state.recentlyDeleted.filter(
+                d => !(d.tupleIndex === tupleIndex && d.modalityIndex === modIdx)
+              );
+              
+              // Check if all files for this modality are now gone
+              const globalModalityIndex = state.scanResult.modalities.indexOf(modalityName);
+              if (globalModalityIndex >= 0) {
+                this.checkModalityEmpty(state, globalModalityIndex);
+              }
+            }
+          }, 500); // Wait 500ms to see if it's a rename
+          
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if a modality has no more files and should be removed
+   */
+  private checkModalityEmpty(state: PanelState, modalityIndex: number): void {
+    const modality = state.scanResult.modalities[modalityIndex];
+    if (!modality) return;
+    
+    // Check if any tuple still has a file for this modality
+    const hasFiles = state.scanResult.tuples.some(tuple => 
+      tuple.images.some(img => img.modality === modality)
+    );
+    
+    if (!hasFiles) {
+      this.removeModality(state, modalityIndex);
+    }
+  }
+
+  /**
+   * Remove a modality from the state and notify webview
+   */
+  private removeModality(state: PanelState, modalityIndex: number): void {
+    const modality = state.scanResult.modalities[modalityIndex];
+    
+    // Remove from modalities list
+    state.scanResult.modalities.splice(modalityIndex, 1);
+    
+    // Remove images for this modality from all tuples
+    for (const tuple of state.scanResult.tuples) {
+      tuple.images = tuple.images.filter(img => img.modality !== modality);
+    }
+    
+    // Clear loaded images cache (indices have changed)
+    state.loadedImages.clear();
+    
+    // Notify webview
+    const msg: ExtensionMessage = {
+      type: 'modalityRemoved',
+      modalityIndex
+    };
+    state.panel.webview.postMessage(msg);
+  }
+
+  /**
+   * Handle a file being created (could be new file, rename, or restoration)
+   */
+  private handleFileCreated(state: PanelState, uri: vscode.Uri): void {
+    // Check if this is an image file
+    const filename = uri.path.split('/').pop() || '';
+    if (!isImageFile(filename)) return;
+
+    this.cleanupRecentlyDeleted(state);
+
+    // First, check if this file restores an existing slot (exact URI match)
+    const restoredSlot = this.findExistingSlotByUri(state, uri);
+    if (restoredSlot) {
+      const { tupleIndex, modalityIndex } = restoredSlot;
+      
+      // Clear cached data
+      const cacheKey = `${tupleIndex}-${modalityIndex}`;
+      state.loadedImages.delete(cacheKey);
+      
+      // Generate new thumbnail
+      this.regenerateThumbnail(state, tupleIndex, modalityIndex);
+      
+      // Notify webview that file was restored
+      const msg: ExtensionMessage = {
+        type: 'fileRestored',
+        tupleIndex,
+        modalityIndex
+      };
+      state.panel.webview.postMessage(msg);
+      
+      // If currently viewing this image, reload it
+      if (tupleIndex === state.currentTupleIndex) {
+        this.sendImage(state, tupleIndex, modalityIndex);
+      }
+      
+      return;
+    }
+
+    // Check if this could be a rename of a recently deleted file
+    // Try to match by filename pattern
+    const deletedMatch = this.findMatchingDeletedFile(state, uri);
+    
+    if (deletedMatch) {
+      // This is likely a rename - update the URI in place
+      const { tupleIndex, modalityIndex } = deletedMatch;
+      const tuple = state.scanResult.tuples[tupleIndex];
+      const oldUri = tuple.images[modalityIndex].uri;
+      
+      // Update the URI
+      tuple.images[modalityIndex].uri = uri;
+      tuple.images[modalityIndex].name = filename;
+      
+      // Remove from recently deleted (it was a rename, not a delete)
+      state.recentlyDeleted = state.recentlyDeleted.filter(
+        d => !(d.tupleIndex === tupleIndex && d.modalityIndex === modalityIndex)
+      );
+      
+      // Clear old cached data and reload
+      const cacheKey = `${tupleIndex}-${modalityIndex}`;
+      state.loadedImages.delete(cacheKey);
+      
+      // Generate new thumbnail
+      this.regenerateThumbnail(state, tupleIndex, modalityIndex);
+      
+      // Notify webview (treat as restore since file is now available)
+      const msg: ExtensionMessage = {
+        type: 'fileRestored',
+        tupleIndex,
+        modalityIndex
+      };
+      state.panel.webview.postMessage(msg);
+      
+      // If currently viewing this image, reload it
+      if (tupleIndex === state.currentTupleIndex) {
+        this.sendImage(state, tupleIndex, modalityIndex);
+      }
+      
+      return;
+    }
+
+    // Not a rename or restore - try to add as a new file
+    this.handleNewFile(state, uri, filename);
+  }
+
+  /**
+   * Find an existing slot in tuples that matches this URI exactly
+   */
+  private findExistingSlotByUri(state: PanelState, uri: vscode.Uri): { tupleIndex: number; modalityIndex: number } | undefined {
+    const uriStr = uri.toString();
+    
+    for (let tupleIndex = 0; tupleIndex < state.scanResult.tuples.length; tupleIndex++) {
+      const tuple = state.scanResult.tuples[tupleIndex];
+      for (let modalityIndex = 0; modalityIndex < tuple.images.length; modalityIndex++) {
+        if (tuple.images[modalityIndex].uri.toString() === uriStr) {
+          return { tupleIndex, modalityIndex };
+        }
+      }
+    }
+    
+    return undefined;
+  }
+
+  /**
+   * Find a recently deleted file that matches the new file (for rename detection)
+   */
+  private findMatchingDeletedFile(state: PanelState, newUri: vscode.Uri): DeletedFileInfo | undefined {
+    const newFilename = newUri.path.split('/').pop() || '';
+    const newDir = newUri.path.substring(0, newUri.path.lastIndexOf('/'));
+    
+    // Try to find a deleted file in the same modality directory with similar name
+    for (const deleted of state.recentlyDeleted) {
+      const deletedDir = deleted.uri.path.substring(0, deleted.uri.path.lastIndexOf('/'));
+      
+      // Same directory = same modality, likely a rename
+      if (newDir === deletedDir) {
+        return deleted;
+      }
+      
+      // Check if directories are sibling modalities under same parent
+      const newParent = newDir.substring(0, newDir.lastIndexOf('/'));
+      const deletedParent = deletedDir.substring(0, deletedDir.lastIndexOf('/'));
+      
+      if (newParent === deletedParent && state.scanResult.isMultiTupleMode) {
+        // Same parent, different modality directories
+        // Check if filenames match (common for batch renames)
+        const deletedFilename = deleted.uri.path.split('/').pop() || '';
+        if (newFilename === deletedFilename) {
+          return deleted;
+        }
+      }
+    }
+    
+    return undefined;
+  }
+
+  /**
+   * Handle a genuinely new file (not a rename)
+   * Works for both mode 1 (single directory with subdirs) and mode 2 (multiple directories)
+   */
+  private async handleNewFile(state: PanelState, uri: vscode.Uri, filename: string): Promise<void> {
+    // Only handle multi-tuple mode
+    if (!state.scanResult.isMultiTupleMode) {
+      return;
+    }
+
+    const filePath = uri.path;
+    let modalityName: string | undefined;
+
+    // Mode 1: Single directory with subdirectories
+    if (state.baseUri) {
+      const basePath = state.baseUri.path;
+      
+      if (!filePath.startsWith(basePath)) {
+        return;
+      }
+
+      // Extract modality from path (first subdirectory after base)
+      const relativePath = filePath.substring(basePath.length + 1);
+      const parts = relativePath.split('/');
+      
+      if (parts.length < 2) {
+        // File directly in base dir, not in a modality subdirectory
+        return;
+      }
+
+      modalityName = parts[0];
+    }
+    // Mode 2: Multiple directories selected
+    else if (state.modalityDirs.size > 0) {
+      // Find which modality directory this file belongs to
+      for (const [modality, dirUri] of state.modalityDirs.entries()) {
+        if (filePath.startsWith(dirUri.path + '/')) {
+          modalityName = modality;
+          break;
+        }
+      }
+      
+      if (!modalityName) {
+        return;
+      }
+    }
+    // Mode 3: Multiple files - no directory structure to add to
+    else {
+      return;
+    }
+
+    let modalityIndex = state.scanResult.modalities.indexOf(modalityName!);
+    
+    // Check if this is a NEW modality directory
+    if (modalityIndex === -1) {
+      // New modality! Add it to the list
+      modalityIndex = await this.addNewModality(state, modalityName);
+      if (modalityIndex === -1) {
+        return;
+      }
+    }
+
+    // Try to find an existing tuple this file should belong to
+    // by matching filename pattern with other tuples
+    const baseFilename = filename.replace(/\.[^.]+$/, ''); // Remove extension
+    
+    // Check if this creates a new tuple or extends an existing one
+    let matchingTupleIndex = -1;
+    
+    for (let i = 0; i < state.scanResult.tuples.length; i++) {
+      const tuple = state.scanResult.tuples[i];
+      // Check if tuple name matches
+      if (tuple.name && baseFilename.includes(tuple.name)) {
+        matchingTupleIndex = i;
+        break;
+      }
+      // Check if any image in this tuple has similar name
+      for (const img of tuple.images) {
+        const imgBase = img.name.replace(/\.[^.]+$/, '');
+        if (imgBase === baseFilename) {
+          matchingTupleIndex = i;
+          break;
+        }
+      }
+      if (matchingTupleIndex >= 0) break;
+    }
+
+    if (matchingTupleIndex >= 0) {
+      // Add to existing tuple if this modality is missing
+      const tuple = state.scanResult.tuples[matchingTupleIndex];
+      const existingForModality = tuple.images.find(img => img.modality === modalityName);
+      
+      if (!existingForModality) {
+        // Add the new modality to this tuple
+        tuple.images.push({
+          uri,
+          name: filename,
+          modality: modalityName
+        });
+        
+        // Sort images by modality order
+        tuple.images.sort((a, b) => 
+          state.scanResult.modalities.indexOf(a.modality) - 
+          state.scanResult.modalities.indexOf(b.modality)
+        );
+        
+        // Regenerate thumbnail
+        const newModalityIndex = tuple.images.findIndex(img => img.uri.toString() === uri.toString());
+        this.regenerateThumbnail(state, matchingTupleIndex, newModalityIndex);
+      }
+    } else {
+      // Create a new tuple with just this one file
+      // (Other modalities for this tuple might come later)
+      const newTuple = {
+        name: baseFilename,
+        images: [{
+          uri,
+          name: filename,
+          modality: modalityName
+        }]
+      };
+      
+      state.scanResult.tuples.push(newTuple);
+      const newTupleIndex = state.scanResult.tuples.length - 1;
+      
+      // Notify webview of new tuple
+      const tupleInfo: TupleInfo = {
+        name: newTuple.name,
+        images: newTuple.images.map((img, idx) => ({
+          name: img.name,
+          modality: img.modality,
+          tupleIndex: newTupleIndex,
+          modalityIndex: idx
+        }))
+      };
+      
+      const msg: ExtensionMessage = {
+        type: 'tupleAdded',
+        tuple: tupleInfo,
+        tupleIndex: newTupleIndex
+      };
+      state.panel.webview.postMessage(msg);
+      
+      // Generate thumbnail
+      this.regenerateThumbnail(state, newTupleIndex, 0);
+    }
+  }
+
+  /**
+   * Add a new modality to the scan result
+   * Returns the new modality index, or -1 on failure
+   */
+  private async addNewModality(state: PanelState, modalityName: string): Promise<number> {
+    // Add to modalities list (sorted alphabetically to maintain order)
+    const modalities = state.scanResult.modalities;
+    
+    // Find insertion point to keep sorted
+    let insertIndex = modalities.length;
+    for (let i = 0; i < modalities.length; i++) {
+      if (modalityName.localeCompare(modalities[i]) < 0) {
+        insertIndex = i;
+        break;
+      }
+    }
+    
+    // Insert the new modality
+    modalities.splice(insertIndex, 0, modalityName);
+    
+    // CRITICAL: Clear the loaded images cache - indices have changed!
+    // Old cache entries like "0-2" no longer map to the same modality
+    state.loadedImages.clear();
+    
+    // Update all existing tuples to have a placeholder for this modality
+    // (They'll be filled in when files arrive)
+    for (const tuple of state.scanResult.tuples) {
+      // The images array may need to be reordered to match new modality order
+      tuple.images.sort((a, b) => 
+        modalities.indexOf(a.modality) - modalities.indexOf(b.modality)
+      );
+    }
+    
+    // Add the directory to watched dirs
+    if (state.baseUri) {
+      const newDir = vscode.Uri.joinPath(state.baseUri, modalityName).path;
+      state.watchedDirs.add(newDir);
+    }
+    
+    // Notify webview of new modality
+    const msg: ExtensionMessage = {
+      type: 'modalityAdded',
+      modality: modalityName,
+      modalityIndex: insertIndex
+    };
+    state.panel.webview.postMessage(msg);
+    
+    return insertIndex;
+  }
+
+  /**
+   * Handle a file content change (re-load the image)
+   */
+  private handleFileChanged(state: PanelState, uri: vscode.Uri): void {
+    const uriStr = uri.toString();
+    
+    // Find which tuple/modality this file belongs to
+    for (let tupleIndex = 0; tupleIndex < state.scanResult.tuples.length; tupleIndex++) {
+      const tuple = state.scanResult.tuples[tupleIndex];
+      for (let modalityIndex = 0; modalityIndex < tuple.images.length; modalityIndex++) {
+        if (tuple.images[modalityIndex].uri.toString() === uriStr) {
+          // Clear cached data
+          const cacheKey = `${tupleIndex}-${modalityIndex}`;
+          state.loadedImages.delete(cacheKey);
+          
+          // Regenerate thumbnail
+          this.regenerateThumbnail(state, tupleIndex, modalityIndex);
+          
+          // If currently viewing this image, reload it
+          if (tupleIndex === state.currentTupleIndex) {
+            this.sendImage(state, tupleIndex, modalityIndex);
+          }
+          
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Regenerate thumbnail for a specific image
+   */
+  private async regenerateThumbnail(state: PanelState, tupleIndex: number, modalityIndex: number): Promise<void> {
+    const config = vscode.workspace.getConfiguration('imageCompare');
+    const thumbnailSize = config.get<number>('thumbnailSize', 100);
+    
+    const tuple = state.scanResult.tuples[tupleIndex];
+    if (!tuple || !tuple.images[modalityIndex]) return;
+    
+    const imageFile = tuple.images[modalityIndex];
+    
+    try {
+      const dataUrl = await this.thumbnailService.getThumbnail(imageFile.uri, thumbnailSize * 2);
+      this.sendThumbnailMessage(state, tupleIndex, modalityIndex, dataUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.sendThumbnailErrorMessage(state, tupleIndex, modalityIndex, message);
+    }
+  }
+
+  dispose(): void {
+    // Dispose all open panels
+    for (const state of this.panels) {
+      state.panel.dispose();
+      state.loadedImages.clear();
+      state.fileWatchers.forEach(w => w.dispose());
+    }
+    this.panels.clear();
+    this.thumbnailService.clearMemoryCache();
+
+    while (this.disposables.length) {
+      const disposable = this.disposables.pop();
+      if (disposable) {
+        disposable.dispose();
+      }
+    }
+  }
+
+  /**
+   * Derive a meaningful title for the panel
+   */
+  private deriveTitle(scanResult: ScanResult, uris: vscode.Uri[]): string {
+    const MAX_LENGTH = 40;
+    this.panelCounter++;
+
+    // Generic names that shouldn't be used as titles
+    const GENERIC_NAMES = new Set([
+      'image', 'images', 'img', 'imgs', 'photo', 'photos', 'pic', 'pics', 'picture', 'pictures',
+      'file', 'files', 'folder', 'folders', 'dir', 'directory', 'directories',
+      'data', 'output', 'input', 'result', 'results', 'test', 'tests', 'tmp', 'temp',
+      'new', 'old', 'copy', 'backup', 'untitled', 'unnamed'
+    ]);
+
+    const isGenericName = (name: string): boolean => {
+      const lower = name.toLowerCase().replace(/[\s_\-./\\0-9]+/g, '');
+      return GENERIC_NAMES.has(lower) || lower.length < 2;
+    };
+
+    const truncate = (str: string): string => {
+      return str.length > MAX_LENGTH ? str.slice(0, MAX_LENGTH - 1) + '…' : str;
+    };
+
+    const findCommonPrefix = (names: string[]): string => {
+      if (names.length === 0) return '';
+      let commonPrefix = names[0];
+      for (let i = 1; i < names.length && commonPrefix.length > 0; i++) {
+        while (commonPrefix.length > 0 && !names[i].startsWith(commonPrefix)) {
+          commonPrefix = commonPrefix.slice(0, -1);
+        }
+      }
+      // Clean up trailing separators
+      return commonPrefix.replace(/[\s_\-./\\]+$/, '').trim();
+    };
+
+    // Mode 3: Multiple files selected (not multi-tuple mode, uris are files)
+    if (!scanResult.isMultiTupleMode && uris.length > 1) {
+      const fileNames = uris.map(u => u.path.split('/').pop()?.replace(/\.[^.]+$/, '') || '');
+      const commonPrefix = findCommonPrefix(fileNames);
+      
+      if (commonPrefix.length >= 3 && !isGenericName(commonPrefix)) {
+        return `Compare: ${truncate(commonPrefix)}`;
+      }
+      return `Compare: ${uris.length} files`;
+    }
+
+    // Mode 2: Multiple directories selected
+    if (uris.length > 1) {
+      const dirNames = uris.map(u => u.path.split('/').pop() || '');
+      const commonPrefix = findCommonPrefix(dirNames);
+      
+      if (commonPrefix.length >= 3 && !isGenericName(commonPrefix)) {
+        return `Compare: ${truncate(commonPrefix)}`;
+      }
+      return `Compare: ${uris.length} directories`;
+    }
+
+    // Mode 1: Single directory - try tuple names first, then fall back to dir name
+    if (scanResult.tuples.length > 0) {
+      const tupleNames = scanResult.tuples.map(t => t.name).filter(n => n && n !== 'Untitled');
+      if (tupleNames.length > 0) {
+        const commonPrefix = findCommonPrefix(tupleNames);
+        
+        if (commonPrefix.length >= 3 && !isGenericName(commonPrefix)) {
+          return `Compare: ${truncate(commonPrefix)}`;
+        }
+      }
+    }
+
+    // Fallback to folder name from URI
+    if (uris.length > 0) {
+      const folderName = uris[0].path.split('/').pop() || '';
+      if (folderName.length >= 2 && !isGenericName(folderName)) {
+        return `Compare: ${truncate(folderName)}`;
+      }
+    }
+
+    // Final fallback - use counter
+    return `Compare: ${this.panelCounter}`;
+  }
+}

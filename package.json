@@ -1,0 +1,103 @@
+{
+  "name": "image-compare",
+  "displayName": "ImageCompare",
+  "description": "Compare multiple images (tuples) with multiple modalities",
+  "version": "0.1.0",
+  "publisher": "obukhovai",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/toshas/ImageCompare_vscode"
+  },
+  "homepage": "https://github.com/toshas/ImageCompare_vscode#readme",
+  "bugs": {
+    "url": "https://github.com/toshas/ImageCompare_vscode/issues"
+  },
+  "keywords": [
+    "image",
+    "compare",
+    "viewer",
+    "visualization",
+    "overlay"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "imageCompare.openInCompare",
+        "title": "Open in ImageCompare"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "imageCompare.openInCompare",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@10"
+        },
+        {
+          "command": "imageCompare.openInCompare",
+          "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(png|jpg|jpeg|gif|bmp|webp|tiff|tif|ppmx)$/i",
+          "group": "navigation@10"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ImageCompare",
+      "properties": {
+        "imageCompare.thumbnailSize": {
+          "type": "number",
+          "default": 100,
+          "minimum": 50,
+          "maximum": 200,
+          "description": "Size of thumbnails in the carousel (pixels)"
+        },
+        "imageCompare.prefetchCount": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Number of tuples to prefetch ahead and behind current position"
+        },
+        "imageCompare.cacheMaxAgeDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Maximum age of cached thumbnails in days"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.2",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "sharp": "^0.34.5"
+  }
+}

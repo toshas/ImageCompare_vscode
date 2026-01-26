@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+*.vsix
+.vscode-test/
+
+# Test data (large image files)
+test_images/

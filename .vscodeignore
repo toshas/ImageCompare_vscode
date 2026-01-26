@@ -1,0 +1,38 @@
+# Source and build files
+.claude/**
+.vscode/**
+.vscode-test/**
+src/**
+out/**
+# Exclude most node_modules but keep sharp (native module)
+node_modules/**
+!node_modules/sharp/**
+!node_modules/@img/**
+!node_modules/detect-libc/**
+!node_modules/semver/**
+!node_modules/color/**
+!node_modules/color-convert/**
+!node_modules/color-name/**
+!node_modules/color-string/**
+!node_modules/simple-swizzle/**
+!node_modules/is-arrayish/**
+
+# Config files
+.gitignore
+tsconfig*.json
+webpack.config.js
+package-lock.json
+
+# Source maps
+*.map
+**/*.map
+
+# Development docs
+CLAUDE.md
+PLAN.md
+
+# Test data
+test_images/**
+
+# Git
+.git/**
