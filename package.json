@@ -98,6 +98,6 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "sharp": "^0.34.5"
+    "sharp": "^0.32.6"
   }
 }

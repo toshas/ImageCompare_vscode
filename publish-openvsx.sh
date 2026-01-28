@@ -11,9 +11,11 @@ fi
 
 # Get version from package.json
 VERSION=$(node -p "require('./package.json').version")
+SHARP_VERSION=$(node -p "require('./package.json').dependencies.sharp")
 echo "Version: $VERSION"
+echo "Sharp: $SHARP_VERSION"
 
-# Platform targets: "npm_os npm_cpu vsce_target"
+# Platform targets: "npm_platform npm_arch vsce_target"
 TARGETS=(
     "win32 x64 win32-x64"
     "win32 arm64 win32-arm64"
@@ -24,16 +26,16 @@ TARGETS=(
 )
 
 for entry in "${TARGETS[@]}"; do
-    read -r npm_os npm_cpu target <<< "$entry"
+    read -r npm_platform npm_arch target <<< "$entry"
     echo ""
     echo "=========================================="
     echo "Publishing for $target..."
     echo "=========================================="
 
     # Clean and reinstall sharp with correct platform binaries
-    echo "Installing sharp for $npm_os/$npm_cpu..."
-    rm -rf node_modules/sharp node_modules/@img
-    npm install --os=$npm_os --cpu=$npm_cpu --force sharp
+    echo "Installing sharp for $npm_platform/$npm_arch..."
+    rm -rf node_modules/sharp
+    npm_config_platform=$npm_platform npm_config_arch=$npm_arch npm install "sharp@$SHARP_VERSION"
 
     # Publish
     ovsx publish --pat "$TOKEN_OVSX" --target "$target"
@@ -42,8 +44,8 @@ done
 # Restore native platform binaries
 echo ""
 echo "Restoring native sharp installation..."
-rm -rf node_modules/sharp node_modules/@img
-npm install sharp
+rm -rf node_modules/sharp
+npm install "sharp@$SHARP_VERSION"
 
 echo ""
 echo "All platforms published successfully!"

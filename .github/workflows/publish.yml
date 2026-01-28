@@ -62,8 +62,9 @@ jobs:
 
       - name: Install platform-specific Sharp
         run: |
-          rm -rf node_modules/sharp node_modules/@img
-          npm install --os=${{ matrix.npm_os }} --cpu=${{ matrix.npm_cpu }} --force sharp
+          SHARP_VERSION=$(node -p "require('./package.json').dependencies.sharp")
+          rm -rf node_modules/sharp
+          npm_config_platform=${{ matrix.npm_os }} npm_config_arch=${{ matrix.npm_cpu }} npm install "sharp@$SHARP_VERSION"
         shell: bash
 
       - name: Package extension
