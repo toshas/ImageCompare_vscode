@@ -25,7 +25,7 @@ jobs:
             target: linux-x64
             npm_os: linux
             npm_cpu: x64
-          - os: macos-13
+          - os: macos-15
             target: darwin-x64
             npm_os: darwin
             npm_cpu: x64
