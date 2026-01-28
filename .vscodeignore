@@ -4,11 +4,11 @@
 .vscode-test/**
 src/**
 out/**
-publish-*
 demo.gif
 # Exclude most node_modules but keep sharp (native module)
 node_modules/**
 !node_modules/sharp/**
+!node_modules/@img/**
 !node_modules/detect-libc/**
 !node_modules/semver/**
 !node_modules/color/**

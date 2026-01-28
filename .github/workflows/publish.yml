@@ -63,8 +63,14 @@ jobs:
       - name: Install platform-specific Sharp
         run: |
           SHARP_VERSION=$(node -p "require('./package.json').dependencies.sharp")
-          rm -rf node_modules/sharp
-          npm_config_platform=${{ matrix.npm_os }} npm_config_arch=${{ matrix.npm_cpu }} npm install "sharp@$SHARP_VERSION"
+          rm -rf node_modules/sharp node_modules/@img
+          # Install native binaries for target platform
+          npm install --os=${{ matrix.npm_os }} --cpu=${{ matrix.npm_cpu }} --force "sharp@$SHARP_VERSION"
+          # Install WASM fallback for older CPUs (must use npm pack since --cpu flag doesn't work)
+          npm pack "@img/sharp-wasm32@$SHARP_VERSION"
+          mkdir -p node_modules/@img/sharp-wasm32
+          tar -xzf img-sharp-wasm32-*.tgz -C node_modules/@img/sharp-wasm32 --strip-components=1
+          rm img-sharp-wasm32-*.tgz
         shell: bash
 
       - name: Package extension
