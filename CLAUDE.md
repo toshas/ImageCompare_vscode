@@ -188,6 +188,43 @@ npm run watch        # Watch mode (rebuilds on changes)
 # Press F5 in VSCode to launch Extension Development Host
 ```
 
+## Publishing (GitHub Actions)
+
+Publishing is automated via GitHub Actions. The workflow builds on native runners for each platform.
+
+### Steps to publish a new version:
+
+1. **Update version in package.json** (before committing your changes):
+   ```bash
+   npm version patch   # 0.1.2 -> 0.1.3
+   # or manually edit package.json
+   ```
+
+2. **Commit all changes** (including the version bump):
+   ```bash
+   git add .
+   git commit -m "Release v0.1.3"
+   git push
+   ```
+
+3. **Create and push a tag** (this triggers the publish workflow):
+   ```bash
+   git tag v0.1.3
+   git push --tags
+   ```
+
+The workflow will automatically build for all 6 platforms and publish to both Open VSX and VS Code Marketplace.
+
+### Required GitHub Secrets
+
+Add these in your repo's Settings → Secrets → Actions:
+- `OVSX_TOKEN` - Open VSX personal access token
+- `VSCE_TOKEN` - VS Code Marketplace personal access token
+
+### Manual publish
+
+You can also trigger the workflow manually from the GitHub Actions tab → "Publish Extension" → "Run workflow".
+
 ## Building
 
 ### Local Build (current platform only)

@@ -1,0 +1,115 @@
+name: Publish Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_ovsx:
+        description: 'Publish to Open VSX'
+        type: boolean
+        default: true
+      publish_vsce:
+        description: 'Publish to VS Code Marketplace'
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Native x64 builds
+          - os: ubuntu-latest
+            target: linux-x64
+            npm_os: linux
+            npm_cpu: x64
+          - os: macos-13
+            target: darwin-x64
+            npm_os: darwin
+            npm_cpu: x64
+          - os: windows-latest
+            target: win32-x64
+            npm_os: win32
+            npm_cpu: x64
+          # ARM64 builds (cross-compile on x64 runners)
+          - os: ubuntu-latest
+            target: linux-arm64
+            npm_os: linux
+            npm_cpu: arm64
+          - os: macos-latest
+            target: darwin-arm64
+            npm_os: darwin
+            npm_cpu: arm64
+          - os: windows-latest
+            target: win32-arm64
+            npm_os: win32
+            npm_cpu: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install platform-specific Sharp
+        run: |
+          rm -rf node_modules/sharp node_modules/@img
+          npm install --os=${{ matrix.npm_os }} --cpu=${{ matrix.npm_cpu }} --force sharp
+        shell: bash
+
+      - name: Package extension
+        run: npx vsce package --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.target }}
+          path: '*.vsix'
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: vsix-files
+          merge-multiple: true
+
+      - name: List VSIX files
+        run: ls -la vsix-files/
+
+      - name: Publish to Open VSX
+        if: ${{ github.event_name == 'push' || inputs.publish_ovsx }}
+        run: |
+          npm install -g ovsx
+          for vsix in vsix-files/*.vsix; do
+            echo "Publishing $vsix to Open VSX..."
+            ovsx publish "$vsix" --pat ${{ secrets.OVSX_TOKEN }}
+          done
+
+      - name: Publish to VS Code Marketplace
+        if: ${{ github.event_name == 'push' || inputs.publish_vsce }}
+        run: |
+          npm install -g @vscode/vsce
+          for vsix in vsix-files/*.vsix; do
+            echo "Publishing $vsix to VS Code Marketplace..."
+            vsce publish --packagePath "$vsix" --pat ${{ secrets.VSCE_TOKEN }}
+          done

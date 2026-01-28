@@ -5,6 +5,7 @@
 src/**
 out/**
 publish-*
+demo.gif
 # Exclude most node_modules but keep sharp (native module)
 node_modules/**
 !node_modules/sharp/**
