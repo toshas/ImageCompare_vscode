@@ -45,6 +45,11 @@ export interface TupleInfo {
   images: ImageInfo[];
 }
 
+// Winner results data (for persistence)
+export interface WinnerResults {
+  winners: Map<string, string>; // tupleKey -> modality name
+}
+
 // Messages from WebView to Extension
 export type WebViewMessage =
   | { type: 'ready' }
@@ -53,11 +58,12 @@ export type WebViewMessage =
   | { type: 'navigateTo'; tupleIndex: number }
   | { type: 'setCurrentTuple'; tupleIndex: number }
   | { type: 'tupleFullyLoaded'; tupleIndex: number }
+  | { type: 'setWinner'; tupleIndex: number; modalityIndex: number | null } // null = clear winner
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
 export type ExtensionMessage =
-  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; config: WebViewConfig }
+  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }
   | { type: 'thumbnail'; tupleIndex: number; modalityIndex: number; dataUrl: string }
   | { type: 'thumbnailError'; tupleIndex: number; modalityIndex: number; error: string }
   | { type: 'image'; tupleIndex: number; modalityIndex: number; dataUrl: string; width: number; height: number }
@@ -68,7 +74,9 @@ export type ExtensionMessage =
   | { type: 'tupleDeleted'; tupleIndex: number }
   | { type: 'tupleAdded'; tuple: TupleInfo; tupleIndex: number }
   | { type: 'modalityAdded'; modality: string; modalityIndex: number }
-  | { type: 'modalityRemoved'; modalityIndex: number };
+  | { type: 'modalityRemoved'; modalityIndex: number }
+  | { type: 'winnerUpdated'; tupleIndex: number; modalityIndex: number | null }
+  | { type: 'winnersReset'; winners: Record<number, number> }; // For when results.txt is regenerated
 
 // Configuration passed to webview
 export interface WebViewConfig {

@@ -4,6 +4,7 @@
 .vscode-test/**
 src/**
 out/**
+publish-*
 # Exclude most node_modules but keep sharp (native module)
 node_modules/**
 !node_modules/sharp/**

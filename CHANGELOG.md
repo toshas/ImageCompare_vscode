@@ -2,6 +2,20 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.1.1] - 2026
+
+### Added
+- **Winner voting**: Declare a winner for each tuple in directory-based modes
+  - Press Enter or click the circle on thumbnails to toggle winner
+  - Winners are persisted to `results.txt` alongside modality folders
+  - Win counts shown in parentheses after modality names in status bar
+  - Human-readable and editable results file format
+
+### Changed
+- **Tuple matching**: Replaced regex-based `extractMatchingKey()` with trie-based `matchTuplesWithTrie()` algorithm
+  - Uses longest common prefix (LCP) for efficient matching via trie
+  - Falls back to longest common subsequence (LCS) for tie-breaking
+
 ## [0.1.0] - 2026
 
 ### Added

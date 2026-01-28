@@ -123,6 +123,10 @@ let isShowingPreview = false; // true when showing thumbnail as preview while fu
 let loadDebounceTimer: number | null = null; // debounce timer for loading full images
 const LOAD_DEBOUNCE_MS = 150; // wait this long before loading full images
 
+// Winner voting state
+let winners: Map<number, number> = new Map(); // tupleIndex -> modalityIndex (display index)
+let votingEnabled = false;
+
 // Helper to update status bar with consistent layout
 function updateStatus(name: string, info: string, tupleIndex?: number) {
   let prefix = '';
@@ -220,16 +224,62 @@ window.addEventListener('message', (event) => {
     case 'modalityRemoved':
       handleModalityRemoved(message);
       break;
+    case 'winnerUpdated':
+      handleWinnerUpdated(message);
+      break;
+    case 'winnersReset':
+      handleWinnersReset(message);
+      break;
   }
 });
 
-function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; config: WebViewConfig }) {
+function handleWinnerUpdated(message: { tupleIndex: number; modalityIndex: number | null }) {
+  if (message.modalityIndex === null) {
+    winners.delete(message.tupleIndex);
+  } else {
+    // Convert original modality index to display index
+    // modalityOrder[displayIdx] = originalIdx, so we need to find displayIdx where modalityOrder[displayIdx] === originalIdx
+    const displayIdx = modalityOrder.indexOf(message.modalityIndex);
+    if (displayIdx !== -1) {
+      winners.set(message.tupleIndex, displayIdx);
+    }
+  }
+  // Update carousel to reflect winner state
+  updateCarouselWinners();
+  // Update modality selector to show win counts
+  updateModalitySelector();
+}
+
+function handleWinnersReset(message: { winners: Record<number, number> }) {
+  winners = new Map();
+  for (const [tupleIdx, originalModalityIdx] of Object.entries(message.winners)) {
+    // Convert original modality index to display index
+    const displayIdx = modalityOrder.indexOf(originalModalityIdx as number);
+    if (displayIdx !== -1) {
+      winners.set(parseInt(tupleIdx, 10), displayIdx);
+    }
+  }
+  // Update carousel and modality selector
+  updateCarouselWinners();
+  updateModalitySelector();
+}
+
+function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }) {
   // Reset all state for new comparison
   tuples = message.tuples;
   modalities = message.modalities;
   config = message.config;
   modalityColors = modalities.map((_, i) => MODALITY_COLORS[i % MODALITY_COLORS.length]);
   modalityOrder = modalities.map((_, i) => i); // Initialize order: [0, 1, 2, ...]
+
+  // Load winner state
+  votingEnabled = message.votingEnabled;
+  winners = new Map();
+  if (message.winners) {
+    for (const [tupleIdx, modalityIdx] of Object.entries(message.winners)) {
+      winners.set(parseInt(tupleIdx, 10), modalityIdx as number);
+    }
+  }
 
   // Reset navigation state
   currentTupleIndex = 0;
@@ -843,6 +893,15 @@ function buildCarousel() {
     // Use modalityOrder to display thumbnails in the current order
     for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
       const originalModIdx = modalityOrder[displayIdx];
+
+      // Create a container for thumbnail + winner circle
+      const thumbContainer = document.createElement('div');
+      thumbContainer.className = 'carousel-thumb-container';
+      thumbContainer.style.position = 'relative';
+      thumbContainer.style.width = CAROUSEL_THUMB_SIZE + 'px';
+      thumbContainer.style.height = CAROUSEL_THUMB_SIZE + 'px';
+      thumbContainer.style.flexShrink = '0';
+
       const thumb = document.createElement('img');
       thumb.className = 'carousel-thumb placeholder';
       thumb.style.width = CAROUSEL_THUMB_SIZE + 'px';
@@ -869,7 +928,30 @@ function buildCarousel() {
         goToTupleAndModality(tupleIdx, displayIdx);
       });
 
-      row.appendChild(thumb);
+      thumbContainer.appendChild(thumb);
+
+      // Add winner circle if voting is enabled
+      if (votingEnabled) {
+        const winnerCircle = document.createElement('div');
+        winnerCircle.className = 'winner-circle';
+        winnerCircle.dataset.tuple = String(tupleIdx);
+        winnerCircle.dataset.displayIndex = String(displayIdx);
+
+        // Check if this modality is the winner for this tuple
+        const winnerModalityIdx = winners.get(tupleIdx);
+        if (winnerModalityIdx === displayIdx) {
+          winnerCircle.classList.add('winner');
+        }
+
+        winnerCircle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleWinner(tupleIdx, displayIdx);
+        });
+
+        thumbContainer.appendChild(winnerCircle);
+      }
+
+      row.appendChild(thumbContainer);
     }
 
     row.addEventListener('click', () => {
@@ -895,8 +977,11 @@ function updateCarouselSelection() {
       row.classList.remove('current');
     }
 
-    const thumbs = row.querySelectorAll('.carousel-thumb');
-    thumbs.forEach((thumb, thumbIdx) => {
+    const thumbContainers = row.querySelectorAll('.carousel-thumb-container');
+    thumbContainers.forEach((container, thumbIdx) => {
+      const thumb = container.querySelector('.carousel-thumb');
+      if (!thumb) return;
+
       if (rowIdx === currentTupleIndex) {
         thumb.classList.add('active');
       } else {
@@ -912,6 +997,61 @@ function updateCarouselSelection() {
   });
 
   scrollCarouselToCurrentTuple();
+}
+
+/**
+ * Toggle winner for a tuple/modality
+ */
+function toggleWinner(tupleIndex: number, displayModalityIndex: number) {
+  if (!votingEnabled) return;
+
+  const currentWinner = winners.get(tupleIndex);
+
+  // Convert display index to original modality index for the extension
+  // The extension's modalities array is in original order, not display order
+  const originalModalityIndex = modalityOrder[displayModalityIndex];
+
+  if (currentWinner === displayModalityIndex) {
+    // Already winner - clear it
+    winners.delete(tupleIndex);
+    vscode.postMessage({
+      type: 'setWinner',
+      tupleIndex,
+      modalityIndex: null
+    });
+  } else {
+    // Set as winner (store display index locally, send original to extension)
+    winners.set(tupleIndex, displayModalityIndex);
+    vscode.postMessage({
+      type: 'setWinner',
+      tupleIndex,
+      modalityIndex: originalModalityIndex
+    });
+  }
+
+  // Update UI immediately
+  updateCarouselWinners();
+  updateModalitySelector();
+}
+
+/**
+ * Update winner circles in carousel
+ */
+function updateCarouselWinners() {
+  if (!isMultiTupleMode || !votingEnabled) return;
+
+  const circles = carouselEl.querySelectorAll('.winner-circle');
+  circles.forEach((circle) => {
+    const tupleIdx = parseInt((circle as HTMLElement).dataset.tuple || '0', 10);
+    const displayIdx = parseInt((circle as HTMLElement).dataset.displayIndex || '0', 10);
+
+    const winnerModalityIdx = winners.get(tupleIdx);
+    if (winnerModalityIdx === displayIdx) {
+      circle.classList.add('winner');
+    } else {
+      circle.classList.remove('winner');
+    }
+  });
 }
 
 function scrollCarouselToCurrentTuple() {
@@ -973,6 +1113,16 @@ function buildModalitySelector() {
 }
 
 function updateModalitySelector() {
+  // Calculate win counts per modality (by display index)
+  const winCounts: number[] = new Array(modalities.length).fill(0);
+  if (votingEnabled) {
+    for (const [_, modalityIdx] of winners) {
+      if (modalityIdx >= 0 && modalityIdx < winCounts.length) {
+        winCounts[modalityIdx]++;
+      }
+    }
+  }
+
   const buttons = modalitySelectorEl.querySelectorAll('.modality-btn');
   buttons.forEach((btn) => {
     const displayIdx = parseInt((btn as HTMLElement).dataset.displayIndex || '0', 10);
@@ -982,6 +1132,14 @@ function updateModalitySelector() {
     } else {
       btn.classList.remove('active');
       btn.classList.add('inactive');
+    }
+
+    // Update button text with win count if voting enabled and has wins
+    const modalityName = modalities[displayIdx];
+    if (votingEnabled && winCounts[displayIdx] > 0) {
+      btn.textContent = `${displayIdx + 1}: ${modalityName} (${winCounts[displayIdx]})`;
+    } else {
+      btn.textContent = `${displayIdx + 1}: ${modalityName}`;
     }
   });
 
@@ -1018,10 +1176,25 @@ function moveCurrentModality(direction: number) {
   // Swap in modalityOrder (tracks original index at each display position)
   [modalityOrder[currentPos], modalityOrder[newPos]] = [modalityOrder[newPos], modalityOrder[currentPos]];
 
+  // Update winners to reflect swapped indices
+  if (votingEnabled) {
+    const newWinners = new Map<number, number>();
+    for (const [tupleIndex, winnerIdx] of winners) {
+      if (winnerIdx === currentPos) {
+        newWinners.set(tupleIndex, newPos);
+      } else if (winnerIdx === newPos) {
+        newWinners.set(tupleIndex, currentPos);
+      } else {
+        newWinners.set(tupleIndex, winnerIdx);
+      }
+    }
+    winners = newWinners;
+  }
+
   // Re-derive images array from cached data using new modalityOrder
   // This is more robust than swapping in-place, handles undefined/missing markers correctly
   const tupleImages = loadedTuples.get(currentTupleIndex);
-  
+
   if (tupleImages && tupleImages.length > 0) {
     images = reorderImagesForDisplay(tupleImages);
   } else {
@@ -1223,6 +1396,13 @@ function handleKeyDown(e: KeyboardEvent) {
       panX = panY = 0;
       isReset = true;
       render();
+      break;
+
+    case 'Enter':
+      e.preventDefault();
+      if (votingEnabled) {
+        toggleWinner(currentTupleIndex, currentModalityIndex);
+      }
       break;
   }
 }

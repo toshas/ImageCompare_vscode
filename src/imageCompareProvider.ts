@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { scanForImages } from './fileService';
+import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices } from './fileService';
 import { ThumbnailService } from './thumbnailService';
 import {
   ScanResult,
@@ -36,6 +36,8 @@ interface PanelState {
   baseUri?: vscode.Uri; // Root directory for single-directory mode (mode 1)
   modalityDirs: Map<string, vscode.Uri>; // Modality name -> directory URI (for mode 2)
   recentlyDeleted: DeletedFileInfo[];
+  winners: Map<number, number>; // tupleIndex -> modalityIndex (display index)
+  votingEnabled: boolean; // true for mode 1 and 2 (directory-based modes)
 }
 
 /**
@@ -119,6 +121,9 @@ export class ImageCompareProvider {
       }
       // Mode 3: Multiple files - no directory tracking needed
 
+      // Determine if voting is enabled (mode 1 or mode 2 - directory-based modes)
+      const votingEnabled = baseUri !== undefined || modalityDirs.size > 0;
+
       // Create panel-specific state
       const panelState: PanelState = {
         panel,
@@ -129,7 +134,9 @@ export class ImageCompareProvider {
         watchedDirs,
         baseUri,
         modalityDirs,
-        recentlyDeleted: []
+        recentlyDeleted: [],
+        winners: new Map<number, number>(),
+        votingEnabled
       };
 
       // Set up file system watcher
@@ -200,9 +207,111 @@ export class ImageCompareProvider {
         }
         break;
 
+      case 'setWinner':
+        await this.handleSetWinner(state, message.tupleIndex, message.modalityIndex);
+        break;
+
       case 'log':
         // WebView debug messages (disabled in production)
         break;
+    }
+  }
+
+  /**
+   * Handle setting or clearing a winner for a tuple
+   */
+  private async handleSetWinner(state: PanelState, tupleIndex: number, modalityIndex: number | null): Promise<void> {
+    if (!state.votingEnabled) return;
+
+    if (modalityIndex === null) {
+      // Clear winner
+      state.winners.delete(tupleIndex);
+    } else {
+      // Set winner
+      state.winners.set(tupleIndex, modalityIndex);
+    }
+
+    // Notify webview
+    const msg: ExtensionMessage = {
+      type: 'winnerUpdated',
+      tupleIndex,
+      modalityIndex
+    };
+    state.panel.webview.postMessage(msg);
+
+    // Persist to results.txt
+    await this.saveResults(state);
+  }
+
+  /**
+   * Get the base URI for saving results.txt
+   * Returns undefined if voting is not enabled
+   */
+  private getResultsBaseUri(state: PanelState): vscode.Uri | undefined {
+    // Mode 1: Single directory with subdirectories
+    if (state.baseUri) {
+      return state.baseUri;
+    }
+
+    // Mode 2: Multiple directories - use common parent or first directory's parent
+    if (state.modalityDirs.size > 0) {
+      const uris = Array.from(state.modalityDirs.values());
+      // Try to find common parent
+      const paths = uris.map(u => u.path);
+      const firstParent = paths[0].substring(0, paths[0].lastIndexOf('/'));
+
+      // Check if all paths share this parent
+      const allSameParent = paths.every(p => p.startsWith(firstParent + '/'));
+      if (allSameParent) {
+        return vscode.Uri.file(firstParent).with({ scheme: uris[0].scheme });
+      }
+
+      // Fallback: use first directory's parent
+      return vscode.Uri.file(firstParent).with({ scheme: uris[0].scheme });
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Save current winners to results.txt
+   * If no winners remain, deletes the file
+   */
+  private async saveResults(state: PanelState): Promise<void> {
+    const baseUri = this.getResultsBaseUri(state);
+    if (!baseUri) return;
+
+    const resultsUri = vscode.Uri.joinPath(baseUri, 'results.txt');
+
+    // If no winners, delete the file
+    if (state.winners.size === 0) {
+      try {
+        await vscode.workspace.fs.delete(resultsUri);
+      } catch {
+        // File doesn't exist or can't be deleted - that's OK
+      }
+      return;
+    }
+
+    // Convert winners from Map<tupleIndex, modalityIndex> to Map<tupleIndex, modalityName>
+    const winnersWithNames = new Map<number, string>();
+    for (const [tupleIndex, modalityIndex] of state.winners) {
+      const modality = state.scanResult.modalities[modalityIndex];
+      if (modality) {
+        winnersWithNames.set(tupleIndex, modality);
+      }
+    }
+
+    try {
+      await writeResultsFile(
+        baseUri,
+        state.scanResult.tuples,
+        winnersWithNames,
+        state.scanResult.modalities
+      );
+    } catch (error) {
+      // Silently fail - results file is optional
+      console.error('Failed to save results.txt:', error);
     }
   }
 
@@ -223,6 +332,24 @@ export class ImageCompareProvider {
 
     const allModalities = state.scanResult.modalities;
 
+    // Load winners from results.txt if voting is enabled
+    if (state.votingEnabled) {
+      const baseUri = this.getResultsBaseUri(state);
+      if (baseUri) {
+        try {
+          const savedWinners = await readResultsFile(baseUri);
+          const indexedWinners = mapWinnersToIndices(
+            savedWinners,
+            state.scanResult.tuples,
+            allModalities
+          );
+          state.winners = indexedWinners;
+        } catch {
+          // File doesn't exist or can't be read - that's OK
+        }
+      }
+    }
+
     const tuples: TupleInfo[] = state.scanResult.tuples.map((tuple, tupleIndex) => ({
       name: tuple.name,
       images: allModalities.map((modality, modalityIndex) => {
@@ -236,11 +363,19 @@ export class ImageCompareProvider {
       })
     }));
 
+    // Convert winners Map to Record for JSON serialization
+    const winnersRecord: Record<number, number> = {};
+    for (const [tupleIndex, modalityIndex] of state.winners) {
+      winnersRecord[tupleIndex] = modalityIndex;
+    }
+
     const initMessage: ExtensionMessage = {
       type: 'init',
       tuples,
       modalities: allModalities,
-      config: { thumbnailSize, prefetchCount }
+      config: { thumbnailSize, prefetchCount },
+      winners: winnersRecord,
+      votingEnabled: state.votingEnabled
     };
 
     state.panel.webview.postMessage(initMessage);
@@ -817,6 +952,36 @@ body {
   outline-offset: -2px;
 }
 
+/* Winner voting indicators */
+.carousel-thumb-container {
+  position: relative;
+}
+.winner-circle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.15s;
+  z-index: 5;
+}
+.winner-circle:hover {
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.winner-circle.winner {
+  background: #0f0;
+  border-color: #fff;
+  box-shadow: 0 0 3px rgba(0, 255, 0, 0.5);
+}
+.winner-circle.winner:hover {
+  background: #0c0;
+  border-color: #fff;
+}
+
 #carousel-resize {
   display: none;
   position: absolute;
@@ -921,6 +1086,7 @@ body {
         <tr><td>Space</td><td>Flip to previous modality (hold)</td></tr>
         <tr><td>1-9</td><td>Jump to modality N</td></tr>
         <tr><td>[ ]</td><td>Reorder current modality</td></tr>
+        <tr><td>Enter</td><td>Toggle winner for current modality</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
         <tr><td>Esc</td><td>Reset zoom</td></tr>
@@ -1113,26 +1279,47 @@ body {
   /**
    * Remove a modality from the state and notify webview
    */
-  private removeModality(state: PanelState, modalityIndex: number): void {
+  private async removeModality(state: PanelState, modalityIndex: number): Promise<void> {
     const modality = state.scanResult.modalities[modalityIndex];
-    
+
     // Remove from modalities list
     state.scanResult.modalities.splice(modalityIndex, 1);
-    
+
     // Remove images for this modality from all tuples
     for (const tuple of state.scanResult.tuples) {
       tuple.images = tuple.images.filter(img => img.modality !== modality);
     }
-    
+
     // Clear loaded images cache (indices have changed)
     state.loadedImages.clear();
-    
+
+    // Update winners - shift modality indices for winners pointing to modalities after the removed one
+    const newWinners = new Map<number, number>();
+    for (const [tupleIndex, winnerModalityIndex] of state.winners) {
+      if (winnerModalityIndex === modalityIndex) {
+        // This winner was for the removed modality - remove it
+        continue;
+      } else if (winnerModalityIndex > modalityIndex) {
+        // Shift index down
+        newWinners.set(tupleIndex, winnerModalityIndex - 1);
+      } else {
+        // Keep as-is
+        newWinners.set(tupleIndex, winnerModalityIndex);
+      }
+    }
+    state.winners = newWinners;
+
     // Notify webview
     const msg: ExtensionMessage = {
       type: 'modalityRemoved',
       modalityIndex
     };
     state.panel.webview.postMessage(msg);
+
+    // Save updated results
+    if (state.votingEnabled) {
+      await this.saveResults(state);
+    }
   }
 
   /**
@@ -1425,7 +1612,7 @@ body {
   private async addNewModality(state: PanelState, modalityName: string): Promise<number> {
     // Add to modalities list (sorted alphabetically to maintain order)
     const modalities = state.scanResult.modalities;
-    
+
     // Find insertion point to keep sorted
     let insertIndex = modalities.length;
     for (let i = 0; i < modalities.length; i++) {
@@ -1434,29 +1621,42 @@ body {
         break;
       }
     }
-    
+
     // Insert the new modality
     modalities.splice(insertIndex, 0, modalityName);
-    
+
     // CRITICAL: Clear the loaded images cache - indices have changed!
     // Old cache entries like "0-2" no longer map to the same modality
     state.loadedImages.clear();
-    
+
+    // Update winners - shift modality indices for winners pointing to modalities at or after insertIndex
+    const newWinners = new Map<number, number>();
+    for (const [tupleIndex, winnerModalityIndex] of state.winners) {
+      if (winnerModalityIndex >= insertIndex) {
+        // Shift index up
+        newWinners.set(tupleIndex, winnerModalityIndex + 1);
+      } else {
+        // Keep as-is
+        newWinners.set(tupleIndex, winnerModalityIndex);
+      }
+    }
+    state.winners = newWinners;
+
     // Update all existing tuples to have a placeholder for this modality
     // (They'll be filled in when files arrive)
     for (const tuple of state.scanResult.tuples) {
       // The images array may need to be reordered to match new modality order
-      tuple.images.sort((a, b) => 
+      tuple.images.sort((a, b) =>
         modalities.indexOf(a.modality) - modalities.indexOf(b.modality)
       );
     }
-    
+
     // Add the directory to watched dirs
     if (state.baseUri) {
       const newDir = vscode.Uri.joinPath(state.baseUri, modalityName).path;
       state.watchedDirs.add(newDir);
     }
-    
+
     // Notify webview of new modality
     const msg: ExtensionMessage = {
       type: 'modalityAdded',
@@ -1464,7 +1664,12 @@ body {
       modalityIndex: insertIndex
     };
     state.panel.webview.postMessage(msg);
-    
+
+    // Save updated results (winner indices may have changed)
+    if (state.votingEnabled && state.winners.size > 0) {
+      await this.saveResults(state);
+    }
+
     return insertIndex;
   }
 

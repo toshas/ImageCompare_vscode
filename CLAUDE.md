@@ -102,12 +102,13 @@ The extension watches for file changes and updates the view dynamically.
 Messages flow between extension and webview via `postMessage`:
 
 **Extension → WebView**:
-- `init`: Initial data (tuples, modalities, config)
+- `init`: Initial data (tuples, modalities, config, winners, votingEnabled)
 - `thumbnail`/`thumbnailError`: Thumbnail data
 - `image`/`imageError`: Full image data
 - `fileDeleted`/`fileRestored`: File state changes
 - `tupleDeleted`/`tupleAdded`: Tuple changes
 - `modalityAdded`/`modalityRemoved`: Modality changes
+- `winnerUpdated`/`winnersReset`: Winner state changes
 
 **WebView → Extension**:
 - `ready`: WebView initialized
@@ -115,15 +116,55 @@ Messages flow between extension and webview via `postMessage`:
 - `requestImage`: Request full image
 - `navigateTo`: Jump to tuple
 - `setCurrentTuple`: Update current position
+- `setWinner`: Set or clear winner for a tuple
+
+## Winner Voting
+
+Available only in directory-based modes (mode 1 and 2). Allows declaring one modality as the "winner" for each tuple.
+
+### User Interaction
+- **Enter key**: Toggle winner for current tuple/modality
+- **Click circle**: Small circle appears on top-right of each carousel thumbnail
+  - Semi-transparent gray = no winner
+  - Green with white outline = winner
+
+### Persistence
+Winners are saved to `results.txt` alongside modality folders:
+```
+# ImageCompare Results
+# Generated: 2026-01-27T12:00:00.000Z
+# Modalities: modA, modB, modC
+#
+# Format: tuple_key = winner_modality
+# Delete a line to remove the vote, edit modality name to change vote
+
+image001 = modA
+image002 = modB
+```
+
+### Implementation
+- `fileService.ts`: `readResultsFile()`, `writeResultsFile()`, `mapWinnersToIndices()`
+- `imageCompareProvider.ts`: `PanelState.winners`, `PanelState.votingEnabled`, `handleSetWinner()`, `saveResults()`
+- Winner indices are adjusted when modalities are added/removed
 
 ## Key Algorithms
 
 ### Image Matching (in `fileService.ts`)
 
-Images are matched across modalities using `extractMatchingKey()`:
-1. Extracts leading numeric identifier (e.g., "202505210021" from "202505210021_LMU_...")
-2. Falls back to alphanumeric pattern (e.g., "test1" from "test1_processed.png")
-3. Final fallback: everything before first underscore
+Images are matched across modalities using `matchTuplesWithTrie()`:
+
+1. **Reference modality**: Picks modality with most files as reference
+2. **Trie construction**: Builds trie from reference filenames - each node tracks which files pass through it
+3. **LCP matching**: For each file in other modalities, walks trie to find longest common prefix (LCP)
+4. **LCS tie-breaking**: When multiple reference files share the same LCP, uses Longest Common Subsequence (LCS) to pick best match
+
+Complexity: O(N × L) for trie operations, O(ties × L²) for LCS tie-breaking
+
+This handles:
+- Different naming conventions across modalities (e.g., `img_00001_gt.png` matches `img_00001_pred_v2.png`)
+- Missing files in some modalities (gracefully creates partial tuples)
+- Single-file modalities (matches to best LCP/LCS candidate)
+- Identifiers embedded in middle of filenames (LCS catches common substrings)
 
 ### Modality Naming
 
@@ -156,14 +197,14 @@ npm run compile                              # Compile TypeScript
 vsce package --allow-missing-repository      # Create .vsix package
 ```
 
-The output will be `image-compare-0.1.0.vsix` in the project root.
+The output will be `image-compare-0.1.1.vsix` in the project root.
 
 ### Install Locally
 
 ```bash
-code --install-extension image-compare-0.1.0.vsix
+code --install-extension image-compare-0.1.1.vsix
 # Or for Cursor:
-cursor --install-extension image-compare-0.1.0.vsix
+cursor --install-extension image-compare-0.1.1.vsix
 ```
 
 ## Publishing

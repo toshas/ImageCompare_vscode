@@ -9,6 +9,180 @@ function naturalSort(a: string, b: string): number {
 }
 
 /**
+ * Strip file extension from filename
+ */
+function stripExtension(filename: string): string {
+  return filename.replace(/\.[^.]+$/, '');
+}
+
+/**
+ * Longest Common Subsequence length for tie-breaking
+ * Uses O(n) space with two-row optimization
+ */
+function lcsLength(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  let prev = new Array(n + 1).fill(0);
+  let curr = new Array(n + 1).fill(0);
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i-1] === b[j-1]) {
+        curr[j] = prev[j-1] + 1;
+      } else {
+        curr[j] = Math.max(prev[j], curr[j-1]);
+      }
+    }
+    [prev, curr] = [curr, prev];
+  }
+
+  return prev[n];
+}
+
+interface TrieNode {
+  children: Map<string, TrieNode>;
+  indices: number[];
+}
+
+interface MatchedTuple {
+  key: string;
+  files: Map<string, { name: string; uri: vscode.Uri }>;
+}
+
+/**
+ * Trie-based tuple matching with LCP scoring and LCS tie-breaking
+ *
+ * Algorithm:
+ * 1. Pick reference modality (one with most files)
+ * 2. Build trie from reference filenames - each node tracks which files pass through
+ * 3. For each file in other modalities:
+ *    - Walk trie to find longest matching prefix (LCP)
+ *    - Collect candidate reference files at deepest matched node
+ *    - Use LCS (longest common subsequence) as tie-breaker
+ * 4. Group files by their matched reference file
+ *
+ * Complexity: O(N * L) for trie ops, O(ties * L²) for LCS tie-breaking
+ * where N = total files, L = max filename length
+ */
+function matchTuplesWithTrie(
+  modalityFiles: Map<string, Array<{ name: string; uri: vscode.Uri }>>,
+  modalities: string[]
+): MatchedTuple[] {
+  if (modalities.length < 2) {
+    // Single modality - return each file as its own tuple
+    if (modalities.length === 1) {
+      const mod = modalities[0];
+      const files = modalityFiles.get(mod) || [];
+      return files.map(f => ({
+        key: stripExtension(f.name),
+        files: new Map([[mod, f]])
+      }));
+    }
+    return [];
+  }
+
+  // Pick reference modality (most files) - ensures best coverage
+  let refMod = modalities[0];
+  let maxCount = (modalityFiles.get(refMod) || []).length;
+  for (const mod of modalities) {
+    const count = (modalityFiles.get(mod) || []).length;
+    if (count > maxCount) {
+      maxCount = count;
+      refMod = mod;
+    }
+  }
+
+  const refFiles = modalityFiles.get(refMod) || [];
+  if (refFiles.length === 0) return [];
+
+  // Build trie from reference filenames
+  // Each node has: children (Map), indices (array of refFile indices that pass through)
+  const trie: TrieNode = { children: new Map(), indices: [] };
+
+  for (let i = 0; i < refFiles.length; i++) {
+    const key = stripExtension(refFiles[i].name);
+    let node = trie;
+    // Add index at root level too (for files with no common prefix)
+    node.indices.push(i);
+
+    for (const char of key) {
+      if (!node.children.has(char)) {
+        node.children.set(char, { children: new Map(), indices: [] });
+      }
+      node = node.children.get(char)!;
+      node.indices.push(i);
+    }
+  }
+
+  // Create tuple map: refIndex -> Map(modality -> file)
+  const tupleMap = new Map<number, Map<string, { name: string; uri: vscode.Uri }>>();
+  for (let i = 0; i < refFiles.length; i++) {
+    tupleMap.set(i, new Map([[refMod, refFiles[i]]]));
+  }
+
+  // Match files from other modalities using trie lookup
+  for (const mod of modalities) {
+    if (mod === refMod) continue;
+
+    const files = modalityFiles.get(mod) || [];
+    for (const file of files) {
+      const query = stripExtension(file.name);
+
+      // Walk trie to find deepest matching node (longest common prefix)
+      let node = trie;
+      let bestNode = trie;  // Track deepest node with indices
+
+      for (const char of query) {
+        if (!node.children.has(char)) break;
+        node = node.children.get(char)!;
+        if (node.indices.length > 0) {
+          bestNode = node;
+        }
+      }
+
+      const candidates = bestNode.indices;
+      if (candidates.length === 0) {
+        // No match found - skip (shouldn't happen with valid trie)
+        continue;
+      }
+
+      // Find best match among candidates
+      let bestIdx = candidates[0];
+
+      if (candidates.length > 1) {
+        // Tie-breaker: use LCS (longest common subsequence)
+        // Files with more characters in common (even non-contiguous) score higher
+        let bestScore = -1;
+        for (const idx of candidates) {
+          const refName = stripExtension(refFiles[idx].name);
+          const score = lcsLength(query, refName);
+          if (score > bestScore) {
+            bestScore = score;
+            bestIdx = idx;
+          }
+        }
+      }
+
+      // Add to tuple
+      tupleMap.get(bestIdx)!.set(mod, file);
+    }
+  }
+
+  // Convert to array format
+  const result: MatchedTuple[] = [];
+  for (const [idx, filesMap] of tupleMap) {
+    result.push({
+      key: stripExtension(refFiles[idx].name),
+      files: filesMap
+    });
+  }
+
+  // Sort by key for consistent ordering
+  result.sort((a, b) => naturalSort(a.key, b.key));
+
+  return result;
+}
+
+/**
  * Find longest common substring between two strings
  */
 function longestCommonSubstring(s1: string, s2: string): string {
@@ -240,74 +414,22 @@ async function scanDirectoriesAsModalities(
 
   const modalities = Array.from(modalityFiles.keys());
 
-  // Extract a matching key from filename (leading identifier before varying suffixes)
-  // e.g., "202505210021_LMU_..." -> "202505210021"
-  // e.g., "20251023_#WH768x1024.ppmx" -> "20251023"
-  // e.g., "250928_01_#WH768x1024.ppmx" -> "250928_01"
-  function extractMatchingKey(filename: string): string {
-    // Remove extension
-    const baseName = filename.replace(/\.[^.]+$/, '');
-    
-    // Try to extract leading numeric identifier
-    // Match: any sequence of digits, optionally followed by underscore and more digits
-    // Examples: "202505210021", "20251023", "250928_01"
-    const numericMatch = baseName.match(/^(\d+(?:_\d+)*)/);
-    if (numericMatch) {
-      return numericMatch[1];
-    }
-    
-    // Try to extract alphanumeric identifier with optional sequence numbers
-    // Pattern: letters + optional digits + optional (_digits) groups
-    // Examples: "test1", "image_001", "sample_42", "test"
-    // This handles both "test1_suffix" -> "test1" and "image_001_suffix" -> "image_001"
-    const alphaNumMatch = baseName.match(/^([a-zA-Z]+\d*(?:_\d+)*)/);
-    if (alphaNumMatch) {
-      return alphaNumMatch[1];
-    }
-    
-    // Fallback: use everything up to first underscore or special character
-    const prefixMatch = baseName.match(/^([^_#]+)/);
-    if (prefixMatch) {
-      return prefixMatch[1];
-    }
-    
-    return baseName;
-  }
+  // Use trie-based matching to group files into tuples
+  const matchedTuples = matchTuplesWithTrie(modalityFiles, modalities);
 
-  // Build a map of matching key -> modality -> file
-  const filesByKey: Map<string, Map<string, { name: string; uri: vscode.Uri }>> = new Map();
-  
-  for (const [modality, files] of modalityFiles.entries()) {
-    for (const file of files) {
-      const key = extractMatchingKey(file.name);
-      
-      if (!filesByKey.has(key)) {
-        filesByKey.set(key, new Map());
-      }
-      // If multiple files from same modality have same key, keep the first one
-      if (!filesByKey.get(key)!.has(modality)) {
-        filesByKey.get(key)!.set(modality, file);
-      }
-    }
-  }
-
-  if (filesByKey.size === 0) {
+  if (matchedTuples.length === 0) {
     return null;
   }
 
-  // Sort keys naturally
-  const sortedKeys = Array.from(filesByKey.keys()).sort(naturalSort);
-
   // Build tuples from matched files
   const tuples: ImageTuple[] = [];
-  for (const key of sortedKeys) {
-    const filesForTuple = filesByKey.get(key)!;
+  for (const matched of matchedTuples) {
     const images: ImageFile[] = [];
     const names: string[] = [];
 
     // Add files in modality order
     for (const modality of modalities) {
-      const file = filesForTuple.get(modality);
+      const file = matched.files.get(modality);
       if (file) {
         images.push({
           uri: file.uri,
@@ -320,7 +442,7 @@ async function scanDirectoriesAsModalities(
 
     // Only create tuple if at least one image exists
     if (images.length > 0) {
-      const tupleName = findCommonSubstring(names) || key;
+      const tupleName = findCommonSubstring(names) || matched.key;
       tuples.push({ name: tupleName, images });
     }
   }
@@ -389,4 +511,108 @@ function scanFilesAsTuple(
     tuples: [{ name: tupleName, images }],
     isMultiTupleMode: false
   };
+}
+
+/**
+ * Results file name
+ */
+export const RESULTS_FILENAME = 'results.txt';
+
+/**
+ * Read results.txt and parse winner data
+ * Returns a Map of tuple key (name) -> winner modality name
+ */
+export async function readResultsFile(baseUri: vscode.Uri): Promise<Map<string, string>> {
+  const resultsUri = vscode.Uri.joinPath(baseUri, RESULTS_FILENAME);
+  const winners = new Map<string, string>();
+
+  try {
+    const data = await vscode.workspace.fs.readFile(resultsUri);
+    const content = Buffer.from(data).toString('utf-8');
+
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      // Parse format: tuple_key = winner_modality
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex > 0) {
+        const tupleKey = trimmed.substring(0, eqIndex).trim();
+        const modality = trimmed.substring(eqIndex + 1).trim();
+        if (tupleKey && modality) {
+          winners.set(tupleKey, modality);
+        }
+      }
+    }
+  } catch {
+    // File doesn't exist or can't be read - that's OK
+  }
+
+  return winners;
+}
+
+/**
+ * Write results.txt with current winner data
+ * Format is human-readable and editable:
+ *   # ImageCompare Results
+ *   # Format: tuple_key = winner_modality
+ *   tuple_name_1 = ModA
+ *   tuple_name_2 = ModB
+ */
+export async function writeResultsFile(
+  baseUri: vscode.Uri,
+  tuples: ImageTuple[],
+  winners: Map<number, string>, // tupleIndex -> modality name
+  modalities: string[]
+): Promise<void> {
+  const resultsUri = vscode.Uri.joinPath(baseUri, RESULTS_FILENAME);
+
+  // Build file content
+  const lines: string[] = [
+    '# ImageCompare Results',
+    `# Generated: ${new Date().toISOString()}`,
+    `# Modalities: ${modalities.join(', ')}`,
+    '#',
+    '# Format: tuple_key = winner_modality',
+    '# Delete a line to remove the vote, edit modality name to change vote',
+    ''
+  ];
+
+  // Add winner entries for tuples that have winners
+  for (let i = 0; i < tuples.length; i++) {
+    const winnerModality = winners.get(i);
+    if (winnerModality) {
+      lines.push(`${tuples[i].name} = ${winnerModality}`);
+    }
+  }
+
+  const content = lines.join('\n') + '\n';
+  await vscode.workspace.fs.writeFile(resultsUri, Buffer.from(content, 'utf-8'));
+}
+
+/**
+ * Map loaded winners (by tuple name) to tuple indices
+ * Returns Map<tupleIndex, modalityIndex>
+ */
+export function mapWinnersToIndices(
+  winners: Map<string, string>,
+  tuples: ImageTuple[],
+  modalities: string[]
+): Map<number, number> {
+  const result = new Map<number, number>();
+
+  for (let tupleIndex = 0; tupleIndex < tuples.length; tupleIndex++) {
+    const tuple = tuples[tupleIndex];
+    const winnerModality = winners.get(tuple.name);
+
+    if (winnerModality) {
+      const modalityIndex = modalities.indexOf(winnerModality);
+      if (modalityIndex >= 0) {
+        result.set(tupleIndex, modalityIndex);
+      }
+    }
+  }
+
+  return result;
 }
