@@ -2,7 +2,7 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
-## [0.1.2] - 2026
+## [0.1.5] - 2026
 
 ### Fixed
 - **Cross-platform Sharp binaries**: Fixed native module loading on all platforms (Windows, Linux, macOS)
