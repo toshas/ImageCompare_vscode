@@ -2,6 +2,15 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.1.2] - 2026
+
+### Fixed
+- **Cross-platform Sharp binaries**: Fixed native module loading on all platforms (Windows, Linux, macOS)
+  - Platform-specific packages now correctly include the appropriate Sharp/libvips binaries
+
+### Added
+- **Cursor IDE support**: Extension now available on Open VSX for Cursor users
+
 ## [0.1.1] - 2026
 
 ### Added

@@ -1,81 +1,102 @@
-# ImageCompare VSCode Extension
+# ImageCompare
 
-Compare multiple images (tuples) with multiple modalities within VSCode.
+[![GitHub](https://img.shields.io/github/stars/toshas/ImageCompare_vscode?style=flat&label=GitHub)](https://github.com/toshas/ImageCompare_vscode)
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/obukhovai.image-compare?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=obukhovai.image-compare)
+[![Open VSX](https://img.shields.io/open-vsx/v/obukhovai/image-compare?label=Open%20VSX)](https://open-vsx.org/extension/obukhovai/image-compare)
+[![Website](https://img.shields.io/badge/Website-obukhov.ai-blue)](https://www.obukhov.ai)
+[![X Follow](https://img.shields.io/badge/X-@antonobukhov1-black?logo=x)](https://x.com/antonobukhov1)
 
-## Features
+**Flip between image variants instantly** — perfect for reviewing ML model outputs, A/B testing designs, or comparing renders across different settings. View one image at a time and switch between modalities with a keypress. Zoom and pan stay locked when switching, so you can compare fine details at any magnification.
 
-- **Multi-Modality Comparison**: Compare 2+ images as a tuple (e.g., input/output/reference)
-- **Batch Mode**: Select a folder with subdirectories - each subdirectory becomes a modality
-- **Remote Support**: Works with VSCode Remote (SSH, WSL, Containers)
-- **Flip Comparison**: Hold Space to flip between current and previous image
-- **Zoom & Pan**: Mouse wheel to zoom, drag to pan
-- **Carousel Navigation**: Visual thumbnail grid for navigating tuples
-- **PPMX Format**: Support for custom float32 grayscale format
-- **Background Thumbnails**: Thumbnails generated in background with progress indicator
-- **Live File Watching**: Automatically updates when files are added, removed, or modified
+![ImageCompare Demo](https://raw.githubusercontent.com/toshas/ImageCompare_vscode/main/demo.gif)
 
-## Usage
+## Why ImageCompare?
 
-1. **Right-click on a directory** in the Explorer → "Open in ImageCompare"
-   - If the directory contains 2+ subdirectories with images, each subdirectory becomes a modality
-   - Otherwise, all images in the directory form a single tuple
+- **Instant Flip Comparison** — Hold Space to flip between images. See differences that static side-by-side views miss.
+- **Batch Processing** — Load hundreds of image tuples at once. Navigate with arrow keys.
+- **Smart Matching** — Automatically matches images across folders by filename, even with different suffixes.
+- **Remote Ready** — Works seamlessly over SSH, WSL, and Dev Containers.
+- **Winner Voting** — Mark the best result for each comparison. Results saved to a simple text file.
 
-2. **Select multiple directories** (from different paths) → Right-click → "Open in ImageCompare"
-   - Each selected directory becomes a modality
-   - Images are matched by filename across directories
+## Installation
 
-3. **Select multiple image files** → Right-click → "Open in ImageCompare"
-   - Selected images form a single tuple
-   - Modality names derived from filename differences
+**VS Code**: Search for "ImageCompare" in Extensions (`Ctrl+Shift+X`)
+
+**Cursor**: Search for "ImageCompare" in Extensions (uses Open VSX)
+
+## Quick Start
+
+### Compare Folders
+
+Right-click a folder containing subfolders → **"Open in ImageCompare"**
+
+```
+my_experiment/
+├── ground_truth/    → modality 1
+├── model_v1/        → modality 2
+└── model_v2/        → modality 3
+```
+
+Each subfolder becomes a modality. Images are matched by filename.
+
+### Compare Specific Files
+
+Select 2+ image files → Right-click → **"Open in ImageCompare"**
+
+### Compare Folders from Different Locations
+
+Select multiple folders (Ctrl+Click) → Right-click → **"Open in ImageCompare"**
 
 ## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| ← → | Switch modality |
-| ↑ ↓ | Previous/next tuple |
-| Space (hold) | Flip to previous modality |
-| 1-9 | Jump to modality N |
-| [ ] | Reorder current modality |
-| Scroll | Zoom in/out |
-| Drag | Pan image |
-| Esc | Reset zoom |
+| `←` `→` | Switch between modalities |
+| `↑` `↓` | Previous / next image tuple |
+| `Space` (hold) | Flip to previous modality |
+| `1-9` | Jump to modality N |
+| `Enter` | Mark current modality as winner |
+| `[` `]` | Reorder modalities |
+| `Scroll` | Zoom in/out |
+| `Drag` | Pan image |
+| `Esc` | Reset zoom |
 
-## Configuration
+## Winner Voting
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `imageCompare.thumbnailSize` | 100 | Size of thumbnails in carousel (px) |
-| `imageCompare.prefetchCount` | 3 | Number of tuples to prefetch ahead/behind |
-| `imageCompare.cacheMaxAgeDays` | 7 | Max age of cached thumbnails (days) |
+In batch mode, press `Enter` to mark the current modality as the winner for that image. Winners are saved to `results.txt`:
+
+```
+# ImageCompare Results
+image_001 = model_v2
+image_002 = ground_truth
+image_003 = model_v1
+```
+
+Win counts appear in the status bar next to each modality name.
+
+## Live Updates
+
+The view automatically updates when files change:
+- **New images** appear instantly
+- **Deleted images** are marked as removed
+- **Modified images** reload automatically
 
 ## Supported Formats
 
-PNG, JPG, JPEG, GIF, BMP, WebP, TIFF, TIF, PPMX
+PNG, JPG, JPEG, GIF, BMP, WebP, TIFF
 
-## Development
+## Settings
 
-```bash
-# Install dependencies
-npm install
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `imageCompare.thumbnailSize` | 100 | Thumbnail size in pixels |
+| `imageCompare.prefetchCount` | 3 | Images to preload ahead/behind |
+| `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime |
 
-# Build (one-time)
-npm run compile
+## Feedback & Issues
 
-# Watch mode (rebuilds on changes)
-npm run watch
+Found a bug or have a feature request? [Open an issue on GitHub](https://github.com/toshas/ImageCompare_vscode/issues)
 
-# Then press F5 in VSCode to launch Extension Development Host
-```
+## License
 
-## How It Works
-
-- **Extension Host**: Runs on remote machine in SSH/Container scenarios
-  - File discovery via `vscode.workspace.fs` (handles remote transparently)
-  - Thumbnail generation using `jimp` (pure JavaScript, cross-platform)
-  - Image prefetching (configurable tuples ahead/behind)
-
-- **WebView**: Renders in VSCode
-  - Adapted from original HTML-based ImageCompare tool
-  - Communicates via `postMessage` API
-  - Requests images/thumbnails on-demand
+MIT
