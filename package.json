@@ -2,7 +2,7 @@
   "name": "image-compare",
   "displayName": "ImageCompare",
   "description": "Compare multiple images (tuples) with multiple modalities",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "obukhovai",
   "license": "MIT",
   "icon": "icon.png",
