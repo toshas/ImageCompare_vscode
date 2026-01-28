@@ -9,6 +9,7 @@ demo.gif
 node_modules/**
 !node_modules/sharp/**
 !node_modules/@img/**
+!node_modules/@emnapi/**
 !node_modules/detect-libc/**
 !node_modules/semver/**
 !node_modules/color/**

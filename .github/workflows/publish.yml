@@ -71,6 +71,8 @@ jobs:
           mkdir -p node_modules/@img/sharp-wasm32
           tar -xzf img-sharp-wasm32-*.tgz -C node_modules/@img/sharp-wasm32 --strip-components=1
           rm img-sharp-wasm32-*.tgz
+          # Install WASM package dependencies
+          npm install @emnapi/runtime@^1.7.0
         shell: bash
 
       - name: Package extension
