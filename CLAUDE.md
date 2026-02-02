@@ -9,10 +9,41 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`extension.ts`** - Entry point, registers commands
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading
 - **`fileService.ts`** - Directory/file scanning, mode detection, image matching across modalities
-- **`thumbnailService.ts`** - Background thumbnail generation using Sharp (native libvips)
+- **`thumbnailService.ts`** - Image processing (thumbnail generation, full image loading) with fallback chain
+- **`sharpLoader.ts`** - Dynamic Sharp loader with native → WASM → Jimp fallback
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation)
+
+## Image Processing Backends
+
+The extension uses a three-tier fallback chain for image processing (resize, encode, metadata):
+
+### 1. Sharp Native (fastest)
+Default on modern CPUs. Uses libvips native binaries. Sharp is **externalized** in webpack (`externals: { sharp: 'commonjs sharp' }`) and loaded at runtime from `node_modules/`.
+
+### 2. Sharp WASM (fast, fallback for older CPUs)
+Sharp's native binaries require x86-64-v2 (SSE4.2+). On older CPUs, the native `@img/sharp-linux-x64` package is *present* but fails with "Unsupported CPU". Sharp only auto-falls back to WASM when the native package is completely *absent*.
+
+**`sharpLoader.ts`** works around this: on "Unsupported CPU" error, it clears the require cache, monkey-patches `Module._resolveFilename` to block native `@img/sharp-*` resolution, and retries — forcing Sharp to discover only `@img/sharp-wasm32`.
+
+### 3. Jimp (slowest, guaranteed to work)
+Pure JavaScript image processing library. Used when both Sharp native and WASM fail. Jimp is **bundled** by webpack (not externalized) since it has no native dependencies. Loaded lazily — only `require()`'d when Sharp is unavailable, so there's zero cost on the happy path.
+
+### Key Design Decisions
+- Sharp is externalized in webpack; Jimp is bundled (pure JS, ~1.4MB in bundle)
+- Jimp is lazy-loaded via dynamic `require('jimp').Jimp` (not a static import)
+- PPMX handling is shared via `createSharpInstance()` / `createJimpImage()` helpers
+- Jimp JPEG quality is set to 70 to match Sharp's thumbnail output
+- Sharp pipelines are safe to reuse (`.metadata()` then `.png().toBuffer()` on same instance) — Sharp re-reads from the input buffer internally
+- A warning notification is shown to the user when running on the Jimp fallback
+
+### Files involved
+- **`sharpLoader.ts`** — `getSharp()` returns the Sharp module or `null`; `getSharpError()` returns the reason
+- **`thumbnailService.ts`** — calls `getSharp()`, falls back to `this.getJimp()`, shared helpers for PPMX
+- **`webpack.config.js`** — Sharp externalized, Jimp bundled
+- **`.vscodeignore`** — Sharp + `@img/*` + `@emnapi/*` explicitly included; Jimp is in the webpack bundle so not listed
+- **`.github/workflows/publish.yml`** — CI installs both native Sharp binaries AND `@img/sharp-wasm32` for each platform
 
 ## Three Operation Modes
 
@@ -185,35 +216,81 @@ Images with different aspect ratios are handled using **"contain" scaling**:
 ```bash
 npm install          # Install dependencies
 npm run watch        # Watch mode (rebuilds on changes)
+npm run compile      # One-off build
 # Press F5 in VSCode to launch Extension Development Host
 ```
+
+## Testing
+
+### Image Backend Tests
+
+To verify the Sharp → WASM → Jimp fallback chain works, create a test script in the project root (it needs access to `node_modules/`):
+
+```bash
+# The test should exercise:
+# 1. Sharp native — thumbnail + full image
+# 2. Sharp WASM — block native @img/sharp-* via Module._resolveFilename, verify Sharp still loads
+# 3. Jimp thumbnail — fromBuffer + scaleToFit + getBuffer('image/jpeg', {quality:70})
+# 4. Jimp full image — fromBuffer + width/height + getBuffer('image/png')
+# 5. Jimp PPMX — fromBitmap with RGBA buffer
+# 6. Dimension consistency — Sharp and Jimp return same width/height
+# 7. sharpLoader.ts — simulate "Unsupported CPU" error, verify WASM retry succeeds
+# 8. Full fallback — verify Jimp works end-to-end when Sharp is null
+node test_image_backends.js
+```
+
+To test sharpLoader.ts directly (not via webpack bundle), compile TypeScript to a temp dir first:
+```bash
+npx tsc --outDir /tmp/test_out --declaration --declarationMap --skipLibCheck
+# Then require('/tmp/test_out/sharpLoader.js') in the test
+```
+
+### File Watching Tests
+
+1. Test all three modes with file add/delete/modify operations
+2. Test rename detection (quick delete+create)
+3. Test partial tuples (some modalities missing images)
+4. Test with remote filesystems (SSH, WSL)
 
 ## Publishing (GitHub Actions)
 
 Publishing is automated via GitHub Actions. The workflow builds on native runners for each platform.
 
-### Steps to publish a new version:
+### Release Checklist
 
-1. **Update version in package.json** (before committing your changes):
+Before publishing a new version, complete every item:
+
+1. **Code changes are done and tested locally** (F5 in VSCode, manual QA)
+2. **Update `CHANGELOG.md`** — add a new `## [X.Y.Z]` section describing changes
+3. **Bump version in `package.json`**:
    ```bash
-   npm version patch   # 0.1.2 -> 0.1.3
-   # or manually edit package.json
+   npm version patch   # 0.1.5 -> 0.1.6
+   # or manually edit "version" in package.json
    ```
-
-2. **Commit all changes** (including the version bump):
+4. **Compile and verify** — `npm run compile` must succeed with no errors
+5. **Commit all changes** (version bump + changelog + code):
    ```bash
-   git add .
-   git commit -m "Release v0.1.3"
+   git add package.json CHANGELOG.md src/ ...
+   git commit -m "Release vX.Y.Z - short description"
    git push
    ```
-
-3. **Create and push a tag** (this triggers the publish workflow):
+6. **Create and push a tag** (this triggers the CI publish workflow):
    ```bash
-   git tag v0.1.3
+   git tag vX.Y.Z
    git push --tags
    ```
+7. **Verify CI** — check GitHub Actions for green builds on all 6 platforms
+8. **Verify marketplace listings** — confirm the new version appears on both VS Code Marketplace and Open VSX
 
 The workflow will automatically build for all 6 platforms and publish to both Open VSX and VS Code Marketplace.
+
+### What the CI does for each platform
+
+1. `npm ci` — installs all dependencies (including jimp, which webpack will bundle)
+2. Removes native Sharp, reinstalls for target platform (`--os=X --cpu=Y`)
+3. Installs `@img/sharp-wasm32` via `npm pack` + extract (WASM fallback for older CPUs)
+4. Installs `@emnapi/runtime` (WASM runtime dependency)
+5. Runs `npx vsce package --target <platform>` which triggers webpack (bundles Jimp into `dist/extension.js`)
 
 ### Required GitHub Secrets
 
@@ -230,44 +307,16 @@ You can also trigger the workflow manually from the GitHub Actions tab → "Publ
 ### Local Build (current platform only)
 
 ```bash
-npm run compile                              # Compile TypeScript
+npm run compile                              # Compile TypeScript via webpack
 vsce package --allow-missing-repository      # Create .vsix package
 ```
-
-The output will be `image-compare-0.1.1.vsix` in the project root.
 
 ### Install Locally
 
 ```bash
-code --install-extension image-compare-0.1.1.vsix
+code --install-extension image-compare-X.Y.Z.vsix
 # Or for Cursor:
-cursor --install-extension image-compare-0.1.1.vsix
-```
-
-## Publishing
-
-### Prerequisites
-
-```bash
-npm install -g @vscode/vsce    # Install vsce CLI globally
-vsce login <publisher-name>    # Login to VS Code Marketplace (needs PAT token)
-```
-
-### Cross-Platform Publishing (Required for Sharp native module)
-
-Since this extension uses Sharp (native libvips bindings), you must publish platform-specific builds:
-
-```bash
-# Build and publish for all major platforms
-vsce publish --target win32-x64 win32-arm64 linux-x64 linux-arm64 darwin-x64 darwin-arm64
-
-# Or build packages without publishing (for testing)
-vsce package --target win32-x64
-vsce package --target win32-arm64
-vsce package --target linux-x64
-vsce package --target linux-arm64
-vsce package --target darwin-x64
-vsce package --target darwin-arm64
+cursor --install-extension image-compare-X.Y.Z.vsix
 ```
 
 ### Supported Platforms
@@ -280,53 +329,22 @@ vsce package --target darwin-arm64
 | `linux-arm64` | Linux ARM64 |
 | `darwin-x64` | macOS Intel |
 | `darwin-arm64` | macOS Apple Silicon |
-| `alpine-x64` | Alpine Linux (musl) |
-
-### Version Bump
-
-Before publishing a new version:
-
-```bash
-npm version patch   # 0.1.0 -> 0.1.1
-npm version minor   # 0.1.0 -> 0.2.0
-npm version major   # 0.1.0 -> 1.0.0
-```
-
-### Full Publish Workflow
-
-```bash
-npm version patch                           # Bump version
-npm run compile                             # Ensure it compiles
-vsce publish --target win32-x64 win32-arm64 linux-x64 linux-arm64 darwin-x64 darwin-arm64
-```
-
-## Native Module Notes (Sharp)
-
-This extension uses **Sharp** for image processing, which includes native binaries (libvips).
-
-### Key Files
-
-- **`webpack.config.js`**: Sharp is externalized (`externals: { sharp: 'commonjs sharp' }`) so it's loaded at runtime, not bundled
-- **`.vscodeignore`**: Sharp and its dependencies (`@img/*`, `detect-libc`, `semver`) are explicitly included in the package
-
-### Local Development
-
-When switching between platforms (e.g., testing on both Mac and Linux), you may need to reinstall Sharp:
-
-```bash
-npm rebuild sharp
-# Or full reinstall:
-rm -rf node_modules && npm install
-```
 
 ### Package Size
 
-The VSIX is ~7-8 MB due to Sharp's native libvips binaries. This is normal for native image processing extensions.
+The VSIX is ~8-9 MB: Sharp native binaries (~7MB) + Jimp bundled in webpack (~1.4MB).
 
-## Testing Considerations
+## Native Module Notes
 
-When testing file watching:
-1. Test all three modes with file add/delete/modify operations
-2. Test rename detection (quick delete+create)
-3. Test partial tuples (some modalities missing images)
-4. Test with remote filesystems (SSH, WSL)
+### Sharp (externalized, in node_modules/)
+
+- **`webpack.config.js`**: Sharp is externalized (`externals: { sharp: 'commonjs sharp' }`) — loaded at runtime, not bundled
+- **`.vscodeignore`**: Sharp and its dependencies (`@img/*`, `@emnapi/*`, `detect-libc`, `semver`, `color*`, etc.) are explicitly included
+- When switching between platforms locally, you may need `npm rebuild sharp` or `rm -rf node_modules && npm install`
+
+### Jimp (bundled by webpack)
+
+- Pure JavaScript — no native dependencies, so webpack can bundle it
+- All ~27 `@jimp/*` sub-packages and their transitive deps are resolved by webpack at build time
+- Not listed in `.vscodeignore` (it's inside `dist/extension.js`)
+- Only loaded at runtime when Sharp is unavailable (lazy `require('jimp').Jimp`)

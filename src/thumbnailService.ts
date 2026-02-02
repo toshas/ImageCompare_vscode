@@ -1,17 +1,21 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as path from 'path';
-import sharp from 'sharp';
+import { getSharp, getSharpError } from './sharpLoader';
 import { parsePpmx } from './ppmxParser';
 
 /**
  * Service for generating and caching image thumbnails.
- * Uses Sharp (libvips) for fast native image processing.
- * Caches thumbnails to disk for faster subsequent loads.
+ *
+ * Tries Sharp (native → WASM) first for performance.
+ * Falls back to Jimp (pure JS) when Sharp is completely unavailable.
  */
 export class ThumbnailService {
   private cacheDir: vscode.Uri;
   private memoryCache: Map<string, string> = new Map();
+  /** Lazily loaded Jimp constructor — only required when Sharp is unavailable. */
+  private jimpModule: any = undefined;
+  private jimpLoadAttempted = false;
 
   constructor(private context: vscode.ExtensionContext) {
     this.cacheDir = vscode.Uri.joinPath(context.globalStorageUri, 'thumbnail-cache');
@@ -27,13 +31,85 @@ export class ThumbnailService {
       // Directory may already exist
     }
 
+    // Log which backend will be used
+    const sharp = getSharp();
+    if (sharp) {
+      console.log('[ImageCompare] Using Sharp for image processing.');
+    } else {
+      console.warn(
+        '[ImageCompare] Sharp unavailable (' + (getSharpError() ?? 'unknown') + '). ' +
+        'Falling back to Jimp (slower).'
+      );
+      vscode.window.showWarningMessage(
+        'ImageCompare: Sharp could not be loaded — using Jimp fallback (slower thumbnail generation).'
+      );
+    }
+
     // Clean up old cache entries in background
     this.cleanupOldCache();
   }
 
-  /**
-   * Get cache key for a file based on path and modification time
-   */
+  // ---------------------------------------------------------------------------
+  // Backend helpers
+  // ---------------------------------------------------------------------------
+
+  /** Lazily load Jimp so we don't pay the cost when Sharp works fine. */
+  private getJimp(): any {
+    if (!this.jimpLoadAttempted) {
+      this.jimpLoadAttempted = true;
+      try {
+        this.jimpModule = require('jimp').Jimp;
+      } catch (e: any) {
+        console.error('[ImageCompare] Jimp also failed to load:', e?.message);
+        this.jimpModule = null;
+      }
+    }
+    return this.jimpModule;
+  }
+
+  /** Create a Sharp instance, handling PPMX raw data. */
+  private createSharpInstance(
+    sharp: NonNullable<ReturnType<typeof getSharp>>,
+    buffer: Buffer,
+    ext: string
+  ) {
+    if (ext === '.ppmx') {
+      const ppmx = parsePpmx(buffer);
+      return sharp(ppmx.rgbBuffer, {
+        raw: { width: ppmx.width, height: ppmx.height, channels: 3 }
+      });
+    }
+    return sharp(buffer);
+  }
+
+  /** Create a Jimp instance, handling PPMX raw data. */
+  private async createJimpImage(
+    Jimp: any,
+    buffer: Buffer,
+    ext: string
+  ): Promise<any> {
+    if (ext === '.ppmx') {
+      const ppmx = parsePpmx(buffer);
+      const rgbaBuffer = Buffer.alloc(ppmx.width * ppmx.height * 4);
+      for (let i = 0; i < ppmx.width * ppmx.height; i++) {
+        rgbaBuffer[i * 4] = ppmx.rgbBuffer[i * 3];
+        rgbaBuffer[i * 4 + 1] = ppmx.rgbBuffer[i * 3 + 1];
+        rgbaBuffer[i * 4 + 2] = ppmx.rgbBuffer[i * 3 + 2];
+        rgbaBuffer[i * 4 + 3] = 255;
+      }
+      return Jimp.fromBitmap({
+        width: ppmx.width,
+        height: ppmx.height,
+        data: rgbaBuffer
+      });
+    }
+    return Jimp.fromBuffer(buffer);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cache
+  // ---------------------------------------------------------------------------
+
   private getCacheKey(uri: vscode.Uri, mtime: number): string {
     const hash = crypto.createHash('sha256');
     hash.update(uri.toString());
@@ -41,9 +117,6 @@ export class ThumbnailService {
     return hash.digest('hex').substring(0, 16);
   }
 
-  /**
-   * Generate a thumbnail for an image file (with caching)
-   */
   async getThumbnail(uri: vscode.Uri, size: number): Promise<string> {
     try {
       const stat = await vscode.workspace.fs.stat(uri);
@@ -75,76 +148,71 @@ export class ThumbnailService {
     }
   }
 
-  /**
-   * Generate thumbnail using Sharp
-   */
+  // ---------------------------------------------------------------------------
+  // Thumbnail generation
+  // ---------------------------------------------------------------------------
+
   private async generateThumbnail(uri: vscode.Uri, size: number): Promise<string> {
     const fileData = await vscode.workspace.fs.readFile(uri);
     const buffer = Buffer.from(fileData);
     const ext = path.extname(uri.path).toLowerCase();
 
-    let sharpInstance: sharp.Sharp;
-
-    if (ext === '.ppmx') {
-      const ppmx = parsePpmx(buffer);
-      // Create Sharp instance from raw RGB data
-      sharpInstance = sharp(ppmx.rgbBuffer, {
-        raw: {
-          width: ppmx.width,
-          height: ppmx.height,
-          channels: 3
-        }
-      });
-    } else {
-      sharpInstance = sharp(buffer);
+    const sharp = getSharp();
+    if (sharp) {
+      const inst = this.createSharpInstance(sharp, buffer, ext);
+      const thumbnailBuffer = await inst
+        .resize(size, size, { fit: 'inside' })
+        .jpeg({ quality: 70 })
+        .toBuffer();
+      return `data:image/jpeg;base64,${thumbnailBuffer.toString('base64')}`;
     }
 
-    // Resize maintaining aspect ratio (fit inside size x size)
-    const thumbnailBuffer = await sharpInstance
-      .resize(size, size, { fit: 'inside' })
-      .jpeg({ quality: 70 })
-      .toBuffer();
-
-    return `data:image/jpeg;base64,${thumbnailBuffer.toString('base64')}`;
+    const Jimp = this.getJimp();
+    if (!Jimp) {
+      throw new Error('No image processing backend available (Sharp and Jimp both failed)');
+    }
+    const image = await this.createJimpImage(Jimp, buffer, ext);
+    image.scaleToFit({ w: size, h: size });
+    const jpegBuffer: Buffer = await image.getBuffer('image/jpeg', { quality: 70 });
+    return `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`;
   }
 
-  /**
-   * Load a full image and return its data URL and dimensions
-   */
+  // ---------------------------------------------------------------------------
+  // Full image loading
+  // ---------------------------------------------------------------------------
+
   async loadFullImage(uri: vscode.Uri): Promise<{ dataUrl: string; width: number; height: number }> {
     const fileData = await vscode.workspace.fs.readFile(uri);
     const buffer = Buffer.from(fileData);
     const ext = path.extname(uri.path).toLowerCase();
 
-    let sharpInstance: sharp.Sharp;
-
-    if (ext === '.ppmx') {
-      const ppmx = parsePpmx(buffer);
-      sharpInstance = sharp(ppmx.rgbBuffer, {
-        raw: {
-          width: ppmx.width,
-          height: ppmx.height,
-          channels: 3
-        }
-      });
-    } else {
-      sharpInstance = sharp(buffer);
+    const sharp = getSharp();
+    if (sharp) {
+      const inst = this.createSharpInstance(sharp, buffer, ext);
+      const metadata = await inst.metadata();
+      const width = metadata.width || 0;
+      const height = metadata.height || 0;
+      const imageBuffer = await inst.png().toBuffer();
+      return { dataUrl: `data:image/png;base64,${imageBuffer.toString('base64')}`, width, height };
     }
 
-    const metadata = await sharpInstance.metadata();
-    const width = metadata.width || 0;
-    const height = metadata.height || 0;
-
-    // Convert to PNG for lossless display
-    const imageBuffer = await sharpInstance.png().toBuffer();
-    const dataUrl = `data:image/png;base64,${imageBuffer.toString('base64')}`;
-
-    return { dataUrl, width, height };
+    const Jimp = this.getJimp();
+    if (!Jimp) {
+      throw new Error('No image processing backend available (Sharp and Jimp both failed)');
+    }
+    const image = await this.createJimpImage(Jimp, buffer, ext);
+    const pngBuffer: Buffer = await image.getBuffer('image/png');
+    return {
+      dataUrl: `data:image/png;base64,${pngBuffer.toString('base64')}`,
+      width: image.width,
+      height: image.height
+    };
   }
 
-  /**
-   * Queue multiple thumbnails for generation
-   */
+  // ---------------------------------------------------------------------------
+  // Thumbnail queue
+  // ---------------------------------------------------------------------------
+
   queueThumbnails(
     items: Array<{ uri: vscode.Uri; tupleIndex: number; modalityIndex: number }>,
     size: number,
@@ -170,9 +238,10 @@ export class ThumbnailService {
     }
   }
 
-  /**
-   * Load from disk cache
-   */
+  // ---------------------------------------------------------------------------
+  // Disk cache
+  // ---------------------------------------------------------------------------
+
   private async loadFromDiskCache(cacheKey: string): Promise<string | null> {
     const cacheFile = vscode.Uri.joinPath(this.cacheDir, `${cacheKey}.jpg`);
     try {
@@ -183,9 +252,6 @@ export class ThumbnailService {
     }
   }
 
-  /**
-   * Save to disk cache (fire and forget)
-   */
   private async saveToDiskCache(cacheKey: string, dataUrl: string): Promise<void> {
     const cacheFile = vscode.Uri.joinPath(this.cacheDir, `${cacheKey}.jpg`);
     try {
@@ -197,9 +263,6 @@ export class ThumbnailService {
     }
   }
 
-  /**
-   * Clean up old cache entries based on cacheMaxAgeDays setting
-   */
   private async cleanupOldCache(): Promise<void> {
     const config = vscode.workspace.getConfiguration('imageCompare');
     const maxAgeDays = config.get<number>('cacheMaxAgeDays', 7);
@@ -226,9 +289,6 @@ export class ThumbnailService {
     }
   }
 
-  /**
-   * Clear memory cache
-   */
   clearMemoryCache(): void {
     this.memoryCache.clear();
   }

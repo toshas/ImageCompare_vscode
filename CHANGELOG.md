@@ -2,6 +2,18 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.1.6] - 2026
+
+### Fixed
+- **Sharp load failure on older CPUs**: Extension no longer crashes when Sharp native binaries fail (e.g., "Unsupported CPU: Prebuilt binaries for linux-x64 require v2 microarchitecture")
+
+### Added
+- **Three-tier image processing fallback**: Sharp native → Sharp WASM → Jimp (pure JS)
+  - `sharpLoader.ts`: dynamic loader that retries with WASM when native Sharp fails
+  - Jimp fallback: bundled pure-JS image library as last resort (slower but guaranteed to work)
+  - Warning notification shown when running on the Jimp fallback
+- **Jimp dependency**: Pure JavaScript image processing library (~1.4MB bundled by webpack)
+
 ## [0.1.5] - 2026
 
 ### Fixed

@@ -2,7 +2,7 @@
   "name": "image-compare",
   "displayName": "ImageCompare",
   "description": "Compare multiple images (tuples) with multiple modalities",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "obukhovai",
   "license": "MIT",
   "icon": "icon.png",
@@ -98,6 +98,7 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
+    "jimp": "^1.6.0",
     "sharp": "^0.34.5"
   },
   "optionalDependencies": {
