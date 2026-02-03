@@ -59,6 +59,8 @@ export type WebViewMessage =
   | { type: 'setCurrentTuple'; tupleIndex: number }
   | { type: 'tupleFullyLoaded'; tupleIndex: number }
   | { type: 'setWinner'; tupleIndex: number; modalityIndex: number | null } // null = clear winner
+  | { type: 'cropImages'; tupleIndex: number; cropRect: { x: number; y: number; w: number; h: number } }
+  | { type: 'deleteTuple'; tupleIndex: number }
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
@@ -70,13 +72,15 @@ export type ExtensionMessage =
   | { type: 'imageError'; tupleIndex: number; modalityIndex: number; error: string }
   | { type: 'thumbnailProgress'; current: number; total: number }
   | { type: 'fileDeleted'; tupleIndex: number; modalityIndex: number }
-  | { type: 'fileRestored'; tupleIndex: number; modalityIndex: number }
+  | { type: 'fileRestored'; tupleIndex: number; modalityIndex: number; imageInfo?: ImageInfo }
   | { type: 'tupleDeleted'; tupleIndex: number }
   | { type: 'tupleAdded'; tuple: TupleInfo; tupleIndex: number }
   | { type: 'modalityAdded'; modality: string; modalityIndex: number }
   | { type: 'modalityRemoved'; modalityIndex: number }
   | { type: 'winnerUpdated'; tupleIndex: number; modalityIndex: number | null }
-  | { type: 'winnersReset'; winners: Record<number, number> }; // For when results.txt is regenerated
+  | { type: 'winnersReset'; winners: Record<number, number> } // For when results.txt is regenerated
+  | { type: 'cropComplete'; tupleIndex: number; count: number; paths: string[] }
+  | { type: 'cropError'; tupleIndex: number; error: string };
 
 // Configuration passed to webview
 export interface WebViewConfig {

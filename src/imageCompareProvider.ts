@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices } from './fileService';
 import { ThumbnailService } from './thumbnailService';
 import {
@@ -9,7 +11,6 @@ import {
   WebViewMessage,
   ExtensionMessage,
   LoadedImage,
-  MODALITY_COLORS,
   isImageFile
 } from './types';
 
@@ -32,12 +33,16 @@ interface PanelState {
   loadedImages: Map<string, LoadedImage>;
   currentTupleIndex: number;
   fileWatchers: vscode.FileSystemWatcher[];
+  nodeWatchers: fs.FSWatcher[];
+  deleteCheckTimer?: ReturnType<typeof setInterval>; // Polling timer for delete detection
   watchedDirs: Set<string>;
   baseUri?: vscode.Uri; // Root directory for single-directory mode (mode 1)
   modalityDirs: Map<string, vscode.Uri>; // Modality name -> directory URI (for mode 2)
   recentlyDeleted: DeletedFileInfo[];
   winners: Map<number, number>; // tupleIndex -> modalityIndex (display index)
   votingEnabled: boolean; // true for mode 1 and 2 (directory-based modes)
+  webviewReady: boolean;
+  pendingDebugMessages: string[];
 }
 
 /**
@@ -96,9 +101,6 @@ export class ImageCompareProvider {
         }
       );
 
-      // Collect directories to watch
-      const watchedDirs = this.collectWatchedDirs(scanResult, uris);
-
       // Determine mode and set up directory tracking
       // Mode 1: Single directory with subdirectories -> baseUri is set
       // Mode 2: Multiple directories selected -> modalityDirs maps modality -> directory
@@ -121,6 +123,26 @@ export class ImageCompareProvider {
       }
       // Mode 3: Multiple files - no directory tracking needed
 
+      // Collect directories to watch (per-modality for reliable event handling)
+      const watchedDirs = new Set<string>();
+      if (baseUri) {
+        // Mode 1: watch base directory (for new modality detection) + each modality dir
+        watchedDirs.add(baseUri.path);
+      }
+      if (modalityDirs.size > 0) {
+        // Mode 2: watch each modality directory
+        for (const dirUri of modalityDirs.values()) {
+          watchedDirs.add(dirUri.path);
+        }
+      }
+      // Always add directories that directly contain image files
+      for (const tuple of scanResult.tuples) {
+        for (const img of tuple.images) {
+          const dir = img.uri.path.substring(0, img.uri.path.lastIndexOf('/'));
+          if (dir) watchedDirs.add(dir);
+        }
+      }
+
       // Determine if voting is enabled (mode 1 or mode 2 - directory-based modes)
       const votingEnabled = baseUri !== undefined || modalityDirs.size > 0;
 
@@ -131,12 +153,15 @@ export class ImageCompareProvider {
         loadedImages: new Map<string, LoadedImage>(),
         currentTupleIndex: 0,
         fileWatchers: [],
+        nodeWatchers: [],
         watchedDirs,
         baseUri,
         modalityDirs,
         recentlyDeleted: [],
         winners: new Map<number, number>(),
-        votingEnabled
+        votingEnabled,
+        webviewReady: false,
+        pendingDebugMessages: []
       };
 
       // Set up file system watcher
@@ -161,6 +186,8 @@ export class ImageCompareProvider {
         () => {
           panelState.loadedImages.clear();
           panelState.fileWatchers.forEach(w => w.dispose());
+          panelState.nodeWatchers.forEach(w => w.close());
+          if (panelState.deleteCheckTimer) clearInterval(panelState.deleteCheckTimer);
           this.panels.delete(panelState);
         },
         null,
@@ -179,6 +206,12 @@ export class ImageCompareProvider {
   private async handlePanelMessage(state: PanelState, message: WebViewMessage): Promise<void> {
     switch (message.type) {
       case 'ready':
+        state.webviewReady = true;
+        // Flush any debug messages queued before webview was ready
+        for (const msg of state.pendingDebugMessages) {
+          state.panel.webview.postMessage({ type: '_debug', msg });
+        }
+        state.pendingDebugMessages = [];
         await this.sendInitData(state);
         break;
 
@@ -211,6 +244,14 @@ export class ImageCompareProvider {
         await this.handleSetWinner(state, message.tupleIndex, message.modalityIndex);
         break;
 
+      case 'cropImages':
+        await this.handleCropImages(state, message.tupleIndex, message.cropRect);
+        break;
+
+      case 'deleteTuple':
+        await this.handleDeleteTuple(state, message.tupleIndex);
+        break;
+
       case 'log':
         // WebView debug messages (disabled in production)
         break;
@@ -241,6 +282,121 @@ export class ImageCompareProvider {
 
     // Persist to results.txt
     await this.saveResults(state);
+  }
+
+  /**
+   * Handle delete tuple request: delete all image files for the given tuple from disk.
+   * File watchers will detect the deletions and update the UI.
+   */
+  private async handleDeleteTuple(state: PanelState, tupleIndex: number): Promise<void> {
+    const tuple = state.scanResult.tuples[tupleIndex];
+    if (!tuple) return;
+
+    // Delete files from disk
+    for (const img of tuple.images) {
+      try {
+        await vscode.workspace.fs.delete(img.uri);
+      } catch {
+        // File may already be gone
+      }
+    }
+
+    // Immediately remove from state — don't wait for filesystem watcher polling
+    this.removeTuple(state, tupleIndex);
+  }
+
+  /**
+   * Handle crop request: crop all modalities in the tuple at the given rectangle.
+   */
+  private async handleCropImages(
+    state: PanelState,
+    tupleIndex: number,
+    cropRect: { x: number; y: number; w: number; h: number }
+  ): Promise<void> {
+    const tuple = state.scanResult.tuples[tupleIndex];
+    if (!tuple) return;
+
+    // Use the tuple name (common core across modalities) as the crop basename.
+    // This ensures all modalities produce the same output filename (e.g.
+    // "img_00079_crop01.png") so the file watcher groups them into one tuple.
+    const tupleName = tuple.name;
+
+    // Determine the crop number once from the first modality's directory,
+    // scanning for existing crops of the tuple name.
+    const firstImage = tuple.images[0];
+    const firstDirUri = vscode.Uri.joinPath(firstImage.uri, '..');
+    const cropNum = await this.getNextCropNumber(firstDirUri, tupleName);
+    const cropSuffix = `_crop${String(cropNum).padStart(2, '0')}`;
+    const outputName = `${tupleName}${cropSuffix}.png`;
+
+    let savedCount = 0;
+    const savedPaths: string[] = [];
+
+    const cropOne = async (imageFile: ImageFile) => {
+      const dirUri = vscode.Uri.joinPath(imageFile.uri, '..');
+      const outputUri = vscode.Uri.joinPath(dirUri, outputName);
+
+      // Clamp crop rect to actual image dimensions
+      const meta = await this.thumbnailService.getImageDimensions(imageFile.uri);
+      const clampedRect = {
+        x: Math.max(0, Math.min(cropRect.x, meta.width - 1)),
+        y: Math.max(0, Math.min(cropRect.y, meta.height - 1)),
+        w: cropRect.w,
+        h: cropRect.h
+      };
+      clampedRect.w = Math.min(clampedRect.w, meta.width - clampedRect.x);
+      clampedRect.h = Math.min(clampedRect.h, meta.height - clampedRect.y);
+      if (clampedRect.w <= 0 || clampedRect.h <= 0) return;
+
+      const croppedBuffer = await this.thumbnailService.cropImage(imageFile.uri, clampedRect);
+      await vscode.workspace.fs.writeFile(outputUri, croppedBuffer);
+      savedCount++;
+      savedPaths.push(outputUri.path);
+    };
+
+    await Promise.all(tuple.images.map(async (imageFile) => {
+      try {
+        await cropOne(imageFile);
+      } catch (err: any) {
+        console.error(`[ImageCompare] Failed to crop ${imageFile.name}:`, err?.message ?? err);
+      }
+    }));
+
+    if (savedCount > 0) {
+      state.panel.webview.postMessage({
+        type: 'cropComplete',
+        tupleIndex,
+        count: savedCount,
+        paths: savedPaths
+      } as ExtensionMessage);
+    } else {
+      state.panel.webview.postMessage({
+        type: 'cropError',
+        tupleIndex,
+        error: 'Failed to crop any images'
+      } as ExtensionMessage);
+    }
+  }
+
+  /**
+   * Scan a directory for existing _cropNN files and return the next number.
+   */
+  private async getNextCropNumber(dirUri: vscode.Uri, basename: string): Promise<number> {
+    try {
+      const entries = await vscode.workspace.fs.readDirectory(dirUri);
+      const escaped = basename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const cropPattern = new RegExp(`^${escaped}_crop(\\d+)\\.`);
+      let maxNum = 0;
+      for (const [name] of entries) {
+        const match = name.match(cropPattern);
+        if (match) {
+          maxNum = Math.max(maxNum, parseInt(match[1], 10));
+        }
+      }
+      return maxNum + 1;
+    } catch {
+      return 1;
+    }
   }
 
   /**
@@ -723,19 +879,49 @@ body {
   filter: blur(2px);
 }
 
-#thumbnail {
+/* Floating panel (navigator + crop) */
+#floating-panel {
   position: absolute;
   top: 10px;
   right: 10px;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.85);
   border: 1px solid var(--vscode-panel-border, #444);
-  border-radius: 4px;
-  padding: 4px;
-  display: none;
+  border-radius: 6px;
+  z-index: 20;
+  min-width: 160px;
+  user-select: none;
 }
-#thumbnail.active { display: block; }
+#fp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1px 6px;
+  cursor: pointer;
+  background: rgba(255,255,255,0.18);
+  border-radius: 6px 6px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ccc;
+  letter-spacing: 0.3px;
+}
+#fp-collapse-btn {
+  cursor: pointer;
+  font-size: 18px;
+  padding: 0 2px;
+  line-height: 1;
+  color: #fff;
+}
+#fp-body { padding: 4px; }
+#floating-panel.collapsed #fp-body { display: none; }
+#floating-panel.collapsed { min-width: auto; }
+#floating-panel.collapsed #fp-header { border-radius: 6px; }
+#fp-minimap {
+  position: relative;
+  margin-bottom: 4px;
+}
 #thumb-canvas {
   display: block;
+  margin: 0 auto;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
@@ -745,6 +931,87 @@ body {
   pointer-events: none;
   box-sizing: border-box;
 }
+#fp-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+#crop-btn {
+  padding: 3px 8px;
+  background: var(--vscode-button-secondaryBackground, #444);
+  color: var(--vscode-button-secondaryForeground, #fff);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+#crop-btn:hover { background: var(--vscode-button-secondaryHoverBackground, #555); }
+#crop-btn.active {
+  background: var(--vscode-button-background, #0078d4);
+  color: var(--vscode-button-foreground, #fff);
+}
+#delete-btn {
+  padding: 3px 8px;
+  background: var(--vscode-button-secondaryBackground, #444);
+  color: var(--vscode-button-secondaryForeground, #fff);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+#delete-btn:hover { background: #a33; }
+
+/* Crop overlay */
+#crop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  cursor: crosshair;
+}
+.crop-dim {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.crop-rect {
+  position: absolute;
+  border: 2px solid #0f0;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border: 1px solid #333;
+  border-radius: 2px;
+  z-index: 16;
+}
+.crop-toolbar {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  z-index: 16;
+}
+.crop-toolbar-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.crop-confirm {
+  background: #2ea043;
+  color: #fff;
+}
+.crop-confirm:hover { background: #3fb950; }
+.crop-cancel {
+  background: var(--vscode-button-secondaryBackground, #444);
+  color: var(--vscode-button-secondaryForeground, #fff);
+}
+.crop-cancel:hover { background: var(--vscode-button-secondaryHoverBackground, #555); }
 
 #info {
   background: var(--vscode-sideBar-background, #2a2a2a);
@@ -1061,9 +1328,21 @@ body {
     <div id="image-loader">
       <div id="loader-spinner"></div>
     </div>
-    <div id="thumbnail">
-      <canvas id="thumb-canvas"></canvas>
-      <div id="thumb-viewport"></div>
+    <div id="floating-panel">
+      <div id="fp-header">
+        <span id="fp-title">Tools</span>
+        <span id="fp-collapse-btn">&#9662;</span>
+      </div>
+      <div id="fp-body">
+        <div id="fp-minimap">
+          <canvas id="thumb-canvas"></canvas>
+          <div id="thumb-viewport"></div>
+        </div>
+        <div id="fp-actions">
+          <button id="crop-btn" title="Crop all modalities (C)">Crop</button>
+          <button id="delete-btn" title="Delete current tuple files (Del)">Delete</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1089,7 +1368,8 @@ body {
         <tr><td>Enter</td><td>Toggle winner for current modality</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
-        <tr><td>Esc</td><td>Reset zoom</td></tr>
+        <tr><td>C</td><td>Toggle crop mode</td></tr>
+        <tr><td>Esc</td><td>Reset zoom / cancel crop</td></tr>
       </table>
       <div style="margin-top: 20px;">
         <button class="btn btn-primary" id="close-help-btn">Close</button>
@@ -1114,31 +1394,7 @@ body {
     return text;
   }
 
-  /**
-   * Dispose of resources
-   */
-  /**
-   * Collect directories to watch for file changes
-   */
-  private collectWatchedDirs(scanResult: ScanResult, uris: vscode.Uri[]): Set<string> {
-    const dirs = new Set<string>();
-    
-    // Add directories from URIs
-    for (const uri of uris) {
-      const dir = uri.path.substring(0, uri.path.lastIndexOf('/'));
-      if (dir) dirs.add(dir);
-    }
-    
-    // Add directories from all image files
-    for (const tuple of scanResult.tuples) {
-      for (const img of tuple.images) {
-        const dir = img.uri.path.substring(0, img.uri.path.lastIndexOf('/'));
-        if (dir) dirs.add(dir);
-      }
-    }
-    
-    return dirs;
-  }
+
 
   /**
    * Set up file system watchers for a panel
@@ -1152,21 +1408,106 @@ body {
     if (!firstUri) return;
     const scheme = firstUri.scheme;
 
-    // Create a watcher for each directory
+    // Collect leaf directories (directories directly containing images) for fs.watch
+    const leafDirs = new Set<string>();
+    for (const tuple of state.scanResult.tuples) {
+      for (const img of tuple.images) {
+        const dir = img.uri.path.substring(0, img.uri.path.lastIndexOf('/'));
+        if (dir) leafDirs.add(dir);
+      }
+    }
+
+    // Create a VS Code watcher for each directory (handles create + change reliably)
     for (const dir of state.watchedDirs) {
+      // Use * for leaf dirs (direct children only), **/* for parent dirs
+      const glob = leafDirs.has(dir) ? '*' : '*';
       const pattern = new vscode.RelativePattern(
         vscode.Uri.file(dir).with({ scheme }),
-        '**/*'
+        glob
       );
 
       const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-      watcher.onDidDelete(uri => this.handleFileDeleted(state, uri));
-      watcher.onDidCreate(uri => this.handleFileCreated(state, uri));
-      watcher.onDidChange(uri => this.handleFileChanged(state, uri));
+      // VS Code onDidDelete is unreliable on some platforms — keep as fallback
+      watcher.onDidDelete(uri => {
+        try { this.handleFileDeleted(state, uri); } catch (e: any) { this.debugMsg(state, `handleFileDeleted ERROR: ${e?.message ?? e}`); }
+      });
+      watcher.onDidCreate(uri => {
+        this.debugMsg(state, `onDidCreate: ${uri.path}`);
+        try { this.handleFileCreated(state, uri); } catch (e: any) { this.debugMsg(state, `handleFileCreated ERROR: ${e?.message ?? e}`); }
+      });
+      watcher.onDidChange(uri => {
+        try { this.handleFileChanged(state, uri); } catch (e: any) { this.debugMsg(state, `handleFileChanged ERROR: ${e?.message ?? e}`); }
+      });
 
       state.fileWatchers.push(watcher);
     }
+
+    // Node.js fs.watch on leaf directories for reliable delete detection.
+    // VS Code's onDidDelete doesn't fire on some platforms (macOS + certain filesystems).
+    if (scheme === 'file') {
+      for (const dir of leafDirs) {
+        try {
+          const fsWatcher = fs.watch(dir, (eventType, filename) => {
+            this.debugMsg(state, `fs.watch event: ${eventType} ${filename} in ${dir}`);
+            if (eventType === 'rename' && filename) {
+              const filePath = path.join(dir, filename);
+              // Brief delay: distinguish create (file will exist) from delete (file won't)
+              setTimeout(() => {
+                try {
+                  fs.accessSync(filePath);
+                  // File exists — it's a create/rename, VS Code watcher handles it
+                } catch {
+                  // File gone — treat as deletion
+                  const fileUri = vscode.Uri.file(filePath);
+                  this.debugMsg(state, `fs.watch delete: ${filePath}`);
+                  this.handleFileDeleted(state, fileUri);
+                }
+              }, 50);
+            }
+          });
+          fsWatcher.on('error', (err) => {
+            this.debugMsg(state, `fs.watch error on ${dir}: ${err.message}`);
+          });
+          this.debugMsg(state, `fs.watch setup OK: ${dir}`);
+          state.nodeWatchers.push(fsWatcher);
+        } catch {
+          // fs.watch unavailable (remote FS, permission error) — VS Code watcher only
+        }
+      }
+    }
+
+    // Polling-based delete detection: check all tracked files every 2 seconds.
+    // This is the most reliable approach across all filesystems (Google Drive, FUSE, etc.)
+    // where neither VS Code's onDidDelete nor Node.js fs.watch fire reliably.
+    this.startDeletePolling(state);
+  }
+
+  /**
+   * Start polling for file deletions. Checks all known image URIs periodically.
+   */
+  private startDeletePolling(state: PanelState): void {
+    if (state.deleteCheckTimer) return; // already running
+
+    const firstUri = state.scanResult.tuples[0]?.images[0]?.uri;
+    if (!firstUri || firstUri.scheme !== 'file') return; // only poll local files
+
+    state.deleteCheckTimer = setInterval(() => {
+      // Build list of files to check from current scan result
+      for (let ti = 0; ti < state.scanResult.tuples.length; ti++) {
+        const tuple = state.scanResult.tuples[ti];
+        for (const img of tuple.images) {
+          const filePath = img.uri.fsPath;
+          try {
+            fs.accessSync(filePath);
+          } catch {
+            // File is gone — fire delete handler
+            this.debugMsg(state, `poll delete detected: ${filePath}`);
+            this.handleFileDeleted(state, img.uri);
+          }
+        }
+      }
+    }, 2000);
   }
 
   /**
@@ -1182,7 +1523,10 @@ body {
    */
   private handleFileDeleted(state: PanelState, uri: vscode.Uri): void {
     const uriStr = uri.toString();
-    
+
+    // Skip if already being processed (avoids duplicate detection from polling + watcher)
+    if (state.recentlyDeleted.some(d => d.uri.toString() === uriStr)) return;
+
     // Check if this is a modality directory being deleted
     const deletedPath = uri.path;
     const modalityIndex = state.scanResult.modalities.findIndex(modality => {
@@ -1208,54 +1552,135 @@ body {
       const tuple = state.scanResult.tuples[tupleIndex];
       for (let modIdx = 0; modIdx < tuple.images.length; modIdx++) {
         if (tuple.images[modIdx].uri.toString() === uriStr) {
-          // Capture modality name before any async operations
+          // Use the global modality index (not the array position)
           const modalityName = tuple.images[modIdx].modality;
-          
+          const globalModIdx = state.scanResult.modalities.indexOf(modalityName);
+
           // Found the deleted file - track it for potential rename detection
+          // Capture tuple reference so we can find it even after index shifts
+          const capturedTuple = tuple;
           this.cleanupRecentlyDeleted(state);
           state.recentlyDeleted.push({
             uri,
             tupleIndex,
-            modalityIndex: modIdx,
+            modalityIndex: globalModIdx,
             timestamp: Date.now()
           });
 
           // Remove from loaded images cache
-          const cacheKey = `${tupleIndex}-${modIdx}`;
+          const cacheKey = `${tupleIndex}-${globalModIdx}`;
           state.loadedImages.delete(cacheKey);
-          
+
           // Wait a short time to see if this is a rename (create will follow quickly)
           setTimeout(() => {
+            // Resolve current tuple index (may have shifted due to insertions)
+            const currentTupleIndex = state.scanResult.tuples.indexOf(capturedTuple);
+            if (currentTupleIndex < 0) return; // tuple already removed
+
             // Check if this file was "resurrected" (renamed to new location)
             const stillDeleted = state.recentlyDeleted.some(
-              d => d.tupleIndex === tupleIndex && d.modalityIndex === modIdx
+              d => d.tupleIndex === currentTupleIndex && d.modalityIndex === globalModIdx
             );
-            
+
             if (stillDeleted) {
-              // It's a real deletion, notify webview
-              const msg: ExtensionMessage = {
-                type: 'fileDeleted',
-                tupleIndex,
-                modalityIndex: modIdx
-              };
-              state.panel.webview.postMessage(msg);
-              
               // Remove from recentlyDeleted
               state.recentlyDeleted = state.recentlyDeleted.filter(
-                d => !(d.tupleIndex === tupleIndex && d.modalityIndex === modIdx)
+                d => !(d.tupleIndex === currentTupleIndex && d.modalityIndex === globalModIdx)
               );
-              
+
+              // Remove the image from the tuple
+              capturedTuple.images = capturedTuple.images.filter(img => img.modality !== modalityName);
+
+              // Clear winner if it pointed to the deleted modality
+              if (state.winners.get(currentTupleIndex) === globalModIdx) {
+                state.winners.delete(currentTupleIndex);
+                state.panel.webview.postMessage({
+                  type: 'winnerUpdated',
+                  tupleIndex: currentTupleIndex,
+                  modalityIndex: null
+                } as ExtensionMessage);
+              }
+
+              if (capturedTuple.images.length === 0) {
+                // All images deleted - remove the tuple entirely
+                this.removeTuple(state, currentTupleIndex);
+              } else {
+                // Notify webview of the deleted file
+                const msg: ExtensionMessage = {
+                  type: 'fileDeleted',
+                  tupleIndex: currentTupleIndex,
+                  modalityIndex: globalModIdx
+                };
+                state.panel.webview.postMessage(msg);
+
+                // Persist updated winners
+                if (state.votingEnabled) {
+                  this.saveResults(state);
+                }
+              }
+
               // Check if all files for this modality are now gone
-              const globalModalityIndex = state.scanResult.modalities.indexOf(modalityName);
-              if (globalModalityIndex >= 0) {
-                this.checkModalityEmpty(state, globalModalityIndex);
+              if (globalModIdx >= 0) {
+                this.checkModalityEmpty(state, globalModIdx);
               }
             }
           }, 500); // Wait 500ms to see if it's a rename
-          
+
           return;
         }
       }
+    }
+  }
+
+  /**
+   * Remove a tuple entirely and notify webview
+   */
+  private removeTuple(state: PanelState, tupleIndex: number): void {
+    state.scanResult.tuples.splice(tupleIndex, 1);
+
+    // Re-index loadedImages cache
+    const newLoadedImages = new Map<string, LoadedImage>();
+    for (const [key, value] of state.loadedImages) {
+      const [tIdx, mIdx] = key.split('-').map(Number);
+      if (tIdx > tupleIndex) {
+        newLoadedImages.set(`${tIdx - 1}-${mIdx}`, value);
+      } else if (tIdx < tupleIndex) {
+        newLoadedImages.set(key, value);
+      }
+      // tIdx === tupleIndex: discard (tuple removed)
+    }
+    state.loadedImages = newLoadedImages;
+
+    // Re-index winners
+    const newWinners = new Map<number, number>();
+    for (const [tIdx, mIdx] of state.winners) {
+      if (tIdx > tupleIndex) {
+        newWinners.set(tIdx - 1, mIdx);
+      } else if (tIdx < tupleIndex) {
+        newWinners.set(tIdx, mIdx);
+      }
+    }
+    state.winners = newWinners;
+
+    // Re-index recentlyDeleted
+    state.recentlyDeleted = state.recentlyDeleted
+      .filter(d => d.tupleIndex !== tupleIndex)
+      .map(d => d.tupleIndex > tupleIndex ? { ...d, tupleIndex: d.tupleIndex - 1 } : d);
+
+    // Adjust currentTupleIndex
+    if (state.currentTupleIndex >= state.scanResult.tuples.length) {
+      state.currentTupleIndex = Math.max(0, state.scanResult.tuples.length - 1);
+    } else if (state.currentTupleIndex > tupleIndex) {
+      state.currentTupleIndex--;
+    }
+
+    // Notify webview
+    const msg: ExtensionMessage = { type: 'tupleDeleted', tupleIndex };
+    state.panel.webview.postMessage(msg);
+
+    // Persist updated winners
+    if (state.votingEnabled) {
+      this.saveResults(state);
     }
   }
 
@@ -1368,11 +1793,13 @@ body {
       // This is likely a rename - update the URI in place
       const { tupleIndex, modalityIndex } = deletedMatch;
       const tuple = state.scanResult.tuples[tupleIndex];
-      const oldUri = tuple.images[modalityIndex].uri;
-      
-      // Update the URI
-      tuple.images[modalityIndex].uri = uri;
-      tuple.images[modalityIndex].name = filename;
+      // Look up image by modality name (modalityIndex is global, not array position)
+      const modality = state.scanResult.modalities[modalityIndex];
+      const img = tuple.images.find(i => i.modality === modality);
+      if (img) {
+        img.uri = uri;
+        img.name = filename;
+      }
       
       // Remove from recently deleted (it was a rename, not a delete)
       state.recentlyDeleted = state.recentlyDeleted.filter(
@@ -1411,16 +1838,18 @@ body {
    */
   private findExistingSlotByUri(state: PanelState, uri: vscode.Uri): { tupleIndex: number; modalityIndex: number } | undefined {
     const uriStr = uri.toString();
-    
+
     for (let tupleIndex = 0; tupleIndex < state.scanResult.tuples.length; tupleIndex++) {
       const tuple = state.scanResult.tuples[tupleIndex];
-      for (let modalityIndex = 0; modalityIndex < tuple.images.length; modalityIndex++) {
-        if (tuple.images[modalityIndex].uri.toString() === uriStr) {
-          return { tupleIndex, modalityIndex };
+      for (const img of tuple.images) {
+        if (img.uri.toString() === uriStr) {
+          // Return the global modality index, not the array position
+          const globalModIdx = state.scanResult.modalities.indexOf(img.modality);
+          return { tupleIndex, modalityIndex: globalModIdx };
         }
       }
     }
-    
+
     return undefined;
   }
 
@@ -1523,51 +1952,92 @@ body {
     // by matching filename pattern with other tuples
     const baseFilename = filename.replace(/\.[^.]+$/, ''); // Remove extension
     
-    // Check if this creates a new tuple or extends an existing one
+    // Find best matching tuple using longest-match-wins strategy.
+    // Score each tuple by how specifically its name matches the new filename.
+    // A longer matching name is more specific (e.g. "img001_crop01" beats "img001").
+    // Among tuples at the same match length, prefer one with a free modality slot.
+    // If the best match group has no free slot, create a new tuple instead of
+    // falling back to a shorter (less specific) match.
     let matchingTupleIndex = -1;
-    
+    let bestMatchLen = -1;
+    let bestSlotFree = false;
+
     for (let i = 0; i < state.scanResult.tuples.length; i++) {
       const tuple = state.scanResult.tuples[i];
-      // Check if tuple name matches
+      let matchLen = -1;
+
+      // Check if tuple name is a substring of the new filename
       if (tuple.name && baseFilename.includes(tuple.name)) {
-        matchingTupleIndex = i;
-        break;
+        matchLen = tuple.name.length;
       }
-      // Check if any image in this tuple has similar name
+
+      // Exact basename match with an existing image in the tuple scores
+      // the full baseFilename length (highest possible)
       for (const img of tuple.images) {
         const imgBase = img.name.replace(/\.[^.]+$/, '');
         if (imgBase === baseFilename) {
-          matchingTupleIndex = i;
+          matchLen = baseFilename.length;
           break;
         }
       }
-      if (matchingTupleIndex >= 0) break;
+
+      if (matchLen < 0) continue; // no match at all
+
+      const slotFree = !tuple.images.find(img => img.modality === modalityName);
+
+      if (matchLen > bestMatchLen) {
+        // Longer match always wins — it's more specific
+        matchingTupleIndex = i;
+        bestMatchLen = matchLen;
+        bestSlotFree = slotFree;
+      } else if (matchLen === bestMatchLen && slotFree && !bestSlotFree) {
+        // Same specificity but this one has a free slot — prefer it
+        matchingTupleIndex = i;
+        bestSlotFree = slotFree;
+      }
+    }
+
+    // Only use the match if the modality slot is actually free;
+    // otherwise create a new tuple (don't fall back to a less specific match)
+    if (!bestSlotFree) {
+      matchingTupleIndex = -1;
     }
 
     if (matchingTupleIndex >= 0) {
-      // Add to existing tuple if this modality is missing
+      // Add to existing tuple (we already verified the modality slot is free)
       const tuple = state.scanResult.tuples[matchingTupleIndex];
-      const existingForModality = tuple.images.find(img => img.modality === modalityName);
-      
-      if (!existingForModality) {
-        // Add the new modality to this tuple
-        tuple.images.push({
-          uri,
+      tuple.images.push({
+        uri,
+        name: filename,
+        modality: modalityName
+      });
+
+      // Sort images by modality order
+      tuple.images.sort((a, b) =>
+        state.scanResult.modalities.indexOf(a.modality) -
+        state.scanResult.modalities.indexOf(b.modality)
+      );
+
+      // Regenerate thumbnail
+      const newModalityIndex = tuple.images.findIndex(img => img.uri.toString() === uri.toString());
+      this.regenerateThumbnail(state, matchingTupleIndex, newModalityIndex);
+
+      // Notify webview that the slot is now filled (so it can re-render / clear spinner)
+      // Include imageInfo so the webview can update its tuple data if the slot was unknown
+      const restoredMsg: ExtensionMessage = {
+        type: 'fileRestored',
+        tupleIndex: matchingTupleIndex,
+        modalityIndex,
+        imageInfo: {
           name: filename,
-          modality: modalityName
-        });
-        
-        // Sort images by modality order
-        tuple.images.sort((a, b) => 
-          state.scanResult.modalities.indexOf(a.modality) - 
-          state.scanResult.modalities.indexOf(b.modality)
-        );
-        
-        // Regenerate thumbnail
-        const newModalityIndex = tuple.images.findIndex(img => img.uri.toString() === uri.toString());
-        this.regenerateThumbnail(state, matchingTupleIndex, newModalityIndex);
-      }
-    } else {
+          modality: modalityName,
+          tupleIndex: matchingTupleIndex,
+          modalityIndex
+        }
+      };
+      state.panel.webview.postMessage(restoredMsg);
+    }
+    if (matchingTupleIndex < 0) {
       // Create a new tuple with just this one file
       // (Other modalities for this tuple might come later)
       const newTuple = {
@@ -1579,29 +2049,70 @@ body {
         }]
       };
       
-      state.scanResult.tuples.push(newTuple);
-      const newTupleIndex = state.scanResult.tuples.length - 1;
+      // Insert right after the current tuple (instead of appending at end)
+      const insertIndex = state.currentTupleIndex + 1;
+      state.scanResult.tuples.splice(insertIndex, 0, newTuple);
+      const newTupleIndex = insertIndex;
+
+      // Re-index loadedImages cache (shift keys at or above insertIndex up by 1)
+      const newLoadedImages = new Map<string, LoadedImage>();
+      for (const [key, value] of state.loadedImages) {
+        const [tIdx, mIdx] = key.split('-').map(Number);
+        if (tIdx >= insertIndex) {
+          newLoadedImages.set(`${tIdx + 1}-${mIdx}`, value);
+        } else {
+          newLoadedImages.set(key, value);
+        }
+      }
+      state.loadedImages = newLoadedImages;
+
+      // Re-index winners (shift tuple indices at or above insertIndex up by 1)
+      const newWinners = new Map<number, number>();
+      for (const [tIdx, mIdx] of state.winners) {
+        if (tIdx >= insertIndex) {
+          newWinners.set(tIdx + 1, mIdx);
+        } else {
+          newWinners.set(tIdx, mIdx);
+        }
+      }
+      state.winners = newWinners;
+
+      // Re-index recentlyDeleted (shift tuple indices at or above insertIndex up by 1)
+      for (const d of state.recentlyDeleted) {
+        if (d.tupleIndex >= insertIndex) {
+          d.tupleIndex++;
+        }
+      }
+
+      // Adjust currentTupleIndex since we inserted before it
+      if (state.currentTupleIndex >= insertIndex) {
+        state.currentTupleIndex++;
+      }
       
-      // Notify webview of new tuple
+      // Notify webview of new tuple — include ALL modalities (matching sendInitData format)
       const tupleInfo: TupleInfo = {
         name: newTuple.name,
-        images: newTuple.images.map((img, idx) => ({
-          name: img.name,
-          modality: img.modality,
-          tupleIndex: newTupleIndex,
-          modalityIndex: idx
-        }))
+        images: state.scanResult.modalities.map((modality, mIdx) => {
+          const img = this.findImageForModality(newTuple, modality);
+          return {
+            name: img?.name || '',
+            modality,
+            tupleIndex: newTupleIndex,
+            modalityIndex: mIdx
+          };
+        })
       };
-      
+
       const msg: ExtensionMessage = {
         type: 'tupleAdded',
         tuple: tupleInfo,
         tupleIndex: newTupleIndex
       };
       state.panel.webview.postMessage(msg);
-      
-      // Generate thumbnail
-      this.regenerateThumbnail(state, newTupleIndex, 0);
+
+      // Generate thumbnail for the modality that was just added
+      const addedModalityIndex = state.scanResult.modalities.indexOf(modalityName);
+      this.regenerateThumbnail(state, newTupleIndex, addedModalityIndex);
     }
   }
 
@@ -1705,6 +2216,16 @@ body {
   /**
    * Regenerate thumbnail for a specific image
    */
+  private debugMsg(state: PanelState, msg: string): void {
+    const debug = vscode.workspace.getConfiguration('imageCompare').get<boolean>('debug', false);
+    if (!debug) return;
+    if (state.webviewReady) {
+      state.panel.webview.postMessage({ type: '_debug', msg });
+    } else {
+      state.pendingDebugMessages.push(msg);
+    }
+  }
+
   private async regenerateThumbnail(state: PanelState, tupleIndex: number, modalityIndex: number): Promise<void> {
     const config = vscode.workspace.getConfiguration('imageCompare');
     const thumbnailSize = config.get<number>('thumbnailSize', 100);
@@ -1729,6 +2250,8 @@ body {
       state.panel.dispose();
       state.loadedImages.clear();
       state.fileWatchers.forEach(w => w.dispose());
+      state.nodeWatchers.forEach(w => w.close());
+      if (state.deleteCheckTimer) clearInterval(state.deleteCheckTimer);
     }
     this.panels.clear();
     this.thumbnailService.clearMemoryCache();

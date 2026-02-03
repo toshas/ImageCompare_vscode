@@ -3,6 +3,8 @@
  * Handles all UI rendering and user interactions
  */
 
+import * as crop from './crop';
+
 // VSCode API
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
@@ -53,7 +55,11 @@ const statusEl = document.getElementById('status')!;
 const statusNameEl = document.getElementById('status-name')!;
 const statusInfoEl = document.getElementById('status-info')!;
 const modalitySelectorEl = document.getElementById('modality-selector')!;
-const thumbnailEl = document.getElementById('thumbnail')!;
+const floatingPanelEl = document.getElementById('floating-panel')!;
+const fpHeaderEl = document.getElementById('fp-header')!;
+const fpCollapseBtn = document.getElementById('fp-collapse-btn')!;
+const cropBtn = document.getElementById('crop-btn')!;
+const deleteBtn = document.getElementById('delete-btn')!;
 const thumbCanvasEl = document.getElementById('thumb-canvas') as HTMLCanvasElement;
 const thumbCtx = thumbCanvasEl.getContext('2d')!;
 const thumbViewportEl = document.getElementById('thumb-viewport')!;
@@ -127,6 +133,13 @@ const LOAD_DEBOUNCE_MS = 150; // wait this long before loading full images
 let winners: Map<number, number> = new Map(); // tupleIndex -> modalityIndex (display index)
 let votingEnabled = false;
 
+// Floating panel drag state
+let fpDragging = false;
+let fpDragStartX = 0;
+let fpDragStartY = 0;
+let fpDragStartLeft = 0;
+let fpDragStartTop = 0;
+
 // Helper to update status bar with consistent layout
 function updateStatus(name: string, info: string, tupleIndex?: number) {
   let prefix = '';
@@ -181,6 +194,83 @@ function setupEventListeners() {
   window.addEventListener('resize', () => {
     if (images.length) render();
   });
+
+  // Floating panel: drag to move, click (without drag) to collapse/expand
+  let fpDidDrag = false;
+  fpHeaderEl.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fpDragging = true;
+    fpDidDrag = false;
+    fpDragStartX = e.clientX;
+    fpDragStartY = e.clientY;
+    const rect = floatingPanelEl.getBoundingClientRect();
+    fpDragStartLeft = rect.left;
+    fpDragStartTop = rect.top;
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!fpDragging) return;
+    const dx = e.clientX - fpDragStartX;
+    const dy = e.clientY - fpDragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      if (!fpDidDrag) document.body.style.cursor = 'move';
+      fpDidDrag = true;
+      floatingPanelEl.style.right = 'auto';
+      floatingPanelEl.style.left = (fpDragStartLeft + dx) + 'px';
+      floatingPanelEl.style.top = (fpDragStartTop + dy) + 'px';
+    }
+  });
+  document.addEventListener('mouseup', () => {
+    if (fpDragging && !fpDidDrag) {
+      floatingPanelEl.classList.toggle('collapsed');
+      fpCollapseBtn.textContent = floatingPanelEl.classList.contains('collapsed') ? '\u25b8' : '\u25be';
+    }
+    if (fpDidDrag) document.body.style.cursor = '';
+    fpDragging = false;
+  });
+
+  // Crop button
+  cropBtn.addEventListener('click', () => {
+    if (crop.cropMode) {
+      crop.exitCropMode(true);
+      cropBtn.classList.remove('active');
+    } else {
+      crop.enterCropMode(viewerEl, handleCropConfirm, getCurrentViewport());
+      cropBtn.classList.add('active');
+    }
+  });
+
+  // Delete button
+  deleteBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'deleteTuple', tupleIndex: currentTupleIndex });
+  });
+}
+
+// Crop confirmation callback
+function handleCropConfirm() {
+  if (!crop.cropRect) return;
+  vscode.postMessage({
+    type: 'cropImages',
+    tupleIndex: currentTupleIndex,
+    cropRect: { x: crop.cropRect.x, y: crop.cropRect.y, w: crop.cropRect.w, h: crop.cropRect.h }
+  });
+  crop.exitCropMode(false);
+  cropBtn.classList.remove('active');
+}
+
+function getCurrentViewport(): crop.ViewportInfo | undefined {
+  const currentImage = images[currentModalityIndex];
+  if (!currentImage) return undefined;
+  const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+  return {
+    viewerEl,
+    zoom,
+    panX,
+    panY,
+    imgW: currentImage.width,
+    imgH: currentImage.height,
+    carouselOffset
+  };
 }
 
 // Handle messages from extension
@@ -207,15 +297,19 @@ window.addEventListener('message', (event) => {
       handleProgress(message);
       break;
     case 'fileDeleted':
+      console.log('[IC] fileDeleted', message.tupleIndex, message.modalityIndex);
       handleFileDeleted(message);
       break;
     case 'fileRestored':
+      console.log('[IC] fileRestored', message.tupleIndex, message.modalityIndex);
       handleFileRestored(message);
       break;
     case 'tupleDeleted':
+      console.log('[IC] tupleDeleted', message.tupleIndex);
       handleTupleDeleted(message);
       break;
     case 'tupleAdded':
+      console.log('[IC] tupleAdded', message.tupleIndex, message.tuple?.name);
       handleTupleAdded(message);
       break;
     case 'modalityAdded':
@@ -229,6 +323,15 @@ window.addEventListener('message', (event) => {
       break;
     case 'winnersReset':
       handleWinnersReset(message);
+      break;
+    case 'cropComplete':
+      updateStatus(`Cropped ${message.count} image(s)`, '', currentTupleIndex);
+      break;
+    case 'cropError':
+      updateStatus(`Crop failed: ${message.error}`, '', currentTupleIndex);
+      break;
+    case '_debug':
+      console.log('[IC-EXT]', message.msg);
       break;
   }
 });
@@ -464,24 +567,19 @@ function handleProgress(message: { current: number; total: number }) {
 }
 
 function handleFileDeleted(message: { tupleIndex: number; modalityIndex: number }) {
-  // Clear the cached image for this file
-  const cacheKey = `${message.tupleIndex}-${message.modalityIndex}`;
-  
   // Clear from loadedTuples - mark as missing
   const tupleImages = loadedTuples.get(message.tupleIndex);
   if (tupleImages) {
     tupleImages[message.modalityIndex] = { missing: true } as any;
   }
-  
-  // Clear thumbnail data URL
-  // Find original modality index for thumbnail lookup
-  const originalModIdx = modalityOrder[message.modalityIndex] ?? message.modalityIndex;
-  const thumbKey = `${message.tupleIndex}-${originalModIdx}`;
+
+  // Clear thumbnail data URL (message.modalityIndex is already the global/original index)
+  const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
   thumbnailDataUrls.delete(thumbKey);
-  
+
   // Update carousel to show placeholder for missing file
   const thumb = carouselEl.querySelector(
-    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${originalModIdx}"]`
+    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
   ) as HTMLImageElement | null;
   if (thumb) {
     thumb.src = PLACEHOLDER_THUMB;
@@ -503,32 +601,42 @@ function handleFileDeleted(message: { tupleIndex: number; modalityIndex: number 
   }
 }
 
-function handleFileRestored(message: { tupleIndex: number; modalityIndex: number }) {
+function handleFileRestored(message: { tupleIndex: number; modalityIndex: number; imageInfo?: any }) {
+  // Update the tuple's image info if provided (e.g. a new file was added to an existing tuple)
+  const tuple = tuples[message.tupleIndex];
+  if (message.imageInfo && tuple && tuple.images[message.modalityIndex]) {
+    tuple.images[message.modalityIndex].name = message.imageInfo.name;
+  }
+
   // Clear the error marker from loadedTuples
   const tupleImages = loadedTuples.get(message.tupleIndex);
   if (tupleImages && tupleImages[message.modalityIndex]) {
     // Remove the error marker (will be reloaded)
     tupleImages[message.modalityIndex] = undefined as any;
   }
-  
-  // Clear thumbnail data URL so it gets regenerated
-  const originalModIdx = modalityOrder[message.modalityIndex] ?? message.modalityIndex;
-  const thumbKey = `${message.tupleIndex}-${originalModIdx}`;
+
+  // Clear thumbnail data URL so it gets regenerated (message.modalityIndex is already the global index)
+  const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
   thumbnailDataUrls.delete(thumbKey);
-  
+
   // Update carousel to remove missing state
   const thumb = carouselEl.querySelector(
-    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${originalModIdx}"]`
+    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
   ) as HTMLImageElement | null;
   if (thumb) {
     thumb.classList.remove('missing');
-    // The thumbnail will be updated when the new thumbnail message arrives
   }
-  
-  // If this is the current tuple, update display (will trigger reload)
+
+  // If this is the current tuple, update display and request the restored image
   if (message.tupleIndex === currentTupleIndex) {
     images = tupleImages ? reorderImagesForDisplay(tupleImages) : [];
     render();
+    // Request the image so it actually loads (instead of just showing spinner)
+    vscode.postMessage({
+      type: 'requestImage',
+      tupleIndex: message.tupleIndex,
+      modalityIndex: message.modalityIndex
+    });
   }
 }
 
@@ -536,7 +644,7 @@ function handleTupleDeleted(message: { tupleIndex: number }) {
   // Remove the tuple from our data
   tuples.splice(message.tupleIndex, 1);
   loadedTuples.delete(message.tupleIndex);
-  
+
   // Re-index loaded tuples (shift indices down)
   const newLoadedTuples = new Map<number, LoadedImage[]>();
   for (const [idx, imgs] of loadedTuples) {
@@ -550,20 +658,49 @@ function handleTupleDeleted(message: { tupleIndex: number }) {
   for (const [idx, imgs] of newLoadedTuples) {
     loadedTuples.set(idx, imgs);
   }
-  
+
+  // Re-index thumbnail data URLs (shift indices down)
+  const newThumbnails = new Map<string, string>();
+  for (const [key, url] of thumbnailDataUrls) {
+    const [tIdx, mIdx] = key.split('-').map(Number);
+    if (tIdx > message.tupleIndex) {
+      newThumbnails.set(`${tIdx - 1}-${mIdx}`, url);
+    } else if (tIdx < message.tupleIndex) {
+      newThumbnails.set(key, url);
+    }
+    // tIdx === message.tupleIndex: discard (tuple removed)
+  }
+  thumbnailDataUrls.clear();
+  for (const [key, url] of newThumbnails) {
+    thumbnailDataUrls.set(key, url);
+  }
+
+  // Re-index winners (shift indices down)
+  const newWinners = new Map<number, number>();
+  for (const [tIdx, mIdx] of winners) {
+    if (tIdx > message.tupleIndex) {
+      newWinners.set(tIdx - 1, mIdx);
+    } else if (tIdx < message.tupleIndex) {
+      newWinners.set(tIdx, mIdx);
+    }
+    // tIdx === message.tupleIndex: discard
+  }
+  winners.clear();
+  for (const [tIdx, mIdx] of newWinners) {
+    winners.set(tIdx, mIdx);
+  }
+
   // Adjust current tuple index if needed
   if (currentTupleIndex >= tuples.length) {
     currentTupleIndex = Math.max(0, tuples.length - 1);
   } else if (currentTupleIndex > message.tupleIndex) {
     currentTupleIndex--;
   }
-  
-  // Rebuild carousel
-  if (isMultiTupleMode) {
-    isMultiTupleMode = tuples.length > 1;
-    buildCarousel();
-  }
-  
+
+  // Always update multi-tuple mode and rebuild carousel
+  isMultiTupleMode = tuples.length > 1;
+  buildCarousel();
+
   // Load current tuple
   if (tuples.length > 0) {
     loadTuple(currentTupleIndex);
@@ -573,7 +710,7 @@ function handleTupleDeleted(message: { tupleIndex: number }) {
 function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: number }) {
   // Add the new tuple at the specified index
   tuples.splice(message.tupleIndex, 0, message.tuple);
-  
+
   // Re-index loaded tuples (shift indices up)
   const newLoadedTuples = new Map<number, LoadedImage[]>();
   for (const [idx, imgs] of loadedTuples) {
@@ -587,18 +724,49 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: number }) {
   for (const [idx, imgs] of newLoadedTuples) {
     loadedTuples.set(idx, imgs);
   }
-  
+
+  // Re-index thumbnail data URLs (shift indices up)
+  const newThumbnails = new Map<string, string>();
+  for (const [key, url] of thumbnailDataUrls) {
+    const [tIdx, mIdx] = key.split('-').map(Number);
+    if (tIdx >= message.tupleIndex) {
+      newThumbnails.set(`${tIdx + 1}-${mIdx}`, url);
+    } else {
+      newThumbnails.set(key, url);
+    }
+  }
+  thumbnailDataUrls.clear();
+  for (const [key, url] of newThumbnails) {
+    thumbnailDataUrls.set(key, url);
+  }
+
+  // Re-index winners (shift indices up)
+  const newWinners = new Map<number, number>();
+  for (const [tIdx, mIdx] of winners) {
+    if (tIdx >= message.tupleIndex) {
+      newWinners.set(tIdx + 1, mIdx);
+    } else {
+      newWinners.set(tIdx, mIdx);
+    }
+  }
+  winners = newWinners;
+
   // Adjust current tuple index if needed
   if (currentTupleIndex >= message.tupleIndex) {
     currentTupleIndex++;
   }
-  
+
   // Update multi-tuple mode
   isMultiTupleMode = tuples.length > 1;
-  
-  // Rebuild carousel
+
+  // Rebuild carousel and request thumbnail for new tuple
   if (isMultiTupleMode) {
+    updateCarouselThumbSize();
     buildCarousel();
+    vscode.postMessage({
+      type: 'requestThumbnails',
+      tupleIndices: [message.tupleIndex]
+    });
   }
 }
 
@@ -1281,12 +1449,6 @@ function render() {
 }
 
 function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, viewerW: number, viewerH: number, baseScale: number) {
-  if (zoom <= 1.05) {
-    thumbnailEl.classList.remove('active');
-    return;
-  }
-  thumbnailEl.classList.add('active');
-
   const thumbScale = Math.min(THUMB_MAX_SIZE / imgW, THUMB_MAX_SIZE / imgH);
   const thumbW = Math.round(imgW * thumbScale);
   const thumbH = Math.round(imgH * thumbScale);
@@ -1310,10 +1472,26 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
   const vpW = visibleW * thumbScale;
   const vpH = visibleH * thumbScale;
 
-  thumbViewportEl.style.left = (4 + Math.max(0, vpX)) + 'px';
-  thumbViewportEl.style.top = (4 + Math.max(0, vpY)) + 'px';
-  thumbViewportEl.style.width = Math.min(vpW, thumbW - Math.max(0, vpX)) + 'px';
-  thumbViewportEl.style.height = Math.min(vpH, thumbH - Math.max(0, vpY)) + 'px';
+  // Show viewport rectangle only when zoomed in
+  // Canvas is centered via margin:auto — compute its left offset within #fp-minimap
+  const canvasOffsetX = thumbCanvasEl.offsetLeft;
+  if (zoom <= 1.05) {
+    thumbViewportEl.style.display = 'none';
+  } else {
+    thumbViewportEl.style.display = 'block';
+    thumbViewportEl.style.left = (canvasOffsetX + Math.max(0, vpX)) + 'px';
+    thumbViewportEl.style.top = Math.max(0, vpY) + 'px';
+    thumbViewportEl.style.width = Math.min(vpW, thumbW - Math.max(0, vpX)) + 'px';
+    thumbViewportEl.style.height = Math.min(vpH, thumbH - Math.max(0, vpY)) + 'px';
+  }
+
+  // Update crop overlay position if active
+  if (crop.cropMode) {
+    const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+    crop.renderCropOverlay({
+      viewerEl, zoom, panX, panY, imgW, imgH, carouselOffset
+    });
+  }
 }
 
 // Event handlers
@@ -1324,7 +1502,40 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
 
+  // Crop mode intercepts keys
+  if (crop.cropMode && crop.handleCropKeyDown(e)) {
+    cropBtn.classList.remove('active');
+    return;
+  }
+
   if (!images.length) return;
+
+  // Toggle crop mode with C key
+  if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    if (crop.cropMode) {
+      crop.exitCropMode(true);
+      cropBtn.classList.remove('active');
+    } else {
+      crop.enterCropMode(viewerEl, handleCropConfirm, getCurrentViewport());
+      cropBtn.classList.add('active');
+    }
+    return;
+  }
+
+  // In crop mode, block tuple switching but allow modality switching
+  if (crop.cropMode) {
+    switch (e.code) {
+      case 'ArrowRight':
+      case 'ArrowLeft':
+      case 'Space':
+      case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4':
+      case 'Digit5': case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9':
+        break; // fall through to normal handling below
+      default:
+        return; // block everything else (ArrowUp/Down, BracketLeft/Right, etc.)
+    }
+  }
 
   switch (e.code) {
     case 'Space':
@@ -1447,6 +1658,10 @@ function handleWheel(e: WheelEvent) {
 
 function handleMouseDown(e: MouseEvent) {
   if ((e.target as HTMLElement).closest('#carousel')) return;
+  if ((e.target as HTMLElement).closest('#floating-panel')) return;
+
+  // Crop mode intercepts mouse events
+  if (crop.cropMode && crop.handleCropMouseDown(e)) return;
 
   isDragging = true;
   dragStartX = e.clientX - panX;
@@ -1455,6 +1670,7 @@ function handleMouseDown(e: MouseEvent) {
 }
 
 function handleMouseMove(e: MouseEvent) {
+  if (crop.cropMode && crop.handleCropMouseMove(e)) return;
   if (!isDragging) return;
   panX = e.clientX - dragStartX;
   panY = e.clientY - dragStartY;
@@ -1462,7 +1678,10 @@ function handleMouseMove(e: MouseEvent) {
   render();
 }
 
-function handleMouseUp() {
+function handleMouseUp(e: MouseEvent) {
+  if (crop.cropMode && crop.handleCropMouseUp(e)) {
+    // Don't stop dragging if crop consumed the event
+  }
   isDragging = false;
   viewerEl.classList.remove('dragging');
 }

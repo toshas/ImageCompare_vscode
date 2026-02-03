@@ -113,23 +113,49 @@ function matchTuplesWithTrie(
     }
   }
 
+  // Build a lookup from ref basename -> ref index for exact matching
+  const refBaseToIdx = new Map<string, number>();
+  for (let i = 0; i < refFiles.length; i++) {
+    refBaseToIdx.set(stripExtension(refFiles[i].name), i);
+  }
+
   // Create tuple map: refIndex -> Map(modality -> file)
   const tupleMap = new Map<number, Map<string, { name: string; uri: vscode.Uri }>>();
   for (let i = 0; i < refFiles.length; i++) {
     tupleMap.set(i, new Map([[refMod, refFiles[i]]]));
   }
 
-  // Match files from other modalities using trie lookup
+  // Track which ref indices have at least one exact match from another modality.
+  // These are "claimed" by exact matches and should be excluded from fuzzy matching.
+  const exactMatchedRefs = new Set<number>();
+
+  // Pass 1: exact matches (identical basenames across modalities, e.g. crop files)
+  for (const mod of modalities) {
+    if (mod === refMod) continue;
+    const files = modalityFiles.get(mod) || [];
+    for (const file of files) {
+      const query = stripExtension(file.name);
+      const exactIdx = refBaseToIdx.get(query);
+      if (exactIdx !== undefined) {
+        tupleMap.get(exactIdx)!.set(mod, file);
+        exactMatchedRefs.add(exactIdx);
+      }
+    }
+  }
+
+  // Pass 2: fuzzy matches via trie (for files without exact ref match)
   for (const mod of modalities) {
     if (mod === refMod) continue;
 
     const files = modalityFiles.get(mod) || [];
     for (const file of files) {
       const query = stripExtension(file.name);
+      // Skip if already matched exactly in pass 1
+      if (refBaseToIdx.has(query)) continue;
 
       // Walk trie to find deepest matching node (longest common prefix)
       let node = trie;
-      let bestNode = trie;  // Track deepest node with indices
+      let bestNode = trie;
 
       for (const char of query) {
         if (!node.children.has(char)) break;
@@ -139,24 +165,23 @@ function matchTuplesWithTrie(
         }
       }
 
-      const candidates = bestNode.indices;
-      if (candidates.length === 0) {
-        // No match found - skip (shouldn't happen with valid trie)
-        continue;
-      }
+      // Filter out exact-matched refs from candidates
+      const candidates = bestNode.indices.filter(i => !exactMatchedRefs.has(i));
+      if (candidates.length === 0) continue;
 
       // Find best match among candidates
       let bestIdx = candidates[0];
 
       if (candidates.length > 1) {
-        // Tie-breaker: use LCS (longest common subsequence)
-        // Files with more characters in common (even non-contiguous) score higher
-        let bestScore = -1;
+        let bestLenDiff = Infinity;
+        let bestLcs = -1;
         for (const idx of candidates) {
           const refName = stripExtension(refFiles[idx].name);
-          const score = lcsLength(query, refName);
-          if (score > bestScore) {
-            bestScore = score;
+          const lenDiff = Math.abs(refName.length - query.length);
+          const lcs = lcsLength(query, refName);
+          if (lenDiff < bestLenDiff || (lenDiff === bestLenDiff && lcs > bestLcs)) {
+            bestLenDiff = lenDiff;
+            bestLcs = lcs;
             bestIdx = idx;
           }
         }
@@ -446,10 +471,6 @@ async function scanDirectoriesAsModalities(
       tuples.push({ name: tupleName, images });
     }
   }
-
-  // Log info about partial tuples
-  const partialCount = tuples.filter(t => t.images.length < modalities.length).length;
-  // partialCount tuples are missing some modalities - this is expected and handled gracefully
 
   return {
     modalities,

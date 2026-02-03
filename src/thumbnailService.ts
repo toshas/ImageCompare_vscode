@@ -17,7 +17,7 @@ export class ThumbnailService {
   private jimpModule: any = undefined;
   private jimpLoadAttempted = false;
 
-  constructor(private context: vscode.ExtensionContext) {
+  constructor(context: vscode.ExtensionContext) {
     this.cacheDir = vscode.Uri.joinPath(context.globalStorageUri, 'thumbnail-cache');
   }
 
@@ -207,6 +207,58 @@ export class ThumbnailService {
       width: image.width,
       height: image.height
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Image metadata
+  // ---------------------------------------------------------------------------
+
+  async getImageDimensions(uri: vscode.Uri): Promise<{ width: number; height: number }> {
+    const fileData = await vscode.workspace.fs.readFile(uri);
+    const buffer = Buffer.from(fileData);
+    const ext = path.extname(uri.path).toLowerCase();
+
+    const sharp = getSharp();
+    if (sharp) {
+      const meta = await this.createSharpInstance(sharp, buffer, ext).metadata();
+      return { width: meta.width || 0, height: meta.height || 0 };
+    }
+
+    const Jimp = this.getJimp();
+    if (!Jimp) {
+      throw new Error('No image processing backend available');
+    }
+    const image = await this.createJimpImage(Jimp, buffer, ext);
+    return { width: image.width, height: image.height };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cropping
+  // ---------------------------------------------------------------------------
+
+  async cropImage(
+    uri: vscode.Uri,
+    rect: { x: number; y: number; w: number; h: number }
+  ): Promise<Buffer> {
+    const fileData = await vscode.workspace.fs.readFile(uri);
+    const buffer = Buffer.from(fileData);
+    const ext = path.extname(uri.path).toLowerCase();
+
+    const sharp = getSharp();
+    if (sharp) {
+      return this.createSharpInstance(sharp, buffer, ext)
+        .extract({ left: rect.x, top: rect.y, width: rect.w, height: rect.h })
+        .png()
+        .toBuffer();
+    }
+
+    const Jimp = this.getJimp();
+    if (!Jimp) {
+      throw new Error('No image processing backend available (Sharp and Jimp both failed)');
+    }
+    const image = await this.createJimpImage(Jimp, buffer, ext);
+    image.crop({ x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+    return image.getBuffer('image/png');
   }
 
   // ---------------------------------------------------------------------------

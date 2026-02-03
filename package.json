@@ -74,6 +74,11 @@
           "minimum": 1,
           "maximum": 30,
           "description": "Maximum age of cached thumbnails in days"
+        },
+        "imageCompare.debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug logging (file watcher events, polling, etc.) in the webview developer console"
         }
       }
     }

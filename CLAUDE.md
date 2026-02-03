@@ -252,6 +252,21 @@ npx tsc --outDir /tmp/test_out --declaration --declarationMap --skipLibCheck
 3. Test partial tuples (some modalities missing images)
 4. Test with remote filesystems (SSH, WSL)
 
+### Debug Logging
+
+Enable `imageCompare.debug` in VS Code settings to log file watcher events, polling results, and other diagnostics to the webview developer console (prefixed with `[IC-EXT]`).
+
+```jsonc
+// settings.json
+"imageCompare.debug": true
+```
+
+Open the webview dev console via **Help > Toggle Developer Tools** (or `Cmd+Shift+I`), then look for `[IC-EXT]` messages. Events logged include:
+- `onDidCreate` / `fs.watch` events (file system watcher activity)
+- `poll delete detected` (polling-based deletion detection)
+- `fs.watch setup OK` / `fs.watch error` (watcher initialization)
+- Error details from `handleFileDeleted`, `handleFileCreated`, `handleFileChanged`
+
 ## Publishing (GitHub Actions)
 
 Publishing is automated via GitHub Actions. The workflow builds on native runners for each platform.
