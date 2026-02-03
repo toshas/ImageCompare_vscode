@@ -1,5 +1,9 @@
 # ImageCompare VSCode Extension - Development Guide
 
+## Git Commit Rules
+
+- Never add Co-Authored-By lines to commits.
+
 ## Architecture Overview
 
 This is a VSCode extension for comparing multiple images with multiple modalities.

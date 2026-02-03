@@ -2,6 +2,21 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.1.7] - 2026
+
+### Added
+- **Crop tool**: Draw a rectangle on the image to crop all modalities at the same coordinates, saved as `_cropNN.png` files
+- **Delete button**: Delete all files for the current tuple from the Tools panel
+- **Floating Tools panel**: Draggable, collapsible panel with minimap, crop, and delete controls (click header to collapse, drag to move)
+- **Polling-based file deletion detection**: Reliably detects file deletions on all filesystems including Google Drive/FUSE
+- **Debug logging setting**: `imageCompare.debug` enables file watcher diagnostics in webview console
+
+### Fixed
+- **Tuple matching with crop files**: Two-pass matching (exact then fuzzy) prevents crop files from stealing matches
+- **Winner re-indexing on tuple add/delete**: Voting annotations no longer shift to wrong tuples after crop or delete
+- **results.txt persistence on deletion**: Winners file updates immediately when tuples or files are deleted
+- **Duplicate file watcher events**: Fixed overlapping watchers in single-directory mode
+
 ## [0.1.6] - 2026
 
 ### Fixed
