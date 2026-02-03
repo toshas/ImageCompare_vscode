@@ -2,6 +2,20 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.1.9] - 2026
+
+### Added
+- **Directory name disambiguation**: Directories with the same basename are differentiated by prepending parent path components (e.g., `a/results`, `b/results`)
+- **Modality pill tooltips**: Hover over a modality pill to see the full directory path
+- **Autohiding carousel scrollbar**: Scrollbar only appears on hover or while scrolling
+
+### Fixed
+- **Fuzzy matching blocked by exact matches**: Modalities with different filenames (e.g., `_pred` vs `_gt`) were silently dropped when another modality had identical filenames to the reference
+- **Carousel resize**: Thumbnail containers now resize properly alongside thumbnails
+
+### Changed
+- **Modality pills**: Removed numeric prefix, long names truncated at 20 characters with ellipsis
+
 ## [0.1.8] - 2026
 
 ### Added

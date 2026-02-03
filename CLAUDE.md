@@ -275,17 +275,13 @@ Open the webview dev console via **Help > Toggle Developer Tools** (or `Cmd+Shif
 
 Publishing is automated via GitHub Actions. The workflow builds on native runners for each platform.
 
-### Release Checklist
+### Release Checklist (for Claude)
 
-Before publishing a new version, complete every item:
+When the user asks to "release" or "prepare a release", perform ALL of the following steps automatically:
 
-1. **Code changes are done and tested locally** (F5 in VSCode, manual QA)
-2. **Update `CHANGELOG.md`** — add a new `## [X.Y.Z]` section describing changes
-3. **Bump version in `package.json`**:
-   ```bash
-   npm version patch   # 0.1.5 -> 0.1.6
-   # or manually edit "version" in package.json
-   ```
+1. **Read current version** from `package.json` — this is the baseline
+2. **Bump version** — increment patch version in `package.json` (e.g., 0.1.8 → 0.1.9)
+3. **Update `CHANGELOG.md`** — add a new `## [X.Y.Z]` section describing all changes since the last release (check `git log` and `git diff` against the last tag)
 4. **Compile and verify** — `npm run compile` must succeed with no errors
 5. **Commit all changes** (version bump + changelog + code):
    ```bash
@@ -298,6 +294,9 @@ Before publishing a new version, complete every item:
    git tag vX.Y.Z
    git push --tags
    ```
+
+### Release Checklist (manual verification after CI)
+
 7. **Verify CI** — check GitHub Actions for green builds on all 6 platforms
 8. **Verify marketplace listings** — confirm the new version appears on both VS Code Marketplace and Open VSX
 
