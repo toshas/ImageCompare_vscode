@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices } from './fileService';
+import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, disambiguateDirectoryNames } from './fileService';
 import { ThumbnailService } from './thumbnailService';
 import {
   ScanResult,
@@ -113,11 +113,11 @@ export class ImageCompareProvider {
         baseUri = uris[0];
       } else if (uris.length >= 2 && scanResult.isMultiTupleMode) {
         // Mode 2: Multiple directories - map modality names to directory URIs
-        // The modality names are the directory names
-        for (const uri of uris) {
-          const dirName = uri.path.split('/').pop() || '';
-          if (scanResult.modalities.includes(dirName)) {
-            modalityDirs.set(dirName, uri);
+        // Use disambiguated names (same logic as fileService scanning)
+        const disambiguated = disambiguateDirectoryNames(uris);
+        for (const { name, uri } of disambiguated) {
+          if (scanResult.modalities.includes(name)) {
+            modalityDirs.set(name, uri);
           }
         }
       }
@@ -525,10 +525,23 @@ export class ImageCompareProvider {
       winnersRecord[tupleIndex] = modalityIndex;
     }
 
+    // Build full directory paths for each modality (for tooltips)
+    const modalityPaths: string[] = allModalities.map(mod => {
+      if (state.modalityDirs.size > 0) {
+        const dirUri = state.modalityDirs.get(mod);
+        return dirUri ? dirUri.fsPath : mod;
+      }
+      if (state.baseUri) {
+        return vscode.Uri.joinPath(state.baseUri, mod).fsPath;
+      }
+      return mod;
+    });
+
     const initMessage: ExtensionMessage = {
       type: 'init',
       tuples,
       modalities: allModalities,
+      modalityPaths,
       config: { thumbnailSize, prefetchCount },
       winners: winnersRecord,
       votingEnabled: state.votingEnabled
@@ -1057,8 +1070,7 @@ body {
 }
 
 .modality-btn {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 12px;
@@ -1070,6 +1082,7 @@ body {
   user-select: none;
   position: relative;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .modality-btn:hover { transform: scale(1.05); }
 .modality-btn.active {
@@ -1163,22 +1176,27 @@ body {
   bottom: 0;
   background: var(--vscode-sideBar-background, rgba(0, 0, 0, 0.85));
   border-right: 1px solid var(--vscode-panel-border, #333);
-  overflow-y: auto;
+  overflow-y: overlay;
   overflow-x: hidden;
   z-index: 10;
 }
 #carousel.active { display: block; }
 #carousel::-webkit-scrollbar { width: 6px; }
-#carousel::-webkit-scrollbar-track { background: var(--vscode-scrollbarSlider-background, #1a1a1a); }
+#carousel::-webkit-scrollbar-track { background: transparent; }
 #carousel::-webkit-scrollbar-thumb {
-  background: var(--vscode-scrollbarSlider-activeBackground, #444);
+  background: transparent;
   border-radius: 3px;
+  transition: background 0.3s;
+}
+#carousel:hover::-webkit-scrollbar-thumb,
+#carousel.scrolling::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-activeBackground, #444);
 }
 
 .carousel-row {
   display: flex;
   gap: 2px;
-  padding: 4px 12px 4px 6px; /* Extra right padding for scrollbar */
+  padding: 4px 6px;
   cursor: pointer;
   border-bottom: 1px solid var(--vscode-panel-border, #222);
   transition: background 0.15s;

@@ -16,6 +16,33 @@ function stripExtension(filename: string): string {
 }
 
 /**
+ * Disambiguate directory names by prepending parent path components
+ * when multiple URIs share the same basename.
+ * E.g. ["/a/x/results", "/b/y/results"] → ["x/results", "y/results"]
+ */
+export function disambiguateDirectoryNames(uris: vscode.Uri[]): Array<{ name: string; uri: vscode.Uri }> {
+  const segments = uris.map(u => u.path.split('/').filter(s => s.length > 0));
+  // Start with just the basename (last segment)
+  let depth = 1;
+  const maxDepth = Math.min(...segments.map(s => s.length));
+
+  while (depth < maxDepth) {
+    const names = segments.map(s => s.slice(s.length - depth).join('/'));
+    const hasDuplicates = new Set(names).size < names.length;
+    if (!hasDuplicates) {
+      return uris.map((uri, i) => ({ name: names[i], uri }));
+    }
+    depth++;
+  }
+
+  // Fallback: use as many segments as we have
+  return uris.map((uri, i) => ({
+    name: segments[i].slice(segments[i].length - depth).join('/'),
+    uri
+  }));
+}
+
+/**
  * Longest Common Subsequence length for tie-breaking
  * Uses O(n) space with two-row optimization
  */
@@ -125,10 +152,6 @@ function matchTuplesWithTrie(
     tupleMap.set(i, new Map([[refMod, refFiles[i]]]));
   }
 
-  // Track which ref indices have at least one exact match from another modality.
-  // These are "claimed" by exact matches and should be excluded from fuzzy matching.
-  const exactMatchedRefs = new Set<number>();
-
   // Pass 1: exact matches (identical basenames across modalities, e.g. crop files)
   for (const mod of modalities) {
     if (mod === refMod) continue;
@@ -138,7 +161,6 @@ function matchTuplesWithTrie(
       const exactIdx = refBaseToIdx.get(query);
       if (exactIdx !== undefined) {
         tupleMap.get(exactIdx)!.set(mod, file);
-        exactMatchedRefs.add(exactIdx);
       }
     }
   }
@@ -165,8 +187,7 @@ function matchTuplesWithTrie(
         }
       }
 
-      // Filter out exact-matched refs from candidates
-      const candidates = bestNode.indices.filter(i => !exactMatchedRefs.has(i));
+      const candidates = bestNode.indices;
       if (candidates.length === 0) continue;
 
       // Find best match among candidates
@@ -313,10 +334,7 @@ export async function scanForImages(uris: vscode.Uri[]): Promise<ScanResult> {
 
   // Case 2: Multiple directories → each directory is a modality
   if (classified.directories.length >= 2 && classified.files.length === 0) {
-    const dirs = classified.directories.map(uri => ({
-      name: uri.path.split('/').pop() || 'unknown',
-      uri
-    }));
+    const dirs = disambiguateDirectoryNames(classified.directories);
     const result = await scanDirectoriesAsModalities(dirs);
     if (result) {
       return result;

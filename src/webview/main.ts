@@ -100,6 +100,7 @@ const PLACEHOLDER_THUMB = (() => {
 // State
 let tuples: TupleInfo[] = [];
 let modalities: string[] = [];
+let modalityPaths: string[] = [];
 let modalityColors: string[] = [];
 let config: WebViewConfig = { thumbnailSize: 100, prefetchCount: 3 };
 
@@ -184,8 +185,14 @@ function setupEventListeners() {
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('mouseup', handleMouseUp);
 
-  // Carousel scroll
+  // Carousel scroll + autohide scrollbar
   carouselEl.addEventListener('wheel', handleCarouselWheel, { passive: false });
+  let carouselScrollTimer: ReturnType<typeof setTimeout> | null = null;
+  carouselEl.addEventListener('scroll', () => {
+    carouselEl.classList.add('scrolling');
+    if (carouselScrollTimer) clearTimeout(carouselScrollTimer);
+    carouselScrollTimer = setTimeout(() => carouselEl.classList.remove('scrolling'), 800);
+  });
 
   // Carousel resize
   setupCarouselResize();
@@ -367,10 +374,11 @@ function handleWinnersReset(message: { winners: Record<number, number> }) {
   updateModalitySelector();
 }
 
-function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }) {
+function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }) {
   // Reset all state for new comparison
   tuples = message.tuples;
   modalities = message.modalities;
+  modalityPaths = message.modalityPaths || modalities;
   config = message.config;
   modalityColors = modalities.map((_, i) => MODALITY_COLORS[i % MODALITY_COLORS.length]);
   modalityOrder = modalities.map((_, i) => i); // Initialize order: [0, 1, 2, ...]
@@ -1030,6 +1038,7 @@ function showPreviewOrLoading(tupleIndex: number, displayModalityIndex: number) 
 
 function updateCarouselThumbSize() {
   const numModalities = modalities.length;
+  // Row padding: 6px left + 6px right = 12px; gaps: 2px each
   const availableWidth = CAROUSEL_WIDTH - 12 - (numModalities - 1) * 2;
   CAROUSEL_THUMB_SIZE = Math.floor(availableWidth / numModalities);
   CAROUSEL_THUMB_SIZE = Math.max(30, CAROUSEL_THUMB_SIZE);
@@ -1262,7 +1271,9 @@ function buildModalitySelector() {
   for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
     const btn = document.createElement('button');
     btn.className = 'modality-btn';
-    btn.textContent = `${displayIdx + 1}: ${modalities[displayIdx]}`;
+    const truncName = modalities[displayIdx].length > 20 ? modalities[displayIdx].slice(0, 19) + '\u2026' : modalities[displayIdx];
+    btn.textContent = truncName;
+    btn.title = modalityPaths[displayIdx];
     btn.style.background = modalityColors[displayIdx];
     btn.dataset.displayIndex = String(displayIdx);
 
@@ -1304,10 +1315,12 @@ function updateModalitySelector() {
 
     // Update button text with win count if voting enabled and has wins
     const modalityName = modalities[displayIdx];
+    const truncName = modalityName.length > 20 ? modalityName.slice(0, 19) + '\u2026' : modalityName;
+    (btn as HTMLElement).title = modalityPaths[displayIdx];
     if (votingEnabled && winCounts[displayIdx] > 0) {
-      btn.textContent = `${displayIdx + 1}: ${modalityName} (${winCounts[displayIdx]})`;
+      btn.textContent = `${truncName} (${winCounts[displayIdx]})`;
     } else {
-      btn.textContent = `${displayIdx + 1}: ${modalityName}`;
+      btn.textContent = truncName;
     }
   });
 
@@ -1719,6 +1732,11 @@ function setupCarouselResize() {
 
     updateCarouselThumbSize();
 
+    const containers = carouselEl.querySelectorAll('.carousel-thumb-container') as NodeListOf<HTMLElement>;
+    containers.forEach(container => {
+      container.style.width = CAROUSEL_THUMB_SIZE + 'px';
+      container.style.height = CAROUSEL_THUMB_SIZE + 'px';
+    });
     const thumbs = carouselEl.querySelectorAll('.carousel-thumb') as NodeListOf<HTMLElement>;
     thumbs.forEach(thumb => {
       thumb.style.width = CAROUSEL_THUMB_SIZE + 'px';

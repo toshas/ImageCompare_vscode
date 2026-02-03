@@ -65,7 +65,7 @@ export type WebViewMessage =
 
 // Messages from Extension to WebView
 export type ExtensionMessage =
-  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }
+  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }
   | { type: 'thumbnail'; tupleIndex: number; modalityIndex: number; dataUrl: string }
   | { type: 'thumbnailError'; tupleIndex: number; modalityIndex: number; error: string }
   | { type: 'image'; tupleIndex: number; modalityIndex: number; dataUrl: string; width: number; height: number }
