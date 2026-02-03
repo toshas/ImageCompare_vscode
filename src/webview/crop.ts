@@ -237,8 +237,31 @@ export function handleCropMouseDown(e: MouseEvent): boolean {
   if (target.classList.contains('crop-handle') && target.dataset.handle) {
     e.preventDefault();
     e.stopPropagation();
+
+    // Double-click cardinal handle: make crop square by adjusting that edge
+    const handleId = target.dataset.handle as HandleId;
+    if (e.detail === 2 && cropRect && (handleId === 'n' || handleId === 's' || handleId === 'e' || handleId === 'w')) {
+      const r = { ...cropRect };
+      if (handleId === 'n') {
+        const bottom = r.y + r.h;
+        r.y = Math.max(0, bottom - r.w);
+        r.h = bottom - r.y;
+      } else if (handleId === 's') {
+        r.h = Math.min(lastViewport.imgH - r.y, r.w);
+      } else if (handleId === 'w') {
+        const right = r.x + r.w;
+        r.x = Math.max(0, right - r.h);
+        r.w = right - r.x;
+      } else if (handleId === 'e') {
+        r.w = Math.min(lastViewport.imgW - r.x, r.h);
+      }
+      cropRect = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
+      renderCropOverlay(lastViewport);
+      return true;
+    }
+
     isResizing = true;
-    activeHandle = target.dataset.handle as HandleId;
+    activeHandle = handleId;
     return true;
   }
 

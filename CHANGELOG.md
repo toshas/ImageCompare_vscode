@@ -2,6 +2,11 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.1.8] - 2026
+
+### Added
+- **Crop snap to square**: Double-click a cardinal (N/S/E/W) crop handle to make the rectangle square by adjusting that edge
+
 ## [0.1.7] - 2026
 
 ### Added
