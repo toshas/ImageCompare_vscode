@@ -61,6 +61,7 @@ export type WebViewMessage =
   | { type: 'setWinner'; tupleIndex: number; modalityIndex: number | null } // null = clear winner
   | { type: 'cropImages'; tupleIndex: number; cropRect: { x: number; y: number; w: number; h: number } }
   | { type: 'deleteTuple'; tupleIndex: number }
+  | { type: 'exportPptx'; tupleIndices: number[]; winnerModalityIndices: (number | null)[]; modalityOrder: number[] }
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
@@ -80,7 +81,9 @@ export type ExtensionMessage =
   | { type: 'winnerUpdated'; tupleIndex: number; modalityIndex: number | null }
   | { type: 'winnersReset'; winners: Record<number, number> } // For when results.txt is regenerated
   | { type: 'cropComplete'; tupleIndex: number; count: number; paths: string[] }
-  | { type: 'cropError'; tupleIndex: number; error: string };
+  | { type: 'cropError'; tupleIndex: number; error: string }
+  | { type: 'pptxComplete'; path: string }
+  | { type: 'pptxError'; error: string };
 
 // Configuration passed to webview
 export interface WebViewConfig {

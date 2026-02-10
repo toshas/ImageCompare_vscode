@@ -60,6 +60,7 @@ const fpHeaderEl = document.getElementById('fp-header')!;
 const fpCollapseBtn = document.getElementById('fp-collapse-btn')!;
 const cropBtn = document.getElementById('crop-btn')!;
 const deleteBtn = document.getElementById('delete-btn')!;
+const pptxBtn = document.getElementById('pptx-btn')!;
 const thumbCanvasEl = document.getElementById('thumb-canvas') as HTMLCanvasElement;
 const thumbCtx = thumbCanvasEl.getContext('2d')!;
 const thumbViewportEl = document.getElementById('thumb-viewport')!;
@@ -250,6 +251,24 @@ function setupEventListeners() {
   // Delete button
   deleteBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'deleteTuple', tupleIndex: currentTupleIndex });
+  });
+
+  // PPTX export button
+  pptxBtn.addEventListener('click', () => {
+    // Collect tuples that have winners (voted for)
+    const tupleIndices: number[] = [];
+    const winnerModalityIndices: (number | null)[] = [];
+    for (let i = 0; i < tuples.length; i++) {
+      if (winners.has(i)) {
+        tupleIndices.push(i);
+        winnerModalityIndices.push(winners.get(i) ?? null);
+      }
+    }
+    if (tupleIndices.length === 0) {
+      // No voted tuples, export nothing (or could show a warning)
+      return;
+    }
+    vscode.postMessage({ type: 'exportPptx', tupleIndices, winnerModalityIndices, modalityOrder });
   });
 }
 

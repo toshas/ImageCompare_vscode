@@ -2,6 +2,20 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.2.0] - 2026
+
+### Added
+- **PowerPoint export**: Export voted tuples to `.pptx` files with caption bars (tuple name + modality), crop callout thumbnails, and auto-incremented naming
+- **PPMX support in PPTX export**: Custom float32 grayscale images now export correctly to PowerPoint
+- **Crop metadata via PNG tEXt chunks**: Jimp fallback path now embeds crop coordinates in PNG tEXt chunks (Sharp path uses EXIF), enabling crop callouts in PPTX for all backends
+- **Robust tuple matching tie-breaking**: Crop references (`_cropNN`) are explicitly deprioritized in fuzzy matching, preventing long modality names from incorrectly matching crop files
+
+### Fixed
+- **PPTX caption bar rendering**: Replaced complex Sharp-rendered PNG captions with simple pptxgenjs text boxes — no more font metric issues or wrapping bugs
+- **PPTX callout outline**: Removed visible outline artifacts from crop callout thumbnails
+- **Floating panel violet dot**: Hidden `#thumb-viewport` element before any image is loaded
+- **Floating panel initial size**: Canvas starts at 160x100 to prevent zero-height panel during loading
+
 ## [0.1.9] - 2026
 
 ### Added

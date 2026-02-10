@@ -10,14 +10,15 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 
 ### Key Components
 
-- **`extension.ts`** - Entry point, registers commands
-- **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading
-- **`fileService.ts`** - Directory/file scanning, mode detection, image matching across modalities
-- **`thumbnailService.ts`** - Image processing (thumbnail generation, full image loading) with fallback chain
-- **`sharpLoader.ts`** - Dynamic Sharp loader with native → WASM → Jimp fallback
+- **`extension.ts`** - Entry point, registers the `openInCompare` command
+- **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
+- **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities
+- **`thumbnailService.ts`** - Image processing (thumbnail generation, full image loading, cropping) with Sharp → WASM → Jimp fallback chain
+- **`sharpLoader.ts`** - Dynamic Sharp loader with native → WASM fallback and CPU detection
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
-- **`types.ts`** - Shared TypeScript interfaces
-- **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation)
+- **`types.ts`** - Shared TypeScript interfaces and message types
+- **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
+- **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 
 ## Image Processing Backends
 
@@ -76,24 +77,24 @@ selected_folder/
 
 ```
 /path/to/folder_a/     <- becomes modality "folder_a"
-├── modality_a/
-│   ├── image001_suffix.png
-│   └── image002_suffix.png
+├── image001_suffix.png
+└── image002_suffix.png
 /different/path/folder_b/   <- becomes modality "folder_b"
-    ├── image001_differentsuffix.png
-    └── image002_differentsuffix.png
+├── image001_differentsuffix.png
+└── image002_differentsuffix.png
 ```
 
 - Each selected directory becomes a modality (using directory name)
 - Images matched by filename across directories
 - `modalityDirs` map tracks modality → directory URI
 - Multiple file watchers (one per directory)
+- If multiple directories share the same basename, parent path is appended for disambiguation
 
 ### Mode 3: Multiple Image Files Selected
 **Trigger**: Select 2+ image files and right-click
 
 - Creates a single tuple with selected images
-- Modality names derived from filename differences
+- Modality names derived from filename differences via `findDifferingParts()`
 - No directory structure to track
 - File watchers monitor parent directories of selected files
 
@@ -125,6 +126,8 @@ The extension watches for file changes and updates the view dynamically.
 
 **Rename Detection**: When a file is deleted, it's tracked in `recentlyDeleted` for 500ms. If a create event follows in the same directory, it's treated as a rename rather than delete+create.
 
+**Polling-based Deletion**: In addition to VS Code's `FileSystemWatcher`, a polling mechanism detects deletions reliably on all filesystems (Google Drive, FUSE mounts, etc.).
+
 **Multiple Watchers**: For mode 2, separate `FileSystemWatcher` instances are created for each directory since VS Code's glob patterns can't span unrelated paths.
 
 **State Tracking**:
@@ -139,19 +142,79 @@ Messages flow between extension and webview via `postMessage`:
 **Extension → WebView**:
 - `init`: Initial data (tuples, modalities, config, winners, votingEnabled)
 - `thumbnail`/`thumbnailError`: Thumbnail data
+- `thumbnailProgress`: Thumbnail generation progress
 - `image`/`imageError`: Full image data
 - `fileDeleted`/`fileRestored`: File state changes
 - `tupleDeleted`/`tupleAdded`: Tuple changes
 - `modalityAdded`/`modalityRemoved`: Modality changes
 - `winnerUpdated`/`winnersReset`: Winner state changes
+- `cropComplete`/`cropError`: Crop operation results
+- `pptxComplete`/`pptxError`: PPTX export results
+- `_debug`: Debug logging messages
 
 **WebView → Extension**:
 - `ready`: WebView initialized
 - `requestThumbnails`: Request thumbnail batch
 - `requestImage`: Request full image
 - `navigateTo`: Jump to tuple
-- `setCurrentTuple`: Update current position
+- `setCurrentTuple`: Update current position (cancels stale loads)
+- `tupleFullyLoaded`: All images loaded (trigger prefetch)
 - `setWinner`: Set or clear winner for a tuple
+- `cropImages`: Crop all modalities at given rectangle coordinates
+- `deleteTuple`: Delete current tuple files
+- `exportPptx`: Export voted tuples to PowerPoint (includes `modalityOrder` for display order)
+- `log`: Debug messages from webview
+
+## WebView UI Structure
+
+```
+body
+├── #loading (shown before init)
+├── #viewer
+│   ├── #carousel (left panel, scrollable grid of tuple thumbnails)
+│   ├── #carousel-resize (drag handle)
+│   ├── #progress-container (thumbnail loading progress bar)
+│   ├── canvas#canvas (main image display)
+│   ├── #image-loader (spinner during full image load)
+│   ├── #floating-panel (navigator + tools)
+│   │   ├── #fp-header (draggable, click to collapse)
+│   │   └── #fp-body
+│   │       ├── #fp-minimap (canvas + viewport rectangle)
+│   │       └── #fp-actions (Crop, Delete, PPTX buttons)
+│   └── [crop overlay - dynamically added in crop mode]
+├── #info (status bar)
+│   ├── #reorder-buttons ([ ] keys)
+│   ├── #modality-selector (colored pills with tooltips)
+│   ├── #status (tuple name + dimensions + zoom)
+│   └── #help-btn (? → keyboard shortcut modal)
+└── #help-modal
+```
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `←` `→` | Switch between modalities |
+| `↑` `↓` | Previous/next tuple |
+| `Space` (hold) | Flip to previous modality |
+| `1-9` | Jump to modality N |
+| `[` `]` | Reorder current modality left/right |
+| `Enter` | Toggle winner for current modality |
+| `Scroll` | Zoom in/out |
+| `Drag` | Pan image |
+| `C` | Toggle crop mode |
+| `Esc` | Reset zoom / cancel crop |
+| `Del` | Delete current tuple files |
+
+### Floating Panel (Navigator)
+
+Draggable, collapsible panel in the top-right corner:
+
+- **Header**: "Tools" label + collapse button (▾/▸). Click to collapse, drag to reposition.
+- **Minimap**: Always-visible thumbnail of the current image. When zoomed in, a magenta viewport rectangle shows the visible region.
+- **Actions**: Three buttons — Crop, Delete, PPTX.
+
+The minimap canvas starts at 160×100 to avoid size jumping during load. The viewport rectangle is hidden by default (`display: none`) and only shown when `zoom > 1.05`.
 
 ## Winner Voting
 
@@ -182,6 +245,92 @@ image002 = modB
 - `imageCompareProvider.ts`: `PanelState.winners`, `PanelState.votingEnabled`, `handleSetWinner()`, `saveResults()`
 - Winner indices are adjusted when modalities are added/removed
 
+## Crop Tool
+
+### User Flow
+1. Press `C` or click "Crop" button → enters crop mode (cursor becomes crosshair)
+2. Click+drag on image → draws green rectangle with 4 semi-transparent dim regions outside
+3. Release → shows 8 resize handles (corners + edge midpoints) and confirm/cancel toolbar
+4. Drag handles to resize (minimum 4×4 image pixels)
+5. Drag inside rectangle to move it
+6. Double-click cardinal handle (N/S/E/W) to snap rectangle to square
+7. `Enter` or click "✓ Crop" → saves cropped images for all modalities
+8. `Esc` or click "✗" → cancels
+
+### Output
+- Cropped files saved as `{basename}_cropNN.png` in the same directory as originals
+- Auto-incremented numbering: scans for existing `_cropNN` files, uses max+1
+- Crop metadata embedded in PNG for later use in PPTX export (see below)
+- New files trigger file watcher → appear as new tuples in the carousel
+
+### Coordinate Mapping
+All crop coordinates are tracked in image-pixel space:
+```
+baseScale = Math.min(viewerW / imgW, viewerH / imgH)
+displayScale = baseScale * zoom
+imageX = (screenX - viewerCenterX - panX) / displayScale + imgW / 2
+imageY = (screenY - viewerCenterY - panY) / displayScale + imgH / 2
+```
+
+### Implementation
+- **`webview/crop.ts`** — Crop mode state, overlay DOM, mouse/key handlers, coordinate conversion
+- **`imageCompareProvider.ts`** — `handleCropImages()`, `getNextCropNumber()`, message handling
+- **`thumbnailService.ts`** — `cropImage()` method (Sharp `.extract()` or Jimp `.crop()`)
+
+## Crop Metadata (PNG tEXt Chunks)
+
+Crop files embed their source coordinates for PPTX export callouts.
+
+### Format
+- **Keyword**: `ImageCompare:CropRect`
+- **Value**: `x,y,w,h,srcW,srcH` (comma-separated integers)
+  - `x, y` — crop rectangle top-left in source image pixels
+  - `w, h` — crop rectangle dimensions
+  - `srcW, srcH` — original source image dimensions
+
+### Writing
+- **Sharp path**: EXIF `ImageDescription` field via `.withMetadata({ exif: { IFD0: { ImageDescription: ... } } })`
+- **Jimp path**: Manual PNG `tEXt` chunk injection via `pngInjectText()` — builds the chunk bytes (keyword + null + value + CRC32) and inserts before IEND
+
+### Reading (`readCropMetadata()`)
+1. Try EXIF `ImageDescription` via Sharp (handles Sharp-written crops)
+2. Fallback: Parse PNG `tEXt` chunks via `pngReadText()` (handles Jimp-written crops)
+
+Both `pngInjectText` and `pngReadText` are standalone functions in `thumbnailService.ts` that operate on raw PNG buffers. They scan PNG chunk structure properly (not hardcoded offsets).
+
+## PPTX Export
+
+Exports all voted tuples to a PowerPoint file. Triggered by the "PPTX" button in the floating panel.
+
+### Layout
+- 16:9 slides (10" × 5.625")
+- One slide per modality per voted tuple
+- Modalities appear in the user's display order (after `[]` key reordering)
+
+### Caption Bar
+- Semi-transparent gray bar (0.35" height) at the top of each slide
+- Left-aligned: tuple name (bold, black, 10pt Arial)
+- Right-aligned: modality name (bold, 10pt Arial)
+  - Winner: green (#008800) with ✓ prefix
+  - Non-winner: black
+
+### Slide Types
+
+**Simple (no crops)**: Full image "contain"-fit to the slide, centered.
+
+**With crops**: For each crop file of a voted tuple:
+- Main area: cropped image fit to slide
+- Bottom-right corner: small full image (2" wide) with red rectangle overlay showing crop region
+- Crop region coordinates read from PNG tEXt metadata
+
+### Image Loading
+- All images converted to PNG base64 via Sharp (or raw base64 fallback)
+- PPMX files handled via `parsePpmx()` → Sharp raw input
+
+### Output
+- Saved as `comparison_NN.pptx` in the parent directory of modality folders
+- Auto-incremented numbering
+
 ## Key Algorithms
 
 ### Image Matching (in `fileService.ts`)
@@ -190,8 +339,12 @@ Images are matched across modalities using `matchTuplesWithTrie()`:
 
 1. **Reference modality**: Picks modality with most files as reference
 2. **Trie construction**: Builds trie from reference filenames - each node tracks which files pass through it
-3. **LCP matching**: For each file in other modalities, walks trie to find longest common prefix (LCP)
-4. **LCS tie-breaking**: When multiple reference files share the same LCP, uses Longest Common Subsequence (LCS) to pick best match
+3. **Pass 1 - Exact matches**: Files with identical basenames across modalities are matched first (e.g., crop files with same name in all folders)
+4. **Pass 2 - Fuzzy matches**: For remaining files, walks trie to find longest common prefix (LCP)
+5. **Tie-breaking** (when multiple reference files share the same LCP):
+   - Prefer non-crop reference over crop reference (`_crop\d+$` pattern)
+   - Then prefer smaller length difference (`|refLen - queryLen|`)
+   - Then prefer higher LCS (Longest Common Subsequence)
 
 Complexity: O(N × L) for trie operations, O(ties × L²) for LCS tie-breaking
 
@@ -200,10 +353,11 @@ This handles:
 - Missing files in some modalities (gracefully creates partial tuples)
 - Single-file modalities (matches to best LCP/LCS candidate)
 - Identifiers embedded in middle of filenames (LCS catches common substrings)
+- **Crop files**: Original and cropped files coexist — crop references are explicitly deprioritized so they never steal matches from originals, regardless of query length
 
 ### Modality Naming
 
-- **Mode 1 & 2**: Directory names become modality names
+- **Mode 1 & 2**: Directory names become modality names (disambiguated with parent path if duplicates)
 - **Mode 3**: Uses `findDifferingParts()` to extract unique portions of filenames
 
 ### Aspect Ratio Handling
@@ -249,6 +403,38 @@ npx tsc --outDir /tmp/test_out --declaration --declarationMap --skipLibCheck
 # Then require('/tmp/test_out/sharpLoader.js') in the test
 ```
 
+### Tuple Matching Tests
+
+Run the standalone tuple matching tests:
+```bash
+npx ts-node src/test/tupleMatching.test.ts
+```
+
+These tests exercise `matchTuplesWithTrie()` logic with real-world filename patterns:
+- **Test 1**: User tree with originals + crop01 files (5 modalities, 5 tuples)
+- **Test 2**: Originals + crop01 + crop01_crop01 (nested crops)
+- **Test 3**: Baseline (no crop files)
+- **Test 4**: `_pred` should match `_gt`, not `_crop01` (equal lenDiff, prefer shorter ref)
+- **Test 5**: Long modality name should match `_gt`, not `_crop01` (crop explicitly deprioritized)
+
+The tests use pure TypeScript copies of the matching functions (no vscode dependency) for fast execution.
+
+### PNG tEXt Chunk Tests
+
+Run the PNG metadata injection/reading tests:
+```bash
+npx ts-node src/test/pngTextChunk.test.ts
+```
+
+Tests verify:
+- Basic keyword/value round-trip injection and reading
+- Crop metadata format (`x,y,w,h,srcW,srcH`) round-trip with parsing
+- Missing/wrong keyword returns null
+- Multiple tEXt chunks coexist independently
+- PNG structure preserved (signature, IEND intact)
+- Sharp validates modified PNGs (still a valid image)
+- Large coordinate values
+
 ### File Watching Tests
 
 1. Test all three modes with file add/delete/modify operations
@@ -270,6 +456,19 @@ Open the webview dev console via **Help > Toggle Developer Tools** (or `Cmd+Shif
 - `poll delete detected` (polling-based deletion detection)
 - `fs.watch setup OK` / `fs.watch error` (watcher initialization)
 - Error details from `handleFileDeleted`, `handleFileCreated`, `handleFileChanged`
+
+**Tuple Matching Debug** (appears in Output > Extension Host or Debug Console, prefixed with `[IC-MATCH]`):
+- Modality list and file counts per modality
+- Reference modality selection
+- Pass 1: Exact matches (identical basenames)
+- Pass 2: Fuzzy matches (LCP + LCS scoring, candidates, crop detection, final selection)
+- Final tuple summary with any MISSING modalities highlighted
+
+To debug tuple matching issues:
+1. Enable `imageCompare.debug: true` in settings
+2. Open the folder/files in ImageCompare
+3. Check **Output > Extension Host** or **Debug Console** for `[IC-MATCH]` logs
+4. Look for `MISSING:` entries in the final tuple summary to identify unmatched files
 
 ## Publishing (GitHub Actions)
 

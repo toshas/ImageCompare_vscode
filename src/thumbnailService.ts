@@ -1,8 +1,62 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { getSharp, getSharpError } from './sharpLoader';
 import { parsePpmx } from './ppmxParser';
+
+/**
+ * Inject a PNG tEXt chunk into a PNG buffer (before IEND).
+ * tEXt chunk: keyword + \0 + value, wrapped in length + "tEXt" + CRC32.
+ */
+function pngInjectText(png: Buffer, keyword: string, value: string): Buffer {
+  const keyBuf = Buffer.from(keyword, 'latin1');
+  const valBuf = Buffer.from(value, 'latin1');
+  const data = Buffer.concat([keyBuf, Buffer.from([0]), valBuf]);
+  const typeAndData = Buffer.concat([Buffer.from('tEXt', 'ascii'), data]);
+  const crc = zlib.crc32(typeAndData);
+
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeAndData.copy(chunk, 4);
+  chunk.writeUInt32BE(crc >>> 0, 8 + data.length);
+
+  // Scan for IEND chunk and insert before it
+  let iendOffset = png.length - 12; // fallback
+  let offset = 8;
+  while (offset + 8 <= png.length) {
+    const type = png.subarray(offset + 4, offset + 8).toString('ascii');
+    if (type === 'IEND') { iendOffset = offset; break; }
+    offset += 12 + png.readUInt32BE(offset);
+  }
+  return Buffer.concat([png.subarray(0, iendOffset), chunk, png.subarray(iendOffset)]);
+}
+
+/**
+ * Read a PNG tEXt chunk value by keyword from a raw PNG buffer.
+ * Scans all chunks; returns null if not found.
+ */
+function pngReadText(png: Buffer, keyword: string): string | null {
+  // PNG signature is 8 bytes, then chunks
+  let offset = 8;
+  while (offset + 8 <= png.length) {
+    const len = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString('ascii');
+    if (type === 'tEXt' && offset + 12 + len <= png.length) {
+      const data = png.subarray(offset + 8, offset + 8 + len);
+      const nullIdx = data.indexOf(0);
+      if (nullIdx >= 0) {
+        const key = data.subarray(0, nullIdx).toString('latin1');
+        if (key === keyword) {
+          return data.subarray(nullIdx + 1).toString('latin1');
+        }
+      }
+    }
+    if (type === 'IEND') break;
+    offset += 12 + len; // 4 len + 4 type + data + 4 crc
+  }
+  return null;
+}
 
 /**
  * Service for generating and caching image thumbnails.
@@ -238,17 +292,27 @@ export class ThumbnailService {
 
   async cropImage(
     uri: vscode.Uri,
-    rect: { x: number; y: number; w: number; h: number }
+    rect: { x: number; y: number; w: number; h: number },
+    sourceWidth: number,
+    sourceHeight: number
   ): Promise<Buffer> {
     const fileData = await vscode.workspace.fs.readFile(uri);
     const buffer = Buffer.from(fileData);
     const ext = path.extname(uri.path).toLowerCase();
 
+    // Embed crop metadata as PNG tEXt chunk: "ImageCompare:CropRect" = "x,y,w,h,srcW,srcH"
+    const cropMeta = `${rect.x},${rect.y},${rect.w},${rect.h},${sourceWidth},${sourceHeight}`;
+
     const sharp = getSharp();
     if (sharp) {
       return this.createSharpInstance(sharp, buffer, ext)
         .extract({ left: rect.x, top: rect.y, width: rect.w, height: rect.h })
-        .png()
+        .png({ compressionLevel: 6 })
+        .withMetadata({
+          exif: {
+            IFD0: { ImageDescription: `ImageCompare:CropRect=${cropMeta}` }
+          }
+        })
         .toBuffer();
     }
 
@@ -258,7 +322,67 @@ export class ThumbnailService {
     }
     const image = await this.createJimpImage(Jimp, buffer, ext);
     image.crop({ x: rect.x, y: rect.y, w: rect.w, h: rect.h });
-    return image.getBuffer('image/png');
+    const pngBuf: Buffer = await image.getBuffer('image/png');
+    return pngInjectText(pngBuf, 'ImageCompare:CropRect', cropMeta);
+  }
+
+  /**
+   * Read crop metadata from a PNG file (if present).
+   * Returns { x, y, w, h, srcW, srcH } or null if not a crop file.
+   */
+  async readCropMetadata(uri: vscode.Uri): Promise<{ x: number; y: number; w: number; h: number; srcW: number; srcH: number } | null> {
+    try {
+      const fileData = await vscode.workspace.fs.readFile(uri);
+      const buffer = Buffer.from(fileData);
+
+      // Try EXIF (Sharp path writes here)
+      const sharp = getSharp();
+      if (sharp) {
+        const meta = await sharp(buffer).metadata();
+        const desc = meta.exif ? this.parseExifDescription(meta.exif) : null;
+        if (desc && desc.startsWith('ImageCompare:CropRect=')) {
+          const parts = desc.replace('ImageCompare:CropRect=', '').split(',').map(Number);
+          if (parts.length === 6 && parts.every(n => !isNaN(n))) {
+            return { x: parts[0], y: parts[1], w: parts[2], h: parts[3], srcW: parts[4], srcH: parts[5] };
+          }
+        }
+      }
+
+      // Fallback: try PNG tEXt chunk (Jimp path writes here)
+      const textVal = pngReadText(buffer, 'ImageCompare:CropRect');
+      if (textVal) {
+        const parts = textVal.split(',').map(Number);
+        if (parts.length === 6 && parts.every(n => !isNaN(n))) {
+          return { x: parts[0], y: parts[1], w: parts[2], h: parts[3], srcW: parts[4], srcH: parts[5] };
+        }
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Parse EXIF buffer to extract ImageDescription (IFD0 tag 0x010E).
+   * This is a simplified parser for the specific tag we need.
+   */
+  private parseExifDescription(exifBuffer: Buffer): string | null {
+    try {
+      // EXIF is complex; for simplicity, search for our marker string directly
+      const str = exifBuffer.toString('latin1');
+      const marker = 'ImageCompare:CropRect=';
+      const idx = str.indexOf(marker);
+      if (idx >= 0) {
+        // Extract until next null or non-digit/comma character
+        let end = idx + marker.length;
+        while (end < str.length && /[\d,]/.test(str[end])) end++;
+        return str.slice(idx, end);
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------------------

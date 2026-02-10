@@ -2,6 +2,16 @@ import * as vscode from 'vscode';
 import { ImageFile, ImageTuple, ScanResult, isImageFile } from './types';
 
 /**
+ * Debug logging for tuple matching (controlled by imageCompare.debug setting)
+ */
+function debugLog(...args: unknown[]): void {
+  const debug = vscode.workspace.getConfiguration('imageCompare').get<boolean>('debug', false);
+  if (debug) {
+    console.log('[IC-MATCH]', ...args);
+  }
+}
+
+/**
  * Natural sort comparator for filenames
  */
 function naturalSort(a: string, b: string): number {
@@ -121,6 +131,14 @@ function matchTuplesWithTrie(
   const refFiles = modalityFiles.get(refMod) || [];
   if (refFiles.length === 0) return [];
 
+  debugLog('=== TUPLE MATCHING START ===');
+  debugLog('Modalities:', modalities);
+  debugLog('Reference modality:', refMod, 'with', refFiles.length, 'files');
+  for (const mod of modalities) {
+    const files = modalityFiles.get(mod) || [];
+    debugLog(`  ${mod}: ${files.length} files -`, files.map(f => stripExtension(f.name)).join(', '));
+  }
+
   // Build trie from reference filenames
   // Each node has: children (Map), indices (array of refFile indices that pass through)
   const trie: TrieNode = { children: new Map(), indices: [] };
@@ -153,6 +171,7 @@ function matchTuplesWithTrie(
   }
 
   // Pass 1: exact matches (identical basenames across modalities, e.g. crop files)
+  debugLog('--- Pass 1: Exact matches ---');
   for (const mod of modalities) {
     if (mod === refMod) continue;
     const files = modalityFiles.get(mod) || [];
@@ -160,12 +179,14 @@ function matchTuplesWithTrie(
       const query = stripExtension(file.name);
       const exactIdx = refBaseToIdx.get(query);
       if (exactIdx !== undefined) {
+        debugLog(`  EXACT: ${mod}/${file.name} -> ref[${exactIdx}] (${refFiles[exactIdx].name})`);
         tupleMap.get(exactIdx)!.set(mod, file);
       }
     }
   }
 
   // Pass 2: fuzzy matches via trie (for files without exact ref match)
+  debugLog('--- Pass 2: Fuzzy matches ---');
   for (const mod of modalities) {
     if (mod === refMod) continue;
 
@@ -173,39 +194,61 @@ function matchTuplesWithTrie(
     for (const file of files) {
       const query = stripExtension(file.name);
       // Skip if already matched exactly in pass 1
-      if (refBaseToIdx.has(query)) continue;
+      if (refBaseToIdx.has(query)) {
+        debugLog(`  SKIP (exact): ${mod}/${file.name}`);
+        continue;
+      }
 
       // Walk trie to find deepest matching node (longest common prefix)
       let node = trie;
       let bestNode = trie;
+      let lcpLength = 0;
 
       for (const char of query) {
         if (!node.children.has(char)) break;
         node = node.children.get(char)!;
+        lcpLength++;
         if (node.indices.length > 0) {
           bestNode = node;
         }
       }
 
       const candidates = bestNode.indices;
-      if (candidates.length === 0) continue;
+      if (candidates.length === 0) {
+        debugLog(`  NO MATCH: ${mod}/${file.name} (no candidates, LCP=${lcpLength})`);
+        continue;
+      }
 
       // Find best match among candidates
+      // Prefer: 1) non-crop over crop ref, 2) smaller length difference, 3) higher LCS
+      const cropSuffixRe = /_crop\d+$/;
       let bestIdx = candidates[0];
 
       if (candidates.length > 1) {
+        let bestIsCrop = true;
         let bestLenDiff = Infinity;
         let bestLcs = -1;
+        debugLog(`  FUZZY: ${mod}/${file.name} - ${candidates.length} candidates (LCP=${lcpLength}):`);
         for (const idx of candidates) {
           const refName = stripExtension(refFiles[idx].name);
+          const isCrop = cropSuffixRe.test(refName);
           const lenDiff = Math.abs(refName.length - query.length);
           const lcs = lcsLength(query, refName);
-          if (lenDiff < bestLenDiff || (lenDiff === bestLenDiff && lcs > bestLcs)) {
+          debugLog(`    candidate ref[${idx}] ${refName}: crop=${isCrop}, lenDiff=${lenDiff}, LCS=${lcs}`);
+          // Non-crop refs always beat crop refs; then smaller lenDiff; then higher LCS
+          const isBetter = (!isCrop && bestIsCrop) ||
+            (isCrop === bestIsCrop && lenDiff < bestLenDiff) ||
+            (isCrop === bestIsCrop && lenDiff === bestLenDiff && lcs > bestLcs);
+          if (isBetter) {
+            bestIsCrop = isCrop;
             bestLenDiff = lenDiff;
             bestLcs = lcs;
             bestIdx = idx;
           }
         }
+        debugLog(`    -> best: ref[${bestIdx}] ${stripExtension(refFiles[bestIdx].name)}`);
+      } else {
+        debugLog(`  FUZZY: ${mod}/${file.name} -> ref[${bestIdx}] (${refFiles[bestIdx].name}) (single candidate)`);
       }
 
       // Add to tuple
@@ -224,6 +267,15 @@ function matchTuplesWithTrie(
 
   // Sort by key for consistent ordering
   result.sort((a, b) => naturalSort(a.key, b.key));
+
+  // Log final tuples
+  debugLog('--- Final tuples ---');
+  for (const tuple of result) {
+    const mods = Array.from(tuple.files.keys());
+    const missing = modalities.filter(m => !mods.includes(m));
+    debugLog(`  ${tuple.key}: [${mods.join(', ')}]${missing.length ? ` MISSING: [${missing.join(', ')}]` : ''}`);
+  }
+  debugLog('=== TUPLE MATCHING END ===');
 
   return result;
 }

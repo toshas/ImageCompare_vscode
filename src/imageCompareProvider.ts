@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import PptxGenJS from 'pptxgenjs';
 import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, disambiguateDirectoryNames } from './fileService';
 import { ThumbnailService } from './thumbnailService';
+import { parsePpmx } from './ppmxParser';
 import {
   ScanResult,
   TupleInfo,
@@ -252,6 +254,10 @@ export class ImageCompareProvider {
         await this.handleDeleteTuple(state, message.tupleIndex);
         break;
 
+      case 'exportPptx':
+        await this.handleExportPptx(state, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
+        break;
+
       case 'log':
         // WebView debug messages (disabled in production)
         break;
@@ -306,6 +312,243 @@ export class ImageCompareProvider {
   }
 
   /**
+   * Handle PPTX export request: generate a PowerPoint presentation for voted tuples.
+   */
+  private async handleExportPptx(
+    state: PanelState,
+    tupleIndices: number[],
+    winnerModalityIndices: (number | null)[],
+    modalityOrder: number[]
+  ): Promise<void> {
+    try {
+      const pptx = new PptxGenJS();
+      pptx.layout = 'LAYOUT_16x9';
+      pptx.title = 'ImageCompare Export';
+
+      const slideWidth = 10; // inches (default for 16:9)
+      const slideHeight = 5.625; // inches (default for 16:9)
+
+      const barH = 0.35; // inches — height of the caption bar
+
+      const addCaption = (slide: PptxGenJS.Slide, tupleName: string, modality: string, isWinner: boolean) => {
+        // Semi-transparent white bar spanning full slide width at top
+        slide.addShape('rect', {
+          x: 0, y: 0, w: slideWidth, h: barH,
+          fill: { color: 'D0D0D0', transparency: 50 },
+        });
+
+        // Tuple name — left-aligned
+        slide.addText(tupleName, {
+          x: 0.1, y: 0, w: slideWidth / 2, h: barH,
+          fontSize: 10,
+          fontFace: 'Arial',
+          bold: true,
+          color: '000000',
+          valign: 'middle',
+          align: 'left',
+        });
+
+        // Modality name — right-aligned
+        const modLabel = isWinner ? `✓ ${modality}` : modality;
+        slide.addText(modLabel, {
+          x: slideWidth / 2, y: 0, w: slideWidth / 2 - 0.1, h: barH,
+          fontSize: 10,
+          fontFace: 'Arial',
+          bold: true,
+          color: isWinner ? '008800' : '000000',
+          valign: 'middle',
+          align: 'right',
+        });
+      };
+
+      // Helper to load image as base64
+      const loadImageBase64 = async (uri: vscode.Uri): Promise<{ data: string; width: number; height: number } | null> => {
+        try {
+          const bytes = await vscode.workspace.fs.readFile(uri);
+          const buffer = Buffer.from(bytes);
+          const ext = path.extname(uri.path).toLowerCase();
+          const sharp = (await import('./sharpLoader')).getSharp();
+          if (sharp) {
+            let img;
+            if (ext === '.ppmx') {
+              const ppmx = parsePpmx(buffer);
+              img = sharp(ppmx.rgbBuffer, { raw: { width: ppmx.width, height: ppmx.height, channels: 3 } });
+            } else {
+              img = sharp(buffer);
+            }
+            const meta = await img.metadata();
+            const pngBuffer = await img.png().toBuffer();
+            return {
+              data: `data:image/png;base64,${pngBuffer.toString('base64')}`,
+              width: meta.width || 100,
+              height: meta.height || 100
+            };
+          }
+          // Fallback to raw base64 (may not work for all formats)
+          return {
+            data: `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`,
+            width: 100,
+            height: 100
+          };
+        } catch {
+          return null;
+        }
+      };
+
+      // Helper to find crop tuples for a base tuple
+      const findCropTuples = (baseTupleName: string): number[] => {
+        const cropPattern = new RegExp(`^${baseTupleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_crop\\d+$`);
+        const cropIndices: number[] = [];
+        for (let i = 0; i < state.scanResult.tuples.length; i++) {
+          if (cropPattern.test(state.scanResult.tuples[i].name)) {
+            cropIndices.push(i);
+          }
+        }
+        return cropIndices;
+      };
+
+      // Process each voted tuple
+      for (let idx = 0; idx < tupleIndices.length; idx++) {
+        const tupleIndex = tupleIndices[idx];
+        const winnerIdx = winnerModalityIndices[idx];
+        const tuple = state.scanResult.tuples[tupleIndex];
+        if (!tuple) continue;
+
+        const cropTupleIndices = findCropTuples(tuple.name);
+        const hasCrops = cropTupleIndices.length > 0;
+
+        // For each modality in display order
+        for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
+          const originalModIdx = modalityOrder[displayIdx];
+          const modality = state.scanResult.modalities[originalModIdx];
+          if (!modality) continue;
+          const img = tuple.images.find(i => i.modality === modality);
+          if (!img) continue;
+
+          const isWinner = winnerIdx === originalModIdx;
+          const imgData = await loadImageBase64(img.uri);
+          if (!imgData) continue;
+
+          if (!hasCrops) {
+            // Simple case: no crops, just fit the full image
+            const slide = pptx.addSlide();
+
+            // Calculate fit dimensions
+            const imgAspect = imgData.width / imgData.height;
+            const slideAspect = slideWidth / slideHeight;
+            let imgW: number, imgH: number, imgX: number, imgY: number;
+            if (imgAspect > slideAspect) {
+              imgW = slideWidth;
+              imgH = slideWidth / imgAspect;
+              imgX = 0;
+              imgY = (slideHeight - imgH) / 2;
+            } else {
+              imgH = slideHeight;
+              imgW = slideHeight * imgAspect;
+              imgX = (slideWidth - imgW) / 2;
+              imgY = 0;
+            }
+
+            slide.addImage({ data: imgData.data, x: imgX, y: imgY, w: imgW, h: imgH });
+            addCaption(slide, tuple.name, modality, isWinner);
+          } else {
+            // Has crops: create a slide for each crop
+            for (const cropTupleIdx of cropTupleIndices) {
+              const cropTuple = state.scanResult.tuples[cropTupleIdx];
+              const cropImg = cropTuple.images.find(i => i.modality === modality);
+              if (!cropImg) continue;
+
+              const cropImgData = await loadImageBase64(cropImg.uri);
+              if (!cropImgData) continue;
+
+              const slide = pptx.addSlide();
+
+              // Main area: cropped image fit to slide
+              const cropAspect = cropImgData.width / cropImgData.height;
+              const slideAspect = slideWidth / slideHeight;
+              let cropW: number, cropH: number, cropX: number, cropY: number;
+              if (cropAspect > slideAspect) {
+                cropW = slideWidth;
+                cropH = slideWidth / cropAspect;
+                cropX = 0;
+                cropY = (slideHeight - cropH) / 2;
+              } else {
+                cropH = slideHeight;
+                cropW = slideHeight * cropAspect;
+                cropX = (slideWidth - cropW) / 2;
+                cropY = 0;
+              }
+
+              slide.addImage({ data: cropImgData.data, x: cropX, y: cropY, w: cropW, h: cropH });
+
+              // Bottom-right corner: smaller full image with crop region indicator (flush to corner)
+              const thumbW = 2; // inches
+              const thumbH = thumbW / (imgData.width / imgData.height);
+              const thumbX = slideWidth - thumbW;
+              const thumbY = slideHeight - thumbH;
+              slide.addImage({ data: imgData.data, x: thumbX, y: thumbY, w: thumbW, h: thumbH });
+
+              // Read crop metadata from PNG to get exact coordinates
+              const cropMeta = await this.thumbnailService.readCropMetadata(cropImg.uri);
+              if (cropMeta) {
+                // Scale crop rect from source image pixels to thumbnail inches
+                const scaleX = thumbW / cropMeta.srcW;
+                const scaleY = thumbH / cropMeta.srcH;
+                const rectX = thumbX + cropMeta.x * scaleX;
+                const rectY = thumbY + cropMeta.y * scaleY;
+                const rectW = cropMeta.w * scaleX;
+                const rectH = cropMeta.h * scaleY;
+
+                slide.addShape('rect', {
+                  x: rectX,
+                  y: rectY,
+                  w: rectW,
+                  h: rectH,
+                  line: { color: 'FF0000', width: 2 },
+                  fill: { type: 'none' }
+                });
+              }
+
+              addCaption(slide, cropTuple.name, modality, isWinner);
+            }
+          }
+        }
+      }
+
+      // Determine output path
+      const baseDir = state.baseUri?.fsPath ||
+        (state.modalityDirs.size > 0 ? Array.from(state.modalityDirs.values())[0].fsPath : undefined);
+
+      if (!baseDir) {
+        throw new Error('Cannot determine output directory');
+      }
+
+      const parentDir = state.baseUri ? baseDir : path.dirname(baseDir);
+
+      // Find next available pptx number
+      let pptxNum = 1;
+      const existingFiles = await fs.promises.readdir(parentDir);
+      const pptxPattern = /^comparison_(\d+)\.pptx$/;
+      for (const f of existingFiles) {
+        const match = f.match(pptxPattern);
+        if (match) {
+          pptxNum = Math.max(pptxNum, parseInt(match[1], 10) + 1);
+        }
+      }
+
+      const outputPath = path.join(parentDir, `comparison_${String(pptxNum).padStart(2, '0')}.pptx`);
+      await pptx.writeFile({ fileName: outputPath });
+
+      state.panel.webview.postMessage({ type: 'pptxComplete', path: outputPath });
+      vscode.window.showInformationMessage(`PPTX exported: ${outputPath}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      state.panel.webview.postMessage({ type: 'pptxError', error: errorMsg });
+      vscode.window.showErrorMessage(`PPTX export failed: ${errorMsg}`);
+    }
+  }
+
+  /**
    * Handle crop request: crop all modalities in the tuple at the given rectangle.
    */
   private async handleCropImages(
@@ -348,7 +591,7 @@ export class ImageCompareProvider {
       clampedRect.h = Math.min(clampedRect.h, meta.height - clampedRect.y);
       if (clampedRect.w <= 0 || clampedRect.h <= 0) return;
 
-      const croppedBuffer = await this.thumbnailService.cropImage(imageFile.uri, clampedRect);
+      const croppedBuffer = await this.thumbnailService.cropImage(imageFile.uri, clampedRect, meta.width, meta.height);
       await vscode.workspace.fs.writeFile(outputUri, croppedBuffer);
       savedCount++;
       savedPaths.push(outputUri.path);
@@ -902,6 +1145,7 @@ body {
   border-radius: 6px;
   z-index: 20;
   min-width: 160px;
+  max-width: 168px;
   user-select: none;
 }
 #fp-header {
@@ -935,6 +1179,7 @@ body {
 #thumb-canvas {
   display: block;
   margin: 0 auto;
+  max-width: 160px;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
@@ -943,6 +1188,7 @@ body {
   border: 2px solid #f0f;
   pointer-events: none;
   box-sizing: border-box;
+  display: none;
 }
 #fp-actions {
   display: flex;
@@ -963,7 +1209,7 @@ body {
   background: var(--vscode-button-background, #0078d4);
   color: var(--vscode-button-foreground, #fff);
 }
-#delete-btn {
+#delete-btn, #pptx-btn {
   padding: 3px 8px;
   background: var(--vscode-button-secondaryBackground, #444);
   color: var(--vscode-button-secondaryForeground, #fff);
@@ -973,6 +1219,7 @@ body {
   font-size: 11px;
 }
 #delete-btn:hover { background: #a33; }
+#pptx-btn:hover { background: #383; }
 
 /* Crop overlay */
 #crop-overlay {
@@ -1353,12 +1600,13 @@ body {
       </div>
       <div id="fp-body">
         <div id="fp-minimap">
-          <canvas id="thumb-canvas"></canvas>
+          <canvas id="thumb-canvas" width="160" height="100"></canvas>
           <div id="thumb-viewport"></div>
         </div>
         <div id="fp-actions">
           <button id="crop-btn" title="Crop all modalities (C)">Crop</button>
           <button id="delete-btn" title="Delete current tuple files (Del)">Delete</button>
+          <button id="pptx-btn" title="Export voted tuples to PPTX">PPTX</button>
         </div>
       </div>
     </div>

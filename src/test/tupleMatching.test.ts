@@ -120,10 +120,6 @@ function matchTuplesWithTrie(
     tupleMap.set(i, new Map([[refMod, refFiles[i]]]));
   }
 
-  // Track which ref indices have at least one exact match from another modality.
-  // These are "claimed" by exact matches and should be excluded from fuzzy matching.
-  const exactMatchedRefs = new Set<number>();
-
   // Pass 1: exact matches (identical basenames across modalities, e.g. crop files)
   for (const mod of modalities) {
     if (mod === refMod) continue;
@@ -133,7 +129,6 @@ function matchTuplesWithTrie(
       const exactIdx = refBaseToIdx.get(query);
       if (exactIdx !== undefined) {
         tupleMap.get(exactIdx)!.set(mod, file);
-        exactMatchedRefs.add(exactIdx);
       }
     }
   }
@@ -154,20 +149,26 @@ function matchTuplesWithTrie(
         node = node.children.get(char)!;
         if (node.indices.length > 0) bestNode = node;
       }
-      // Filter out exact-matched refs from candidates
-      const candidates = bestNode.indices.filter(i => !exactMatchedRefs.has(i));
+      const candidates = bestNode.indices;
       if (candidates.length === 0) continue;
 
+      // Prefer: 1) non-crop over crop ref, 2) smaller length difference, 3) higher LCS
+      const cropSuffixRe = /_crop\d+$/;
       let bestIdx = candidates[0];
       if (candidates.length > 1) {
+        let bestIsCrop = true;
         let bestLenDiff = Infinity;
         let bestLcs = -1;
         for (const idx of candidates) {
           const refName = stripExtension(refFiles[idx].name);
+          const isCrop = cropSuffixRe.test(refName);
           const lenDiff = Math.abs(refName.length - query.length);
           const lcs = lcsLength(query, refName);
-          if (lenDiff < bestLenDiff || (lenDiff === bestLenDiff && lcs > bestLcs)) {
-            bestLenDiff = lenDiff; bestLcs = lcs; bestIdx = idx;
+          const isBetter = (!isCrop && bestIsCrop) ||
+            (isCrop === bestIsCrop && lenDiff < bestLenDiff) ||
+            (isCrop === bestIsCrop && lenDiff === bestLenDiff && lcs > bestLcs);
+          if (isBetter) {
+            bestIsCrop = isCrop; bestLenDiff = lenDiff; bestLcs = lcs; bestIdx = idx;
           }
         }
       }
@@ -398,11 +399,116 @@ function testBaseline() {
   }
 }
 
+// ── Test case 4: _pred should match _gt, not _crop01 (equal lenDiff) ──────
+
+function testPredMatchesGtNotCrop() {
+  console.log('\nTest 4: _pred should match _gt, not _crop01 (equal lenDiff, prefer shorter ref)');
+
+  // This tests the specific bug where _pred files were incorrectly matching _crop01
+  // because LCS(_pred, _crop01) > LCS(_pred, _gt), even though lenDiff is equal.
+  // The fix prefers shorter reference names (originals like _gt) over longer ones (crops).
+
+  const modalities = ['GT', 'pred'];
+  const modalityFiles = new Map<string, SimpleFile[]>();
+
+  // Reference modality with both _gt (short) and _crop01 (long) files
+  modalityFiles.set('GT', makeFiles('GT', [
+    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_crop01.png',  // long: 57 chars (no ext)
+    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_gt.png',      // short: 52 chars (no ext)
+  ]));
+  modalityFiles.set('pred', makeFiles('pred', [
+    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_crop01.png',  // exact match to crop01
+    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_pred.png',    // should match _gt, not _crop01
+  ]));
+
+  const tuples = buildTuples(modalityFiles, modalities);
+
+  console.log(`  Got ${tuples.length} tuples:`);
+  for (const t of tuples) {
+    const mods = t.images.map(i => `${i.modality}:${i.name}`).join(', ');
+    console.log(`    "${t.name}" => [${mods}]`);
+  }
+
+  assert(tuples.length === 2, `Expected 2 tuples, got ${tuples.length}`);
+
+  // The _crop01 tuple should have exact matches
+  const cropTuple = tuples.find(t => t.name.includes('crop01'));
+  assert(cropTuple !== undefined, 'Should have a crop01 tuple');
+  if (cropTuple) {
+    assert(cropTuple.images.length === 2, `crop01 tuple should have 2 images, got ${cropTuple.images.length}`);
+    // Both should be _crop01 files
+    for (const img of cropTuple.images) {
+      assert(img.name.includes('crop01'), `crop01 tuple should only have crop01 files: ${img.name}`);
+    }
+  }
+
+  // The _gt tuple should have _gt and _pred (not _crop01)
+  const gtTuple = tuples.find(t => t.name.includes('_gt') || (t.name.includes('00000079') && !t.name.includes('crop')));
+  assert(gtTuple !== undefined, 'Should have a _gt tuple');
+  if (gtTuple) {
+    assert(gtTuple.images.length === 2, `_gt tuple should have 2 images, got ${gtTuple.images.length}`);
+    // Check that pred modality has _pred file, not _crop01
+    const predImg = gtTuple.images.find(i => i.modality === 'pred');
+    assert(predImg !== undefined, '_gt tuple should have a pred modality image');
+    if (predImg) {
+      assert(predImg.name.includes('_pred'), `pred image in _gt tuple should be _pred.png, got: ${predImg.name}`);
+      assert(!predImg.name.includes('crop'), `pred image in _gt tuple should NOT be _crop01: ${predImg.name}`);
+    }
+  }
+}
+
+// ── Test case 5: long modality name should still match _gt, not _crop01 ───
+
+function testLongModalityMatchesGtNotCrop() {
+  console.log('\nTest 5: long modality name should match _gt, not _crop01 (crop deprioritized)');
+
+  // When a modality has a very long suffix, lenDiff alone would prefer _crop01
+  // over _gt because _crop01 is closer in length. The explicit crop deprioritization
+  // ensures originals always win over crops regardless of query length.
+
+  const modalities = ['GT', 'longmodality'];
+  const modalityFiles = new Map<string, SimpleFile[]>();
+
+  modalityFiles.set('GT', makeFiles('GT', [
+    'image001_crop01.png',
+    'image001_gt.png',
+  ]));
+  modalityFiles.set('longmodality', makeFiles('longmodality', [
+    'image001_crop01.png',       // exact match to crop01
+    'image001_longmodality.png', // should match _gt, not _crop01
+  ]));
+
+  const tuples = buildTuples(modalityFiles, modalities);
+
+  console.log(`  Got ${tuples.length} tuples:`);
+  for (const t of tuples) {
+    const mods = t.images.map(i => `${i.modality}:${i.name}`).join(', ');
+    console.log(`    "${t.name}" => [${mods}]`);
+  }
+
+  assert(tuples.length === 2, `Expected 2 tuples, got ${tuples.length}`);
+
+  // The non-crop tuple (named "image001") should have the longmodality file
+  const gtTuple = tuples.find(t => !t.name.includes('crop'));
+  assert(gtTuple !== undefined, 'Should have a non-crop tuple');
+  if (gtTuple) {
+    assert(gtTuple.images.length === 2, `_gt tuple should have 2 images, got ${gtTuple.images.length}`);
+    const longImg = gtTuple.images.find(i => i.modality === 'longmodality');
+    assert(longImg !== undefined, '_gt tuple should have a longmodality image');
+    if (longImg) {
+      assert(longImg.name.includes('_longmodality'), `longmodality image should be _longmodality.png, got: ${longImg.name}`);
+      assert(!longImg.name.includes('crop'), `longmodality image should NOT be _crop01: ${longImg.name}`);
+    }
+  }
+}
+
 // ── Run all tests ─────────────────────────────────────────────────────────
 
 testBaseline();
 testUserTree();
 testDoubleCrop();
+testPredMatchesGtNotCrop();
+testLongModalityMatchesGtNotCrop();
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);

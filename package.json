@@ -2,7 +2,7 @@
   "name": "image-compare",
   "displayName": "ImageCompare",
   "description": "Compare multiple images (tuples) with multiple modalities",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "publisher": "obukhovai",
   "license": "MIT",
   "icon": "icon.png",
@@ -104,6 +104,7 @@
   },
   "dependencies": {
     "jimp": "^1.6.0",
+    "pptxgenjs": "^4.0.1",
     "sharp": "^0.34.5"
   },
   "optionalDependencies": {
