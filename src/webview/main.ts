@@ -275,10 +275,14 @@ function setupEventListeners() {
 // Crop confirmation callback
 function handleCropConfirm() {
   if (!crop.cropRect) return;
+  const currentImage = images[currentModalityIndex];
+  if (!currentImage) return;
   vscode.postMessage({
     type: 'cropImages',
     tupleIndex: currentTupleIndex,
-    cropRect: { x: crop.cropRect.x, y: crop.cropRect.y, w: crop.cropRect.w, h: crop.cropRect.h }
+    cropRect: { x: crop.cropRect.x, y: crop.cropRect.y, w: crop.cropRect.w, h: crop.cropRect.h },
+    srcWidth: currentImage.width,
+    srcHeight: currentImage.height
   });
   crop.exitCropMode(false);
   cropBtn.classList.remove('active');

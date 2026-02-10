@@ -305,7 +305,7 @@ export class ThumbnailService {
 
     const sharp = getSharp();
     if (sharp) {
-      return this.createSharpInstance(sharp, buffer, ext)
+      const pngBuf = await this.createSharpInstance(sharp, buffer, ext)
         .extract({ left: rect.x, top: rect.y, width: rect.w, height: rect.h })
         .png({ compressionLevel: 6 })
         .withMetadata({
@@ -314,6 +314,8 @@ export class ThumbnailService {
           }
         })
         .toBuffer();
+      // Also inject PNG tEXt chunk for cross-compatibility with standalone HTML tool
+      return pngInjectText(pngBuf, 'ImageCompare:CropRect', cropMeta);
     }
 
     const Jimp = this.getJimp();

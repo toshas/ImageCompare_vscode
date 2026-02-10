@@ -59,7 +59,7 @@ export type WebViewMessage =
   | { type: 'setCurrentTuple'; tupleIndex: number }
   | { type: 'tupleFullyLoaded'; tupleIndex: number }
   | { type: 'setWinner'; tupleIndex: number; modalityIndex: number | null } // null = clear winner
-  | { type: 'cropImages'; tupleIndex: number; cropRect: { x: number; y: number; w: number; h: number } }
+  | { type: 'cropImages'; tupleIndex: number; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
   | { type: 'deleteTuple'; tupleIndex: number }
   | { type: 'exportPptx'; tupleIndices: number[]; winnerModalityIndices: (number | null)[]; modalityOrder: number[] }
   | { type: 'log'; message: string };

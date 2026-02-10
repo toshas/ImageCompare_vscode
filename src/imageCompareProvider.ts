@@ -247,7 +247,7 @@ export class ImageCompareProvider {
         break;
 
       case 'cropImages':
-        await this.handleCropImages(state, message.tupleIndex, message.cropRect);
+        await this.handleCropImages(state, message.tupleIndex, message.cropRect, message.srcWidth, message.srcHeight);
         break;
 
       case 'deleteTuple':
@@ -407,6 +407,112 @@ export class ImageCompareProvider {
         return cropIndices;
       };
 
+      // Helper to find parent tuple for a crop tuple (strip _cropNN suffix)
+      const findParentTuple = (cropName: string): number => {
+        const match = cropName.match(/^(.+)_crop\d+$/);
+        if (!match) return -1;
+        return state.scanResult.tuples.findIndex(t => t.name === match[1]);
+      };
+
+      // Compute non-overlapping layout for crop slide: main image + callout thumbnail
+      const computeCropLayout = (cropAspect: number, fullAspect: number) => {
+        const gap = 0.15;
+        const defaultThumbW = 2;
+        const minThumbW = 1.2;
+
+        // Contain-fit crop image to full slide
+        let mainW: number, mainH: number;
+        if (cropAspect > slideWidth / slideHeight) {
+          mainW = slideWidth; mainH = slideWidth / cropAspect;
+        } else {
+          mainH = slideHeight; mainW = slideHeight * cropAspect;
+        }
+        let mainX = (slideWidth - mainW) / 2;
+        let mainY = (slideHeight - mainH) / 2;
+        const origArea = mainW * mainH;
+
+        // Thumbnail in bottom-right
+        let thumbW = defaultThumbW;
+        let thumbH = thumbW / fullAspect;
+        let thumbX = slideWidth - thumbW;
+        let thumbY = slideHeight - thumbH;
+
+        // Check overlap (with gap margin)
+        if (mainX + mainW > thumbX - gap && mainY + mainH > thumbY - gap) {
+          const tryFit = (tw: number) => {
+            const th = tw / fullAspect;
+            const tx = slideWidth - tw;
+            const avail = tx - gap;
+            let w: number, h: number;
+            if (cropAspect > avail / slideHeight) {
+              w = avail; h = avail / cropAspect;
+            } else {
+              h = slideHeight; w = slideHeight * cropAspect;
+            }
+            return {
+              mainW: w, mainH: h, mainX: (avail - w) / 2, mainY: slideHeight - h,
+              thumbW: tw, thumbH: th, thumbX: tx, thumbY: slideHeight - th
+            };
+          };
+
+          let fit = tryFit(defaultThumbW);
+          if (fit.mainW * fit.mainH < origArea * 0.7) {
+            fit = tryFit(minThumbW);
+          }
+          if (fit.mainW * fit.mainH >= origArea * 0.5) {
+            return fit;
+          }
+        }
+
+        return { mainW, mainH, mainX, mainY, thumbW, thumbH, thumbX, thumbY };
+      };
+
+      // Helper: add a crop slide (crop image main + full image callout with red rect)
+      const addCropSlide = async (
+        cropTupleIdx: number,
+        fullTupleIdx: number,
+        modality: string,
+        tupleName: string,
+        isWinner: boolean
+      ) => {
+        const cropTuple = state.scanResult.tuples[cropTupleIdx];
+        const cropImg = cropTuple.images.find(i => i.modality === modality);
+        if (!cropImg) return;
+        const cropImgData = await loadImageBase64(cropImg.uri);
+        if (!cropImgData) return;
+
+        const fullTuple = state.scanResult.tuples[fullTupleIdx];
+        const fullImg = fullTuple.images.find(i => i.modality === modality);
+        if (!fullImg) return;
+        const fullImgData = await loadImageBase64(fullImg.uri);
+        if (!fullImgData) return;
+
+        const cropAspect = cropImgData.width / cropImgData.height;
+        const fullAspect = fullImgData.width / fullImgData.height;
+        const layout = computeCropLayout(cropAspect, fullAspect);
+
+        const slide = pptx.addSlide();
+        slide.addImage({ data: cropImgData.data, x: layout.mainX, y: layout.mainY, w: layout.mainW, h: layout.mainH });
+        slide.addImage({ data: fullImgData.data, x: layout.thumbX, y: layout.thumbY, w: layout.thumbW, h: layout.thumbH });
+
+        // Read crop metadata from PNG to get exact coordinates
+        const cropMeta = await this.thumbnailService.readCropMetadata(cropImg.uri);
+        if (cropMeta) {
+          const scaleX = layout.thumbW / cropMeta.srcW;
+          const scaleY = layout.thumbH / cropMeta.srcH;
+          slide.addShape('rect', {
+            x: layout.thumbX + cropMeta.x * scaleX,
+            y: layout.thumbY + cropMeta.y * scaleY,
+            w: cropMeta.w * scaleX,
+            h: cropMeta.h * scaleY,
+            line: { color: 'FF0000', width: 2 },
+            fill: { type: 'none' }
+          });
+        }
+
+        addCaption(slide, tupleName, modality, isWinner);
+      };
+
       // Process each voted tuple
       for (let idx = 0; idx < tupleIndices.length; idx++) {
         const tupleIndex = tupleIndices[idx];
@@ -414,26 +520,41 @@ export class ImageCompareProvider {
         const tuple = state.scanResult.tuples[tupleIndex];
         if (!tuple) continue;
 
+        // Check if this voted tuple is itself a crop
+        const parentIdx = findParentTuple(tuple.name);
+        if (parentIdx >= 0) {
+          // This is a crop tuple — show crop image + parent full image callout
+          for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
+            const originalModIdx = modalityOrder[displayIdx];
+            const modality = state.scanResult.modalities[originalModIdx];
+            if (!modality) continue;
+            await addCropSlide(tupleIndex, parentIdx, modality, tuple.name, winnerIdx === originalModIdx);
+          }
+          continue;
+        }
+
+        // Non-crop tuple: check for crop children
         const cropTupleIndices = findCropTuples(tuple.name);
         const hasCrops = cropTupleIndices.length > 0;
+        // If any crop child is also voted, show parent as simple slide (voted crops get their own slides)
+        const hasVotedCrops = hasCrops && cropTupleIndices.some(ci => tupleIndices.includes(ci));
 
         // For each modality in display order
         for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
           const originalModIdx = modalityOrder[displayIdx];
           const modality = state.scanResult.modalities[originalModIdx];
           if (!modality) continue;
-          const img = tuple.images.find(i => i.modality === modality);
-          if (!img) continue;
-
           const isWinner = winnerIdx === originalModIdx;
-          const imgData = await loadImageBase64(img.uri);
-          if (!imgData) continue;
 
-          if (!hasCrops) {
-            // Simple case: no crops, just fit the full image
+          if (!hasCrops || hasVotedCrops) {
+            // Simple case: full image fit to slide
+            // (no crops, or crop children are voted separately — they get their own slides)
+            const img = tuple.images.find(i => i.modality === modality);
+            if (!img) continue;
+            const imgData = await loadImageBase64(img.uri);
+            if (!imgData) continue;
+
             const slide = pptx.addSlide();
-
-            // Calculate fit dimensions
             const imgAspect = imgData.width / imgData.height;
             const slideAspect = slideWidth / slideHeight;
             let imgW: number, imgH: number, imgX: number, imgY: number;
@@ -448,68 +569,15 @@ export class ImageCompareProvider {
               imgX = (slideWidth - imgW) / 2;
               imgY = 0;
             }
-
             slide.addImage({ data: imgData.data, x: imgX, y: imgY, w: imgW, h: imgH });
             addCaption(slide, tuple.name, modality, isWinner);
+          } else if (cropTupleIndices.length === 1) {
+            // Only parent voted, exactly one crop — present as if the crop was voted
+            await addCropSlide(cropTupleIndices[0], tupleIndex, modality, state.scanResult.tuples[cropTupleIndices[0]].name, isWinner);
           } else {
-            // Has crops: create a slide for each crop
+            // Multiple crop children, none voted: one slide per crop
             for (const cropTupleIdx of cropTupleIndices) {
-              const cropTuple = state.scanResult.tuples[cropTupleIdx];
-              const cropImg = cropTuple.images.find(i => i.modality === modality);
-              if (!cropImg) continue;
-
-              const cropImgData = await loadImageBase64(cropImg.uri);
-              if (!cropImgData) continue;
-
-              const slide = pptx.addSlide();
-
-              // Main area: cropped image fit to slide
-              const cropAspect = cropImgData.width / cropImgData.height;
-              const slideAspect = slideWidth / slideHeight;
-              let cropW: number, cropH: number, cropX: number, cropY: number;
-              if (cropAspect > slideAspect) {
-                cropW = slideWidth;
-                cropH = slideWidth / cropAspect;
-                cropX = 0;
-                cropY = (slideHeight - cropH) / 2;
-              } else {
-                cropH = slideHeight;
-                cropW = slideHeight * cropAspect;
-                cropX = (slideWidth - cropW) / 2;
-                cropY = 0;
-              }
-
-              slide.addImage({ data: cropImgData.data, x: cropX, y: cropY, w: cropW, h: cropH });
-
-              // Bottom-right corner: smaller full image with crop region indicator (flush to corner)
-              const thumbW = 2; // inches
-              const thumbH = thumbW / (imgData.width / imgData.height);
-              const thumbX = slideWidth - thumbW;
-              const thumbY = slideHeight - thumbH;
-              slide.addImage({ data: imgData.data, x: thumbX, y: thumbY, w: thumbW, h: thumbH });
-
-              // Read crop metadata from PNG to get exact coordinates
-              const cropMeta = await this.thumbnailService.readCropMetadata(cropImg.uri);
-              if (cropMeta) {
-                // Scale crop rect from source image pixels to thumbnail inches
-                const scaleX = thumbW / cropMeta.srcW;
-                const scaleY = thumbH / cropMeta.srcH;
-                const rectX = thumbX + cropMeta.x * scaleX;
-                const rectY = thumbY + cropMeta.y * scaleY;
-                const rectW = cropMeta.w * scaleX;
-                const rectH = cropMeta.h * scaleY;
-
-                slide.addShape('rect', {
-                  x: rectX,
-                  y: rectY,
-                  w: rectW,
-                  h: rectH,
-                  line: { color: 'FF0000', width: 2 },
-                  fill: { type: 'none' }
-                });
-              }
-
-              addCaption(slide, cropTuple.name, modality, isWinner);
+              await addCropSlide(cropTupleIdx, tupleIndex, modality, state.scanResult.tuples[cropTupleIdx].name, isWinner);
             }
           }
         }
@@ -554,7 +622,9 @@ export class ImageCompareProvider {
   private async handleCropImages(
     state: PanelState,
     tupleIndex: number,
-    cropRect: { x: number; y: number; w: number; h: number }
+    cropRect: { x: number; y: number; w: number; h: number },
+    srcWidth: number,
+    srcHeight: number
   ): Promise<void> {
     const tuple = state.scanResult.tuples[tupleIndex];
     if (!tuple) return;
@@ -572,6 +642,15 @@ export class ImageCompareProvider {
     const cropSuffix = `_crop${String(cropNum).padStart(2, '0')}`;
     const outputName = `${tupleName}${cropSuffix}.png`;
 
+    // Convert crop rect to relative coordinates (0-1) based on source image,
+    // so it can be scaled to each modality's actual resolution.
+    const relRect = {
+      x: cropRect.x / srcWidth,
+      y: cropRect.y / srcHeight,
+      w: cropRect.w / srcWidth,
+      h: cropRect.h / srcHeight
+    };
+
     let savedCount = 0;
     const savedPaths: string[] = [];
 
@@ -579,19 +658,20 @@ export class ImageCompareProvider {
       const dirUri = vscode.Uri.joinPath(imageFile.uri, '..');
       const outputUri = vscode.Uri.joinPath(dirUri, outputName);
 
-      // Clamp crop rect to actual image dimensions
+      // Scale relative crop rect to this modality's actual dimensions
       const meta = await this.thumbnailService.getImageDimensions(imageFile.uri);
-      const clampedRect = {
-        x: Math.max(0, Math.min(cropRect.x, meta.width - 1)),
-        y: Math.max(0, Math.min(cropRect.y, meta.height - 1)),
-        w: cropRect.w,
-        h: cropRect.h
+      const scaledRect = {
+        x: Math.max(0, Math.round(relRect.x * meta.width)),
+        y: Math.max(0, Math.round(relRect.y * meta.height)),
+        w: Math.round(relRect.w * meta.width),
+        h: Math.round(relRect.h * meta.height)
       };
-      clampedRect.w = Math.min(clampedRect.w, meta.width - clampedRect.x);
-      clampedRect.h = Math.min(clampedRect.h, meta.height - clampedRect.y);
-      if (clampedRect.w <= 0 || clampedRect.h <= 0) return;
+      // Clamp to image bounds
+      scaledRect.w = Math.min(scaledRect.w, meta.width - scaledRect.x);
+      scaledRect.h = Math.min(scaledRect.h, meta.height - scaledRect.y);
+      if (scaledRect.w <= 0 || scaledRect.h <= 0) return;
 
-      const croppedBuffer = await this.thumbnailService.cropImage(imageFile.uri, clampedRect, meta.width, meta.height);
+      const croppedBuffer = await this.thumbnailService.cropImage(imageFile.uri, scaledRect, meta.width, meta.height);
       await vscode.workspace.fs.writeFile(outputUri, croppedBuffer);
       savedCount++;
       savedPaths.push(outputUri.path);

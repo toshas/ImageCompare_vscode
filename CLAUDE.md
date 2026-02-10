@@ -264,13 +264,15 @@ image002 = modB
 - New files trigger file watcher → appear as new tuples in the carousel
 
 ### Coordinate Mapping
-All crop coordinates are tracked in image-pixel space:
+Crop coordinates are tracked in image-pixel space of the current modality:
 ```
 baseScale = Math.min(viewerW / imgW, viewerH / imgH)
 displayScale = baseScale * zoom
 imageX = (screenX - viewerCenterX - panX) / displayScale + imgW / 2
 imageY = (screenY - viewerCenterY - panY) / displayScale + imgH / 2
 ```
+
+When saving, the pixel-space rect is converted to relative coordinates (0–1) based on the source image dimensions, then scaled to each modality's actual resolution. This handles modalities with different image sizes (e.g., 4K vs 1080p). The webview sends `srcWidth`/`srcHeight` alongside the crop rect in the `cropImages` message.
 
 ### Implementation
 - **`webview/crop.ts`** — Crop mode state, overlay DOM, mouse/key handlers, coordinate conversion
@@ -289,12 +291,14 @@ Crop files embed their source coordinates for PPTX export callouts.
   - `srcW, srcH` — original source image dimensions
 
 ### Writing
-- **Sharp path**: EXIF `ImageDescription` field via `.withMetadata({ exif: { IFD0: { ImageDescription: ... } } })`
+- **Sharp path**: EXIF `ImageDescription` field via `.withMetadata({ exif: { IFD0: { ImageDescription: ... } } })` **plus** PNG `tEXt` chunk via `pngInjectText()` for cross-compatibility with the standalone HTML tool
 - **Jimp path**: Manual PNG `tEXt` chunk injection via `pngInjectText()` — builds the chunk bytes (keyword + null + value + CRC32) and inserts before IEND
 
+Both paths always produce a PNG tEXt chunk, ensuring crops are readable by both the VSCode extension and the standalone HTML tool.
+
 ### Reading (`readCropMetadata()`)
-1. Try EXIF `ImageDescription` via Sharp (handles Sharp-written crops)
-2. Fallback: Parse PNG `tEXt` chunks via `pngReadText()` (handles Jimp-written crops)
+1. Try EXIF `ImageDescription` via Sharp (fast path when Sharp is available)
+2. Fallback: Parse PNG `tEXt` chunks via `pngReadText()` (works for all writers)
 
 Both `pngInjectText` and `pngReadText` are standalone functions in `thumbnailService.ts` that operate on raw PNG buffers. They scan PNG chunk structure properly (not hardcoded offsets).
 
@@ -316,11 +320,16 @@ Exports all voted tuples to a PowerPoint file. Triggered by the "PPTX" button in
 
 ### Slide Types
 
-**Simple (no crops)**: Full image "contain"-fit to the slide, centered.
+**Simple (no crops)**: Full image "contain"-fit to the slide, centered. Also used when parent and crop are both voted (voted crops get their own slides).
 
-**With crops**: For each crop file of a voted tuple:
-- Main area: cropped image fit to slide
-- Bottom-right corner: small full image (2" wide) with red rectangle overlay showing crop region
+**Voted crop tuple**: Automatically finds the parent tuple (strips `_cropNN` suffix) and creates a crop slide even if the parent wasn't voted for.
+
+**Smart parent/crop logic**: When only parent is voted with exactly one crop child, auto-expands as crop slide. When parent and crop are both voted, parent becomes simple slide (crops handled separately).
+
+**Crop slide layout**:
+- Main area: cropped image fit to slide (bottom-anchored when shifted to avoid overlap)
+- Bottom-right corner: small full image with red rectangle overlay showing crop region
+- Non-overlapping: main image shifts left, thumbnail shrinks if needed, accepts overlap only for near-16:9 crops
 - Crop region coordinates read from PNG tEXt metadata
 
 ### Image Loading

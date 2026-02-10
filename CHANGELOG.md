@@ -2,6 +2,17 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.2.1] - 2026
+
+### Added
+- **PPTX smart parent/crop logic**: When parent and crop are both voted, parent shows as simple full-image slide (voted crops get their own slides). When only parent is voted with exactly one crop, presents as if the crop was voted (crop slide with callout)
+- **PPTX non-overlapping crop layout**: Crop centerpiece and callout thumbnail no longer overlap — main image shifts left, thumbnail shrinks if needed
+- **Crop scales to each modality's resolution**: Crop rect converted to relative coordinates (0–1) then scaled per-modality, fixing incorrect crops with different image sizes (e.g., 4K vs 1080p)
+- **Crop metadata cross-compatibility**: Sharp path now also injects PNG tEXt chunk alongside EXIF, so crops are readable by the standalone HTML tool
+
+### Fixed
+- **PPTX crop centerpiece anchored to bottom**: When downsized to avoid overlap, the crop image stays flush with the bottom edge instead of floating mid-slide
+
 ## [0.2.0] - 2026
 
 ### Added
