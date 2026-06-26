@@ -140,6 +140,33 @@ let votingEnabled = false;
 let showZoomInStatus = true;
 let ppmxColormap: 'grayscale' | 'jet' = 'grayscale';
 
+// ---------------------------------------------------------------------------
+// Test hook — read-only snapshot of UI state for the Playwright webview testbed
+// (test/webview). Lets specs assert logic (zoom/pan/selection/crop) without
+// reading canvas pixels. Inert in production: nothing calls it unless a test
+// harness sets `window.__ic_test_enabled = true`, and it only ever reads state.
+// ---------------------------------------------------------------------------
+if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
+  (window as unknown as { __ic_test: unknown }).__ic_test = {
+    getState: () => ({
+      currentTupleIndex,
+      currentModalityIndex,
+      currentTupleName: tuples[currentTupleIndex]?.name ?? null,
+      tupleCount: tuples.length,
+      modalityCount: modalities.length,
+      modalityOrder: modalityOrder.slice(),
+      zoom,
+      panX,
+      panY,
+      cropMode: crop.cropMode,
+      cropRect: crop.cropRect ? { ...crop.cropRect } : null,
+      winners: Array.from(winners.entries()),
+      votingEnabled,
+      ppmxColormap,
+    }),
+  };
+}
+
 // Status line composition state
 let baseStatusInfo = '';
 let pointerStatusInfo = '';
