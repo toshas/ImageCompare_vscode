@@ -24,3 +24,6 @@ vitest.config.d.ts.map
 # stray tsc declaration output under test/
 test/**/*.d.ts
 test/**/*.d.ts.map
+
+# Demo recordings (raw); the built gallery/ webps are kept
+test/demos/raw/

@@ -106,7 +106,8 @@
     "test:integration": "tsc -p tsconfig.integration.json && vscode-test",
     "test:all": "npm run test:unit && npm run compile && npm run test:webview && npm run test:integration",
     "test:dashboard": "node test/dashboard/generate.mjs",
-    "test:dashboard:reuse": "node test/dashboard/generate.mjs --reuse"
+    "test:dashboard:reuse": "node test/dashboard/generate.mjs --reuse",
+    "test:demos": "playwright test --config=playwright.demos.config.ts && node test/demos/build-gallery.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
