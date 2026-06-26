@@ -1,6 +1,6 @@
 # ImageCompare — Feature Coverage
 
-**41/62 features tested** · 66% · generated 2026-06-26 12:58
+**52/62 features tested** · 84% · generated 2026-06-26 16:05
 
 Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 
@@ -14,14 +14,14 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | ✅ | ↓ next tuple | `webview`: Down/Up move between tuples |
 | ✅ | ↑ previous tuple | `webview`: Down/Up move between tuples |
 | ✅ | 1–9 jump to modality N | `webview`: number keys jump to a modality |
-| ⬜ | Space (hold) flip to previous modality | — |
+| ✅ | Space (hold) flip to previous modality | `webview`: Space (hold) flips to the previous modality |
 
 ## Keyboard — actions
 
 | | Feature | Covered by |
 |---|---|---|
 | ✅ | ] reorder modality right | `webview`: ] key reorder also keeps tooltips correct |
-| ⬜ | [ reorder modality left | — |
+| ✅ | [ reorder modality left | `webview`: reorders the current modality left |
 | ✅ | Enter toggle winner | `webview`: Enter toggles a winner and posts setWinner |
 | ✅ | C toggle crop mode | `webview`: C enters crop mode |
 | ✅ | Esc reset zoom / cancel crop / close help | `webview`: Escape cancels crop mode<br>`webview`: wheel zooms in; Escape resets |
@@ -32,8 +32,8 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | | Feature | Covered by |
 |---|---|---|
 | ✅ | Scroll wheel zoom in/out | `webview`: wheel zooms in; Escape resets |
-| ⬜ | Drag to pan | — |
-| ⬜ | Click modality pill to switch | — |
+| ✅ | Drag to pan | `webview`: drag pans the image when zoomed in |
+| ✅ | Click modality pill to switch | `webview`: clicking a modality pill switches modality |
 | ⬜ | Value-under-cursor (PPMX pixel readout) | — |
 
 ## Tools window (floating panel)
@@ -43,11 +43,11 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | ✅ | Crop button | `webview`: shows the floating panel tools<br>`webview`: C enters crop mode |
 | ✅ | Delete button → deleteTuple | `webview`: shows the floating panel tools |
 | ✅ | PPTX button → exportPptx | `webview`: shows the floating panel tools |
-| ⬜ | Show-zoom toggle | — |
-| ⬜ | PPMX colormap select (grayscale/jet) | — |
+| ✅ | Show-zoom toggle | `webview`: show-zoom toggle hides the zoom readout |
+| ✅ | PPMX colormap select (grayscale/jet) | `webview`: PPMX colormap select posts setPpmxColormap |
 | ⬜ | Minimap navigator + viewport rect | — |
 | ⬜ | Drag panel to reposition | — |
-| ⬜ | Collapse/expand panel | — |
+| ✅ | Collapse/expand panel | `webview`: collapse button toggles the floating panel |
 
 ## Crop tool
 
@@ -74,7 +74,7 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | | Feature | Covered by |
 |---|---|---|
 | ✅ | Toggle winner via Enter | `webview`: Enter toggles a winner and posts setWinner |
-| ⬜ | Toggle winner via carousel circle click | — |
+| ✅ | Toggle winner via carousel circle click | `webview`: clicking a carousel winner circle posts setWinner |
 | ⬜ | Win counts shown on pills | — |
 | ✅ | Persistence to results.txt | `integration`: write then read round-trips<br>`integration`: CRLF-encoded results |
 
@@ -83,7 +83,7 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | | Feature | Covered by |
 |---|---|---|
 | ✅ | Thumbnail grid renders | `webview`: renders the viewer and ingests fixtures |
-| ⬜ | Click thumbnail to navigate | — |
+| ✅ | Click thumbnail to navigate | `webview`: clicking a carousel thumbnail navigates |
 | ⬜ | Scroll carousel | — |
 | ⬜ | Drag resize handle | — |
 
@@ -96,8 +96,8 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | ✅ | Active pill reflects current modality | `webview`: active modality pill reflects current modality |
 | ✅ | Canvas renders the image (visual) | `webview`: canvas renders modality 0<br>`webview`: canvas renders modality 1 |
 | ✅ | Status bar layout (visual) | `webview`: status bar + modality pills layout |
-| ⬜ | Zoom % readout in status | — |
-| ⬜ | Help modal (? open / close) | — |
+| ✅ | Zoom % readout in status | `webview`: show-zoom toggle hides the zoom readout |
+| ✅ | Help modal (? open / close) | `webview`: opens the help modal and Esc closes it |
 
 ## Backend — scanning & matching
 
