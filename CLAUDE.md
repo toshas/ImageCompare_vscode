@@ -389,6 +389,27 @@ npm run compile      # One-off build
 
 ## Testing
 
+The test strategy and layout live in **[TESTING.md](TESTING.md)**. Three layers:
+
+```bash
+npm run test:unit         # Layer 1 — Vitest, pure logic on real code (fast)
+npm run test:webview      # Layer 3 — Playwright drives the real webview bundle
+                          #           out-of-process (run `npm run compile` first)
+npm run test:integration  # Layer 2 — @vscode/test-cli inside a real VSCode
+npm run test:all          # everything
+npm run test:webview:update  # regenerate visual baselines (canonical Mac only)
+```
+
+- **Layer 1** (`test/unit/`) imports real production functions via a `vscode` mock
+  alias (`test/mocks/vscode.ts`); no hand-copied logic.
+- **Layer 3** (`test/webview/`) loads the real `dist/webview.js` against a harness
+  that reuses the production shell (`src/webviewShell.ts`) and stubs
+  `acquireVsCodeApi`. Specs assert via the `window.__ic_test` hook and visual
+  snapshots. Baselines under `test/webview/__screenshots__/` are **local-only**
+  (darwin) — see TESTING.md.
+- **Layer 2** (`test/integration/`) exercises vscode-API-coupled code (e.g.
+  `scanForImages`) on temp fixtures.
+
 ### Image Backend Tests
 
 To verify the Sharp → WASM → Jimp fallback chain works, create a test script in the project root (it needs access to `node_modules/`):
