@@ -1687,6 +1687,9 @@ function moveCurrentModality(direction: number) {
   // Swap in colors
   [modalityColors[currentPos], modalityColors[newPos]] = [modalityColors[newPos], modalityColors[currentPos]];
 
+  // Swap in paths so the pill tooltip (original path) follows the reordered name
+  [modalityPaths[currentPos], modalityPaths[newPos]] = [modalityPaths[newPos], modalityPaths[currentPos]];
+
   // Swap in modalityOrder (tracks original index at each display position)
   [modalityOrder[currentPos], modalityOrder[newPos]] = [modalityOrder[newPos], modalityOrder[currentPos]];
 
