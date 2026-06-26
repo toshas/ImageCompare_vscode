@@ -32,6 +32,18 @@ package-lock.json
 # Development docs
 CLAUDE.md
 PLAN.md
+plan.md
+TESTING.md
+FEATURES.md
+test-dashboard.html
+
+# Testing bed and dev tooling (not shipped)
+test/**
+.github/**
+.dashboard-data/**
+playwright.config.ts
+vitest.config.ts
+.vscode-test.mjs
 
 # Test data
 test_images/**
