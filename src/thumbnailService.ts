@@ -14,7 +14,7 @@ interface PpmxOrientationHint {
  * Inject a PNG tEXt chunk into a PNG buffer (before IEND).
  * tEXt chunk: keyword + \0 + value, wrapped in length + "tEXt" + CRC32.
  */
-function pngInjectText(png: Buffer, keyword: string, value: string): Buffer {
+export function pngInjectText(png: Buffer, keyword: string, value: string): Buffer {
   const keyBuf = Buffer.from(keyword, 'latin1');
   const valBuf = Buffer.from(value, 'latin1');
   const data = Buffer.concat([keyBuf, Buffer.from([0]), valBuf]);
@@ -41,7 +41,7 @@ function pngInjectText(png: Buffer, keyword: string, value: string): Buffer {
  * Read a PNG tEXt chunk value by keyword from a raw PNG buffer.
  * Scans all chunks; returns null if not found.
  */
-function pngReadText(png: Buffer, keyword: string): string | null {
+export function pngReadText(png: Buffer, keyword: string): string | null {
   // PNG signature is 8 bytes, then chunks
   let offset = 8;
   while (offset + 8 <= png.length) {

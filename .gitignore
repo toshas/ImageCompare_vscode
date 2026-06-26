@@ -1,4 +1,5 @@
 .DS_Store
+.claude/settings.local.json
 node_modules/
 dist/
 out/
@@ -7,3 +8,19 @@ out/
 
 # Test data (large image files)
 test_images/
+
+# Test artifacts
+out-integration/
+.dashboard-data/
+test-results/
+playwright-report/
+test/webview/harness/
+# Note: test/webview/__screenshots__/ (visual baselines) IS committed.
+
+# stray tsc declaration output
+vitest.config.d.ts
+vitest.config.d.ts.map
+
+# stray tsc declaration output under test/
+test/**/*.d.ts
+test/**/*.d.ts.map
