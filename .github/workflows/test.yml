@@ -1,0 +1,51 @@
+name: Tests
+
+# Cross-platform test matrix. Lightweight (unit + integration only) so it stays
+# well within free Actions quota; webview UX tests are OS-agnostic and run
+# locally. Native risks (Sharp per-platform binary, FS watcher) are exactly what
+# this matrix proves on Windows/Linux/macOS.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to avoid burning minutes.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Builds dist/extension.js + dist/webview.js (needed by integration tests
+      # which activate the real extension) and installs the host-OS Sharp binary.
+      - run: npm run compile
+
+      - name: Unit tests (Vitest)
+        run: npm run test:unit
+
+      # Integration tests launch a real headless VSCode. Linux needs a virtual
+      # display; macOS/Windows run it directly.
+      - name: Integration tests (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:integration
+
+      - name: Integration tests (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: npm run test:integration
