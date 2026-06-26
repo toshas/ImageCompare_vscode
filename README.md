@@ -133,6 +133,28 @@ PNG, JPG, JPEG, GIF, BMP, WebP, TIFF, PPMX
 | `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime |
 | `imageCompare.debug` | false | Enable debug logging in webview console |
 
+## Development & Testing
+
+Contributing? The project ships a full testing bed:
+
+```bash
+npm install
+npm run compile          # build dist/ (extension + webview bundle)
+npm run test:unit        # fast pure-logic tests (Vitest)
+npm run test:webview     # webview UX tests (Playwright, real bundle)
+npm run test:integration # runs inside a real headless VS Code
+npm run test:dashboard   # → FEATURES.md + test-dashboard.html (per-feature coverage)
+npm run test:demos       # → feature-demos.html (a captioned clip of each feature)
+```
+
+- **[TESTING.md](TESTING.md)** — the 3-layer test strategy and how the
+  out-of-process webview harness works.
+- **[plan.md](plan.md)** — current coverage status and the backlog.
+- **Feature coverage dashboard** (`test-dashboard.html` / `FEATURES.md`) shows
+  which features are tested, lit from real test results.
+- **Feature demo gallery** (`feature-demos.html`) — short captioned clips of
+  each interaction.
+
 ## Feedback & Issues
 
 Found a bug or have a feature request? [Open an issue on GitHub](https://github.com/toshas/ImageCompare_vscode/issues)

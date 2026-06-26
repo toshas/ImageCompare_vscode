@@ -433,37 +433,39 @@ npx tsc --outDir /tmp/test_out --declaration --declarationMap --skipLibCheck
 # Then require('/tmp/test_out/sharpLoader.js') in the test
 ```
 
-### Tuple Matching Tests
+> Tuple matching (`matchTuplesWithTrie`) and PNG tEXt chunk logic are covered by
+> the **Layer 1** unit tests in `test/unit/` (`tupleMatching.test.ts`,
+> `pngTextChunk.test.ts`). These import the **real** exported functions via the
+> `vscode` mock alias — there are no hand-copied versions to drift. Run with
+> `npm run test:unit`. (The old standalone `npx ts-node src/test/*.test.ts`
+> scripts have been retired.)
 
-Run the standalone tuple matching tests:
+### Feature Coverage Dashboard
+
+`test/dashboard/features.json` maps every feature (keyboard, tools, crop, zoom,
+backend) to the test(s) that cover it. The generator runs all suites with JSON
+reporters and lights each feature green/red/gray from **real** results:
+
 ```bash
-npx ts-node src/test/tupleMatching.test.ts
+npm run test:dashboard        # run all suites + regenerate
+npm run test:dashboard:reuse  # regenerate from the last run's JSON
+open test-dashboard.html      # or read FEATURES.md
 ```
 
-These tests exercise `matchTuplesWithTrie()` logic with real-world filename patterns:
-- **Test 1**: User tree with originals + crop01 files (5 modalities, 5 tuples)
-- **Test 2**: Originals + crop01 + crop01_crop01 (nested crops)
-- **Test 3**: Baseline (no crop files)
-- **Test 4**: `_pred` should match `_gt`, not `_crop01` (equal lenDiff, prefer shorter ref)
-- **Test 5**: Long modality name should match `_gt`, not `_crop01` (crop explicitly deprioritized)
+Untested features show as gaps (not false-green); the backlog lives in `plan.md`.
 
-The tests use pure TypeScript copies of the matching functions (no vscode dependency) for fast execution.
+### Feature Demos
 
-### PNG tEXt Chunk Tests
+`test/demos/` records a short, captioned clip of each feature being used (on
+legible generated fixtures), via Playwright → ffmpeg → small VP9 webm
+(~20-60 KB each). The gallery is `feature-demos.html`.
 
-Run the PNG metadata injection/reading tests:
 ```bash
-npx ts-node src/test/pngTextChunk.test.ts
+npm run test:demos            # record + rebuild the gallery
+open feature-demos.html
 ```
 
-Tests verify:
-- Basic keyword/value round-trip injection and reading
-- Crop metadata format (`x,y,w,h,srcW,srcH`) round-trip with parsing
-- Missing/wrong keyword returns null
-- Multiple tEXt chunks coexist independently
-- PNG structure preserved (signature, IEND intact)
-- Sharp validates modified PNGs (still a valid image)
-- Large coordinate values
+Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
 
 ### File Watching Tests
 
