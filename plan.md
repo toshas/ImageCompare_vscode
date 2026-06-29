@@ -25,11 +25,12 @@ maps to the real test(s) that cover it. The generator runs Vitest + Playwright +
 |-------|--------|-------|
 | 1 — Unit | Vitest | 29 (incl. cross-platform path logic) |
 | 2 — Integration | @vscode/test-cli (real VSCode) | 7 |
-| 3 — Webview UX | Playwright (real bundle, out-of-process) | 16 + 3 visual baselines |
+| 3 — Webview UX | Playwright (real bundle, out-of-process) | 26 (incl. 10 UI-interaction tests + 3 visual baselines) |
 
-Cross-platform: logic tested from macOS via Windows-style inputs; a guarded
-3-OS CI matrix ([.github/workflows/test.yml](.github/workflows/test.yml)) proves
-native Sharp + fs behavior on Windows/Linux/macOS.
+**CI status:** the 3-OS matrix ([.github/workflows/test.yml](.github/workflows/test.yml))
+ran green on **ubuntu / windows / macos** (2026-06-29) — unit + integration pass
+on each platform with its native Sharp binary. Status badge is in the README.
+Cross-platform logic is also tested from macOS via Windows-style inputs.
 
 ## Findings surfaced by the testbed
 

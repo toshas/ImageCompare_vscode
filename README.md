@@ -1,5 +1,6 @@
 # ImageCompare
 
+[![Tests](https://github.com/AndreiDavydov/ImageCompare_vscode/actions/workflows/test.yml/badge.svg)](https://github.com/AndreiDavydov/ImageCompare_vscode/actions/workflows/test.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/toshas/ImageCompare_vscode?label=GitHub%20%E2%98%85&logo=github&color=C8C)](https://github.com/toshas/ImageCompare_vscode)
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/obukhovai.image-compare?label=VS%20Code%20Marketplace&color=006600)](https://marketplace.visualstudio.com/items?itemName=obukhovai.image-compare)
 [![Cursor, VSCodium, Windsurf](https://img.shields.io/open-vsx/v/obukhovai/image-compare?label=Cursor%2C%20VSCodium%2C%20Windsurf&color=006600)](https://open-vsx.org/extension/obukhovai/image-compare)
