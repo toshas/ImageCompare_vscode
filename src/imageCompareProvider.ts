@@ -6,6 +6,7 @@ import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, 
 import { ThumbnailService } from './thumbnailService';
 import { parsePpmx, parsePpmxRaw, PpmxOrientationHint } from './ppmxParser';
 import { renderWebviewHtml } from './webviewShell';
+import { copyFilesToClipboard, clipboardFileCount, stageForUniqueNames } from './clipboardFiles';
 import {
   ScanResult,
   TupleInfo,
@@ -299,9 +300,72 @@ export class ImageCompareProvider {
         await this.handleExportPptx(state, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
         break;
 
+      case 'copyFiles':
+        await this.handleCopyFiles(state, message.items);
+        break;
+
+      case 'copyImageResult':
+        if (message.ok) {
+          vscode.window.setStatusBarMessage('ImageCompare: image copied to clipboard', 2000);
+        } else {
+          vscode.window.showWarningMessage(
+            `ImageCompare: couldn't copy image — ${message.error ?? 'unknown error'}`,
+          );
+        }
+        break;
+
       case 'log':
         // WebView debug messages (disabled in production)
         break;
+    }
+  }
+
+  /**
+   * Copy the selected images as FILES to the OS clipboard (multi-select copy).
+   * Resolves (tupleIndex, modalityIndex) pairs to file paths, then delegates to
+   * copyFilesToClipboard (native on macOS/Windows, text fallback + warning on Linux).
+   */
+  private async handleCopyFiles(
+    state: PanelState,
+    items: { tupleIndex: number; modalityIndex: number }[],
+  ): Promise<void> {
+    try {
+      const resolved: { path: string; label: string }[] = [];
+      for (const it of items) {
+        const tuple = state.scanResult.tuples[it.tupleIndex];
+        const modality = state.scanResult.modalities[it.modalityIndex];
+        if (!tuple || !modality) continue;
+        const img = this.findImageForModality(tuple, modality);
+        if (img && img.uri.scheme === 'file') resolved.push({ path: img.uri.fsPath, label: modality });
+      }
+      if (resolved.length === 0) {
+        state.panel.webview.postMessage({ type: 'copyError', error: 'No local files to copy' });
+        return;
+      }
+      // Defend against BOTH failure modes that silently drop files at paste time:
+      //  - duplicate PATHS (two tiles resolving to the same file): collapse them.
+      //  - duplicate NAMES (same basename across modalities): stage copies with
+      //    disambiguated names so every file pastes (see stageForUniqueNames).
+      const seen = new Set<string>();
+      const deduped = resolved.filter((r) => (seen.has(r.path) ? false : (seen.add(r.path), true)));
+      const finalPaths = stageForUniqueNames(deduped);
+
+      const res = await copyFilesToClipboard(finalPaths);
+      state.panel.webview.postMessage({ type: 'copyComplete', count: res.count, method: res.method });
+
+      // Diagnostic: counts along the pipeline so any drop is pinpointed.
+      const v = (this.context.extension?.packageJSON?.version as string) ?? '?';
+      const onClip = await clipboardFileCount();
+      const uniquePaths = new Set(resolved.map((r) => r.path)).size;
+      const uniqueNames = new Set(resolved.map((r) => path.basename(r.path))).size;
+      vscode.window.setStatusBarMessage(
+        `ImageCompare v${v}: items=${items.length} resolved=${resolved.length} uniquePaths=${uniquePaths} uniqueNames=${uniqueNames} copied=${res.count} onClipboard=${onClip}`,
+        9000,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      state.panel.webview.postMessage({ type: 'copyError', error: msg });
+      vscode.window.showErrorMessage(`ImageCompare: copy failed — ${msg}`);
     }
   }
 

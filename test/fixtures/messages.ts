@@ -13,6 +13,12 @@ export interface FixtureSpec {
   width: number;
   height: number;
   votingEnabled: boolean;
+  /** (tupleIndex, modalityIndex) slots with NO image (missing modality). */
+  emptySlots?: [number, number][];
+}
+
+function isEmptySlot(spec: FixtureSpec, t: number, m: number): boolean {
+  return (spec.emptySlots ?? []).some(([et, em]) => et === t && em === m);
 }
 
 export const DEFAULT_SPEC: FixtureSpec = {
@@ -39,7 +45,9 @@ export function initMessage(spec: FixtureSpec = DEFAULT_SPEC) {
   const tuples = spec.tupleNames.map((name, tupleIndex) => ({
     name,
     images: spec.modalities.map((modality, modalityIndex) => ({
-      name: `${name}_${modality}.png`,
+      // Empty name = missing modality for this tuple (matches the extension's
+      // TupleInfo.images, where absent modalities get name: '').
+      name: isEmptySlot(spec, tupleIndex, modalityIndex) ? '' : `${name}_${modality}.png`,
       modality,
       tupleIndex,
       modalityIndex,
@@ -63,6 +71,7 @@ export function imageMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   const msgs: Array<Record<string, unknown>> = [];
   spec.tupleNames.forEach((_n, tupleIndex) => {
     spec.modalities.forEach((_m, modalityIndex) => {
+      if (isEmptySlot(spec, tupleIndex, modalityIndex)) return;
       msgs.push({
         type: 'image',
         tupleIndex,
@@ -81,6 +90,7 @@ export function thumbnailMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   const msgs: Array<Record<string, unknown>> = [];
   spec.tupleNames.forEach((_n, tupleIndex) => {
     spec.modalities.forEach((_m, modalityIndex) => {
+      if (isEmptySlot(spec, tupleIndex, modalityIndex)) return;
       msgs.push({
         type: 'thumbnail',
         tupleIndex,

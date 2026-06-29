@@ -2,6 +2,12 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [0.2.2] - 2026
+
+### Added
+- **Copy images to the clipboard** (`⌘/Ctrl+C`): copies the current image as a PNG bitmap, or — with a marquee selection in the carousel — copies the selected images as FILES (Finder/Explorer-style). Drag in the carousel to marquee-select thumbnails with edge auto-scroll; empty (missing-modality) tiles are skipped. Native file-copy on macOS and Windows; Linux falls back to copying the file paths as text with a warning.
+  - macOS multi-file copy writes the modern `public.file-url` pasteboard items via `NSPasteboard.writeObjects` and lets the pasteboard server flush before the helper exits, so all N selected files paste (not N−1).
+
 ## [0.2.1] - 2026
 
 ### Added

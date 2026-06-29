@@ -62,6 +62,8 @@ Select multiple folders (Ctrl+Click) → Right-click → **"Open in ImageCompare
 | `Scroll` | Zoom in/out |
 | `Drag` | Pan image |
 | `C` | Toggle crop mode |
+| `⌘/Ctrl`+`C` | Copy current image (or, with a selection, the selected files) |
+| `Drag` (in carousel) | Marquee-select multiple thumbnails |
 | `Del` | Delete current tuple files |
 | `Esc` | Reset zoom / cancel crop |
 
@@ -89,6 +91,12 @@ Press `C` or click the Crop button in the floating Tools panel to enter crop mod
 3. Press `Enter` or click the checkmark to crop all modalities at the same coordinates
 
 Cropped files are saved as `_cropNN.png` alongside the originals and appear as new tuples in the carousel.
+
+### Copy & Multi-select
+
+Press `⌘/Ctrl`+`C` to copy the current image to the clipboard as a pasteable bitmap — drop it straight into a doc, chat, or issue.
+
+Need several at once? Drag a marquee over the carousel thumbnails (Explorer-style — it auto-scrolls when you reach the edges) to select multiple images, then `⌘/Ctrl`+`C` copies those **files** to the clipboard so you can paste them into Finder/Explorer or attach them to an email. (On Linux there's no native file-clipboard, so the paths are copied as text and a notice is shown.)
 
 ### PowerPoint Export
 

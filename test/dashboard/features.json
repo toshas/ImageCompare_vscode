@@ -670,6 +670,95 @@
           ]
         }
       ]
+    },
+    {
+      "area": "Copy & multi-select",
+      "features": [
+        {
+          "id": "copy-image-bitmap",
+          "name": "⌘/Ctrl+C copy current image (bitmap)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "writes an image/png to the clipboard"
+            }
+          ]
+        },
+        {
+          "id": "marquee-select",
+          "name": "Marquee multi-select (drag over tiles)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "dragging selects multiple tiles"
+            }
+          ]
+        },
+        {
+          "id": "marquee-autoscroll",
+          "name": "Marquee auto-scroll at carousel edges (Explorer-style)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "auto-scrolls and extends the selection"
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-files",
+          "name": "⌘/Ctrl+C copy selected files",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "posts copyFiles"
+            }
+          ]
+        },
+        {
+          "id": "selection-clear",
+          "name": "Click empty space clears selection",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "clears the selection"
+            }
+          ]
+        },
+        {
+          "id": "copy-files-mac",
+          "name": "Copy files — macOS (osascript)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "macOS uses osascript"
+            }
+          ]
+        },
+        {
+          "id": "copy-files-win",
+          "name": "Copy files — Windows (Set-Clipboard)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "Windows uses PowerShell"
+            }
+          ]
+        },
+        {
+          "id": "copy-files-linux",
+          "name": "Copy files — Linux warn + text fallback",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "Linux has no native"
+            },
+            {
+              "suite": "integration",
+              "match": "returns a valid result on the host OS"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

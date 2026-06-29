@@ -7,7 +7,7 @@
   h1 { margin: 0 0 6px; font-size: 20px; }
   .sub { color: #9aa0aa; font-size: 13px; }
   .bar { height: 10px; border-radius: 5px; background: #262a33; overflow: hidden; margin: 12px 0 4px; max-width: 520px; }
-  .bar > i { display: block; height: 100%; background: #1f9d55; width: 84%; }
+  .bar > i { display: block; height: 100%; background: #1f9d55; width: 86%; }
   .legend { display: flex; gap: 16px; font-size: 13px; margin-top: 8px; flex-wrap: wrap; }
   .legend span::before { content: '● '; }
   main { padding: 20px 28px; }
@@ -25,10 +25,10 @@
 <body>
 <header>
   <h1>ImageCompare — Feature Coverage Dashboard</h1>
-  <div class="sub">52/62 features tested &middot; generated 2026-06-26 16:05</div>
+  <div class="sub">60/70 features tested &middot; generated 2026-06-29 12:41</div>
   <div class="bar"><i></i></div>
   <div class="legend">
-    <span style="color:#1f9d55">tested 52</span>
+    <span style="color:#1f9d55">tested 60</span>
     <span style="color:#e3342f">failing 0</span>
     <span style="color:#8a8a8a">no test 10</span>
     <span style="color:#caa023">stale 0</span>
@@ -553,6 +553,72 @@
     <span class="tag" style="color:#1f9d55">tested</span>
   </div>
   <div class="tests"><code>integration</code> CRLF-encoded results</div>
+</div>
+</div></section>
+<section class="area"><h2>Copy &amp; multi-select</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">⌘/Ctrl+C copy current image (bitmap)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> writes an image/png to the clipboard</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Marquee multi-select (drag over tiles)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> dragging selects multiple tiles</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Marquee auto-scroll at carousel edges (Explorer-style)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> auto-scrolls and extends the selection</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">⌘/Ctrl+C copy selected files</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> posts copyFiles</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Click empty space clears selection</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> clears the selection</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Copy files — macOS (osascript)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> macOS uses osascript</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Copy files — Windows (Set-Clipboard)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> Windows uses PowerShell</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Copy files — Linux warn + text fallback</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> Linux has no native<br><code>integration</code> returns a valid result on the host OS</div>
 </div>
 </div></section>
 </main></body></html>

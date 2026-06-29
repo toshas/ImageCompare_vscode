@@ -10,6 +10,7 @@
     { "id": "reorder-modality", "title": "Reorder modalities", "keys": "[ / ]", "description": "Reorder the modality pills to change comparison order (and PPTX export order)." },
     { "id": "help-modal", "title": "Keyboard help", "keys": "?", "description": "Open the keyboard-shortcut reference; Esc closes it." },
     { "id": "collapse-panel", "title": "Collapse tools panel", "keys": "click ▾", "description": "Collapse or expand the floating Tools/navigator panel." },
-    { "id": "click-pill", "title": "Click a modality pill", "keys": "click", "description": "Click a colored modality pill to jump straight to that modality." }
+    { "id": "click-pill", "title": "Click a modality pill", "keys": "click", "description": "Click a colored modality pill to jump straight to that modality." },
+    { "id": "multi-select", "title": "Multi-select & copy", "keys": "drag, ⌘/Ctrl+C", "description": "Drag a marquee over thumbnails to select multiple (auto-scrolls at the edges); ⌘/Ctrl+C copies the files. A single ⌘/Ctrl+C with no selection copies the current image." }
   ]
 }

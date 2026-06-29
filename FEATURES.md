@@ -1,6 +1,6 @@
 # ImageCompare — Feature Coverage
 
-**52/62 features tested** · 84% · generated 2026-06-26 16:05
+**60/70 features tested** · 86% · generated 2026-06-29 12:41
 
 Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 
@@ -126,3 +126,16 @@ Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping
 | ✅ | Extension activates | `integration`: extension is present and activates |
 | ✅ | openInCompare command registered | `integration`: openInCompare command is registered |
 | ✅ | results.txt CRLF parsing (cross-platform) | `integration`: CRLF-encoded results |
+
+## Copy & multi-select
+
+| | Feature | Covered by |
+|---|---|---|
+| ✅ | ⌘/Ctrl+C copy current image (bitmap) | `webview`: writes an image/png to the clipboard |
+| ✅ | Marquee multi-select (drag over tiles) | `webview`: dragging selects multiple tiles |
+| ✅ | Marquee auto-scroll at carousel edges (Explorer-style) | `webview`: auto-scrolls and extends the selection |
+| ✅ | ⌘/Ctrl+C copy selected files | `webview`: posts copyFiles |
+| ✅ | Click empty space clears selection | `webview`: clears the selection |
+| ✅ | Copy files — macOS (osascript) | `unit`: macOS uses osascript |
+| ✅ | Copy files — Windows (Set-Clipboard) | `unit`: Windows uses PowerShell |
+| ✅ | Copy files — Linux warn + text fallback | `unit`: Linux has no native<br>`integration`: returns a valid result on the host OS |

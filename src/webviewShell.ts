@@ -426,6 +426,25 @@ body {
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
 
+/* Marquee multi-selection */
+#carousel-marquee {
+  display: none;
+  position: absolute;
+  border: 1px solid var(--vscode-focusBorder, #0af);
+  background: rgba(0, 170, 255, 0.18);
+  pointer-events: none;
+  z-index: 30;
+}
+.carousel-thumb-container.ic-selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 170, 255, 0.35);
+  border: 2px solid var(--vscode-focusBorder, #0af);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
 .carousel-thumb {
   object-fit: contain;
   background: #111;
@@ -619,6 +638,8 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Scroll</td><td>Zoom in/out</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
+        <tr><td>⌘/Ctrl+C</td><td>Copy image (or selected files)</td></tr>
+        <tr><td>Drag in carousel</td><td>Marquee-select thumbnails</td></tr>
         <tr><td>Esc</td><td>Reset zoom / cancel crop</td></tr>
       </table>
       <div style="margin-top: 20px;">

@@ -150,6 +150,7 @@ Messages flow between extension and webview via `postMessage`:
 - `winnerUpdated`/`winnersReset`: Winner state changes
 - `cropComplete`/`cropError`: Crop operation results
 - `pptxComplete`/`pptxError`: PPTX export results
+- `copyComplete`/`copyError`: File-copy results (`method: 'files' | 'paths'`; `'paths'` = Linux text fallback)
 - `_debug`: Debug logging messages
 
 **WebView → Extension**:
@@ -163,6 +164,8 @@ Messages flow between extension and webview via `postMessage`:
 - `cropImages`: Crop all modalities at given rectangle coordinates
 - `deleteTuple`: Delete current tuple files
 - `exportPptx`: Export voted tuples to PowerPoint (includes `modalityOrder` for display order)
+- `copyImageResult`: Reports the outcome of a single-image bitmap copy (done in the webview via the Clipboard API)
+- `copyFiles`: Copy the selected images as FILES (`items: {tupleIndex, modalityIndex}[]`); extension resolves to paths and copies (native on macOS/Windows, text fallback + warning on Linux)
 - `log`: Debug messages from webview
 
 ## WebView UI Structure
@@ -203,6 +206,8 @@ body
 | `Scroll` | Zoom in/out |
 | `Drag` | Pan image |
 | `C` | Toggle crop mode |
+| `⌘/Ctrl`+`C` | Copy current image as bitmap (or, with a marquee selection, copy the selected files) |
+| `Drag` (carousel) | Marquee multi-select thumbnails (auto-scrolls at edges) |
 | `Esc` | Reset zoom / cancel crop |
 | `Del` | Delete current tuple files |
 

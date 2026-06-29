@@ -246,6 +246,21 @@ test('collapse-panel', async ({ page }) => {
   await beat(page, 700);
 });
 
+test('multi-select', async ({ page }) => {
+  await loadDemo(page);
+  await caption(page, 'Drag a box over thumbnails to multi-select — ⌘/Ctrl+C copies the files');
+  await beat(page, 900);
+  const a = await page.locator('.carousel-thumb-container').first().boundingBox();
+  const b = await page.locator('.carousel-thumb-container').last().boundingBox();
+  if (!a || !b) throw new Error('no tiles');
+  await page.mouse.move(a.x + 4, a.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width - 4, b.y + b.height - 4, { steps: 30 });
+  await beat(page, 1100);
+  await page.mouse.up();
+  await beat(page, 900);
+});
+
 test('click-pill', async ({ page }) => {
   await loadDemo(page);
   await caption(page, 'Click a colored modality pill to jump to it');

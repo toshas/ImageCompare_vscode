@@ -4,6 +4,7 @@
  */
 
 import * as crop from './crop';
+import * as select from './select';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -163,6 +164,8 @@ if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?:
       winners: Array.from(winners.entries()),
       votingEnabled,
       ppmxColormap,
+      selectionCount: select.selectionCount(),
+      selection: select.getSelected(),
     }),
   };
 }
@@ -300,6 +303,9 @@ function setupEventListeners() {
     if (carouselScrollTimer) clearTimeout(carouselScrollTimer);
     carouselScrollTimer = setTimeout(() => carouselEl.classList.remove('scrolling'), 800);
   });
+
+  // Marquee multi-selection (drag to select tiles; Cmd/Ctrl+C copies the files)
+  select.initSelection(carouselEl, onSelectionChange);
 
   // Carousel resize
   setupCarouselResize();
@@ -1410,9 +1416,18 @@ function buildCarousel() {
       thumbContainer.style.width = CAROUSEL_THUMB_SIZE + 'px';
       thumbContainer.style.height = CAROUSEL_THUMB_SIZE + 'px';
       thumbContainer.style.flexShrink = '0';
+      // For marquee multi-selection (select.ts reads these). Mark slots with no
+      // image (missing modality for this tuple) as empty so they are NOT
+      // selectable — they have no file to copy, and counting them made the
+      // selection size disagree with the number of files actually copied.
+      thumbContainer.dataset.tuple = String(tupleIdx);
+      thumbContainer.dataset.modality = String(originalModIdx);
+      const imgInfo = tuple.images.find((im) => im.modalityIndex === originalModIdx);
+      if (!imgInfo || !imgInfo.name) thumbContainer.dataset.empty = '1';
 
       const thumb = document.createElement('img');
       thumb.className = 'carousel-thumb placeholder';
+      thumb.draggable = false; // else mousedown starts a native image-drag and kills marquee mousemove
       thumb.style.width = CAROUSEL_THUMB_SIZE + 'px';
       thumb.style.height = CAROUSEL_THUMB_SIZE + 'px';
       thumb.dataset.tuple = String(tupleIdx);
@@ -1473,6 +1488,7 @@ function buildCarousel() {
   }
 
   updateCarouselSelection();
+  select.applySelectionClasses(carouselEl);
 }
 
 function updateCarouselSelection() {
@@ -1844,10 +1860,62 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
 }
 
 // Event handlers
+// ---------------------------------------------------------------------------
+// Copy: Cmd/Ctrl+C copies the marquee selection as FILES (via the extension),
+// or, with no selection, the current image as a pasteable bitmap (webview).
+// ---------------------------------------------------------------------------
+function onSelectionChange() {
+  const n = select.selectionCount();
+  setPointerStatusInfo(n > 0 ? `${n} selected — ⌘/Ctrl+C to copy files` : '');
+}
+
+function copyCurrentImage() {
+  const cur = images[currentModalityIndex];
+  if (!cur) return;
+  const c = document.createElement('canvas');
+  c.width = cur.width;
+  c.height = cur.height;
+  const cx = c.getContext('2d');
+  if (!cx) return;
+  cx.drawImage(cur.img, 0, 0, cur.width, cur.height);
+  c.toBlob((blob) => {
+    const nav = navigator as unknown as {
+      clipboard?: { write?: (items: unknown[]) => Promise<void> };
+    };
+    if (!blob || !nav.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      vscode.postMessage({ type: 'copyImageResult', ok: false, error: 'clipboard image API unavailable' });
+      return;
+    }
+    nav.clipboard
+      .write([new ClipboardItem({ 'image/png': blob })])
+      .then(() => vscode.postMessage({ type: 'copyImageResult', ok: true }))
+      .catch((err: unknown) =>
+        vscode.postMessage({ type: 'copyImageResult', ok: false, error: String(err) }),
+      );
+  }, 'image/png');
+}
+
+function copySelectedFiles() {
+  const items = select.getSelected();
+  if (items.length) vscode.postMessage({ type: 'copyFiles', items });
+}
+
+function handleCopyShortcut() {
+  if (select.hasSelection()) copySelectedFiles();
+  else copyCurrentImage();
+}
+
 function handleKeyDown(e: KeyboardEvent) {
   if (e.code === 'Escape' && helpModalEl.classList.contains('active')) {
     helpModalEl.classList.remove('active');
     e.preventDefault();
+    return;
+  }
+
+  // Copy: ⌘/Ctrl+C — selection (files) or current image (bitmap). Works in any mode.
+  if (e.code === 'KeyC' && (e.ctrlKey || e.metaKey) && !e.altKey) {
+    e.preventDefault();
+    handleCopyShortcut();
     return;
   }
 

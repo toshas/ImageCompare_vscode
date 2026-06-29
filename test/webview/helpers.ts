@@ -25,6 +25,8 @@ export interface IcState {
   winners: [number, number][];
   votingEnabled: boolean;
   ppmxColormap: string;
+  selectionCount: number;
+  selection: { tupleIndex: number; modalityIndex: number }[];
 }
 
 /** Load the harness and complete the init handshake with synthetic fixtures. */

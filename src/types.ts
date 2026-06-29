@@ -67,6 +67,8 @@ export type WebViewMessage =
   | { type: 'deleteTuple'; tupleIndex: number }
   | { type: 'exportPptx'; tupleIndices: number[]; winnerModalityIndices: (number | null)[]; modalityOrder: number[] }
   | { type: 'setPpmxColormap'; colormap: PpmxColormap }
+  | { type: 'copyImageResult'; ok: boolean; error?: string } // webview reports a single-image bitmap copy
+  | { type: 'copyFiles'; items: { tupleIndex: number; modalityIndex: number }[] } // copy selected image FILES
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
@@ -90,7 +92,9 @@ export type ExtensionMessage =
   | { type: 'cropComplete'; tupleIndex: number; count: number; paths: string[] }
   | { type: 'cropError'; tupleIndex: number; error: string }
   | { type: 'pptxComplete'; path: string }
-  | { type: 'pptxError'; error: string };
+  | { type: 'pptxError'; error: string }
+  | { type: 'copyComplete'; count: number; method: 'files' | 'paths' } // 'paths' = Linux text fallback
+  | { type: 'copyError'; error: string };
 
 // Configuration passed to webview
 export interface WebViewConfig {
