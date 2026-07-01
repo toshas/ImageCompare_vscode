@@ -135,6 +135,32 @@ const LOAD_DEBOUNCE_MS = 150; // wait this long before loading full images
 let winners: Map<number, number> = new Map(); // tupleIndex -> modalityIndex (display index)
 let votingEnabled = false;
 
+// ---------------------------------------------------------------------------
+// Test hook — read-only snapshot of UI state for the Playwright webview testbed
+// (test/webview). Lets specs assert logic (zoom/pan/selection/crop) without
+// reading canvas pixels. Inert in production: nothing installs it unless a test
+// harness sets `window.__ic_test_enabled = true`, and it only ever reads state.
+// ---------------------------------------------------------------------------
+if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
+  (window as unknown as { __ic_test: unknown }).__ic_test = {
+    getState: () => ({
+      currentTupleIndex,
+      currentModalityIndex,
+      currentTupleName: tuples[currentTupleIndex]?.name ?? null,
+      tupleCount: tuples.length,
+      modalityCount: modalities.length,
+      modalityOrder: modalityOrder.slice(),
+      zoom,
+      panX,
+      panY,
+      cropMode: crop.cropMode,
+      cropRect: crop.cropRect ? { ...crop.cropRect } : null,
+      winners: Array.from(winners.entries()),
+      votingEnabled,
+    }),
+  };
+}
+
 // Floating panel drag state
 let fpDragging = false;
 let fpDragStartX = 0;
@@ -1376,6 +1402,9 @@ function moveCurrentModality(direction: number) {
 
   // Swap in colors
   [modalityColors[currentPos], modalityColors[newPos]] = [modalityColors[newPos], modalityColors[currentPos]];
+
+  // Swap in paths so the pill tooltip (original path) follows the reordered name
+  [modalityPaths[currentPos], modalityPaths[newPos]] = [modalityPaths[newPos], modalityPaths[currentPos]];
 
   // Swap in modalityOrder (tracks original index at each display position)
   [modalityOrder[currentPos], modalityOrder[newPos]] = [modalityOrder[newPos], modalityOrder[currentPos]];
