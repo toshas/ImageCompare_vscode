@@ -1,5 +1,6 @@
 # ImageCompare
 
+[![Tests](https://github.com/toshas/ImageCompare_vscode/actions/workflows/test.yml/badge.svg)](https://github.com/toshas/ImageCompare_vscode/actions/workflows/test.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/toshas/ImageCompare_vscode?label=GitHub%20%E2%98%85&logo=github&color=C8C)](https://github.com/toshas/ImageCompare_vscode)
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/obukhovai.image-compare?label=VS%20Code%20Marketplace&color=006600)](https://marketplace.visualstudio.com/items?itemName=obukhovai.image-compare)
 [![Cursor, VSCodium, Windsurf](https://img.shields.io/open-vsx/v/obukhovai/image-compare?label=Cursor%2C%20VSCodium%2C%20Windsurf&color=006600)](https://open-vsx.org/extension/obukhovai/image-compare)
@@ -132,6 +133,45 @@ PNG, JPG, JPEG, GIF, BMP, WebP, TIFF, PPMX
 | `imageCompare.prefetchCount` | 3 | Images to preload ahead/behind |
 | `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime |
 | `imageCompare.debug` | false | Enable debug logging in webview console |
+
+## Development & Testing
+
+Contributing? The project ships a full testing bed:
+
+```bash
+npm install
+npm run compile          # build dist/ (extension + webview bundle)
+npm run test:unit        # fast pure-logic tests (Vitest)
+npm run test:webview     # webview UX tests (Playwright, real bundle)
+npm run test:integration # runs inside a real headless VS Code
+npm run test:dashboard   # → test/dashboard/ (FEATURES.md + dashboard.html, per-feature coverage)
+npm run test:demos       # → test/demos/gallery/index.html (a captioned clip of each feature)
+```
+
+- **[TESTING.md](TESTING.md)** — the 3-layer test strategy and how the
+  out-of-process webview harness works.
+- **Feature coverage dashboard** (`test/dashboard/dashboard.html` / `test/dashboard/FEATURES.md`)
+  shows which features are tested, lit from real test results.
+- **Feature demo gallery** (`test/demos/gallery/index.html`) — short captioned
+  clips of each interaction.
+
+All three layers run automatically in **CI on Windows, Linux, and macOS** for every
+push and pull request — nothing to run by hand, no machine-specific setup.
+
+### Found a bug? Fix it the testbed way
+
+Every fix follows one short loop, so nothing silently regresses:
+
+1. **Describe** the bug in plain words (e.g. *"when I shrink the window the labels
+   collapse over the thumbnails"*).
+2. **Reproduce it with a failing test** at the smallest layer that shows it
+   (unit → integration → webview).
+3. **Fix** the code until that test passes.
+4. **Document** it (one line in TESTING.md) — CI then guards it on all three OSes.
+
+This is packaged as the **`fix-issue` agent skill** (`.claude/skills/fix-issue/`): open the
+repo in Claude Code and type `/fix-issue <describe the bug>`, and it writes the failing
+test, the fix, and the docs for you. Full walkthrough in **[TESTING.md](TESTING.md)**.
 
 ## Feedback & Issues
 

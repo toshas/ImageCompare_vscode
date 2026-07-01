@@ -389,6 +389,26 @@ npm run compile      # One-off build
 
 ## Testing
 
+The test strategy and layout live in **[TESTING.md](TESTING.md)**. Three layers:
+
+```bash
+npm run test:unit         # Layer 1 — Vitest, pure logic on real code (fast)
+npm run test:webview      # Layer 3 — Playwright drives the real webview bundle
+                          #           out-of-process (run `npm run compile` first)
+npm run test:integration  # Layer 2 — @vscode/test-cli inside a real VSCode
+npm run test:all          # everything
+```
+
+- **Layer 1** (`test/unit/`) imports real production functions via a `vscode` mock
+  alias (`test/mocks/vscode.ts`); no hand-copied logic.
+- **Layer 3** (`test/webview/`) loads the real `dist/webview.js` against a harness
+  that reuses the production shell (`src/webviewShell.ts`) and stubs
+  `acquireVsCodeApi`. Specs assert via the `window.__ic_test` state hook —
+  deterministic logic checks (no pixel snapshots), so the layer runs in CI on all
+  three OSes. See TESTING.md.
+- **Layer 2** (`test/integration/`) exercises vscode-API-coupled code (e.g.
+  `scanForImages`) on temp fixtures.
+
 ### Image Backend Tests
 
 To verify the Sharp → WASM → Jimp fallback chain works, create a test script in the project root (it needs access to `node_modules/`):
@@ -412,37 +432,40 @@ npx tsc --outDir /tmp/test_out --declaration --declarationMap --skipLibCheck
 # Then require('/tmp/test_out/sharpLoader.js') in the test
 ```
 
-### Tuple Matching Tests
+> Tuple matching (`matchTuplesWithTrie`) and PNG tEXt chunk logic are covered by
+> the **Layer 1** unit tests in `test/unit/` (`tupleMatching.test.ts`,
+> `pngTextChunk.test.ts`). These import the **real** exported functions via the
+> `vscode` mock alias — there are no hand-copied versions to drift. Run with
+> `npm run test:unit`. (The old standalone `npx ts-node src/test/*.test.ts`
+> scripts have been retired.)
 
-Run the standalone tuple matching tests:
+### Feature Coverage Dashboard
+
+`test/dashboard/features.json` maps every feature (keyboard, tools, crop, zoom,
+backend) to the test(s) that cover it. The generator runs all suites with JSON
+reporters and lights each feature green/red/gray from **real** results:
+
 ```bash
-npx ts-node src/test/tupleMatching.test.ts
+npm run test:dashboard        # run all suites + regenerate
+npm run test:dashboard:reuse  # regenerate from the last run's JSON
+open test/dashboard/dashboard.html   # or read test/dashboard/FEATURES.md
 ```
 
-These tests exercise `matchTuplesWithTrie()` logic with real-world filename patterns:
-- **Test 1**: User tree with originals + crop01 files (5 modalities, 5 tuples)
-- **Test 2**: Originals + crop01 + crop01_crop01 (nested crops)
-- **Test 3**: Baseline (no crop files)
-- **Test 4**: `_pred` should match `_gt`, not `_crop01` (equal lenDiff, prefer shorter ref)
-- **Test 5**: Long modality name should match `_gt`, not `_crop01` (crop explicitly deprioritized)
+Untested features show as gaps (not false-green), lit from real test results.
 
-The tests use pure TypeScript copies of the matching functions (no vscode dependency) for fast execution.
+### Feature Demos
 
-### PNG tEXt Chunk Tests
+`test/demos/` records a short, captioned clip of each feature being used (on
+legible generated fixtures), via Playwright → ffmpeg → small H.264 MP4
+(~20-60 KB each; plays in every browser incl. Safari and VS Code's preview).
+The gallery is `test/demos/gallery/index.html`.
 
-Run the PNG metadata injection/reading tests:
 ```bash
-npx ts-node src/test/pngTextChunk.test.ts
+npm run test:demos            # record + rebuild the gallery
+open test/demos/gallery/index.html
 ```
 
-Tests verify:
-- Basic keyword/value round-trip injection and reading
-- Crop metadata format (`x,y,w,h,srcW,srcH`) round-trip with parsing
-- Missing/wrong keyword returns null
-- Multiple tEXt chunks coexist independently
-- PNG structure preserved (signature, IEND intact)
-- Sharp validates modified PNGs (still a valid image)
-- Large coordinate values
+Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
 
 ### File Watching Tests
 
