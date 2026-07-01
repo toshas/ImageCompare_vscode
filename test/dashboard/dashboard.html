@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>ImageCompare — Feature Coverage</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
+  header { padding: 20px 28px; border-bottom: 1px solid #262a33; position: sticky; top: 0; background: #0f1115; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  .sub { color: #9aa0aa; font-size: 13px; }
+  .bar { height: 10px; border-radius: 5px; background: #262a33; overflow: hidden; margin: 12px 0 4px; max-width: 520px; }
+  .bar > i { display: block; height: 100%; background: #1f9d55; width: 82%; }
+  .legend { display: flex; gap: 16px; font-size: 13px; margin-top: 8px; flex-wrap: wrap; }
+  .legend span::before { content: '● '; }
+  main { padding: 20px 28px; }
+  .area { margin-bottom: 26px; }
+  .area h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .6px; color: #9aa0aa; border-bottom: 1px solid #262a33; padding-bottom: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 8px; margin-top: 10px; }
+  .card { border: 1px solid #262a33; border-radius: 8px; padding: 10px 12px; background: #151821; }
+  .card .top { display: flex; align-items: center; gap: 8px; }
+  .dot { font-size: 13px; }
+  .name { font-size: 13px; }
+  .tag { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; opacity: .8; }
+  .tests { margin: 6px 0 0; font-size: 11px; color: #8a909a; }
+  code { background: #1d212b; padding: 1px 4px; border-radius: 3px; }
+</style></head>
+<body>
+<header>
+  <h1>ImageCompare — Feature Coverage Dashboard</h1>
+  <div class="sub">45/55 features tested &middot; generated (run-time)</div>
+  <div class="bar"><i></i></div>
+  <div class="legend">
+    <span style="color:#1f9d55">tested 45</span>
+    <span style="color:#e3342f">failing 0</span>
+    <span style="color:#8a8a8a">no test 10</span>
+    <span style="color:#caa023">stale 0</span>
+  </div>
+</header>
+<main>
+<section class="area"><h2>Keyboard — navigation</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">→ next modality</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Right/Left switch modality</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">← previous modality</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Right/Left switch modality</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">↓ next tuple</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Down/Up move between tuples</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">↑ previous tuple</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Down/Up move between tuples</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">1–9 jump to modality N</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> number keys jump to a modality</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Space (hold) flip to previous modality</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Space (hold) flips to the previous modality</div>
+</div>
+</div></section>
+<section class="area"><h2>Keyboard — actions</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">] reorder modality right</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> ] key reorder also keeps tooltips correct</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">[ reorder modality left</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> reorders the current modality left</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Enter toggle winner</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Enter toggles a winner and posts setWinner</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">C toggle crop mode</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> C enters crop mode</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Esc reset zoom / cancel crop / close help</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Escape cancels crop mode<br><code>webview</code> wheel zooms in; Escape resets</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Del delete tuple (NOTE: not actually bound — button only)</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+</div></section>
+<section class="area"><h2>Mouse / pointer</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Scroll wheel zoom in/out</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> wheel zooms in; Escape resets</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Drag to pan</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> drag pans the image when zoomed in</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Click modality pill to switch</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> clicking a modality pill switches modality</div>
+</div>
+</div></section>
+<section class="area"><h2>Tools window (floating panel)</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Crop button</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> shows the floating panel tools<br><code>webview</code> C enters crop mode</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Delete button → deleteTuple</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> shows the floating panel tools</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">PPTX button → exportPptx</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> shows the floating panel tools</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Minimap navigator + viewport rect</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Drag panel to reposition</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Collapse/expand panel</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> collapse button toggles the floating panel</div>
+</div>
+</div></section>
+<section class="area"><h2>Crop tool</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Enter crop mode (crosshair)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> C enters crop mode</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Draw crop rectangle</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> drawing sets a crop rect</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Confirm → cropImages message</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Enter posts cropImages</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Cancel crop (Esc / ✗)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Escape cancels crop mode</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Resize via 8 handles</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Move rectangle by dragging inside</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Double-click cardinal handle → snap to square</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Screen↔image coordinate mapping</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> viewer center maps to image center<br><code>unit</code> are inverses<br><code>unit</code> carousel offset</div>
+</div>
+</div></section>
+<section class="area"><h2>Modality reorder</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Reorder swaps pill name</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> reorder-right swaps both the pill name</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Reorder swaps pill tooltip (path)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> reorder-right swaps both the pill name<br><code>webview</code> ] key reorder also keeps tooltips correct</div>
+</div>
+</div></section>
+<section class="area"><h2>Winner voting</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Toggle winner via Enter</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> Enter toggles a winner and posts setWinner</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Toggle winner via carousel circle click</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> clicking a carousel winner circle posts setWinner</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Win counts shown on pills</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Persistence to results.txt</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> write then read round-trips<br><code>integration</code> CRLF-encoded results</div>
+</div>
+</div></section>
+<section class="area"><h2>Carousel</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Thumbnail grid renders</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> renders the viewer and ingests fixtures</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Click thumbnail to navigate</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> clicking a carousel thumbnail navigates</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Scroll carousel</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Drag resize handle</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+</div></section>
+<section class="area"><h2>Viewer / status bar</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Viewer activates on init</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> renders the viewer and ingests fixtures</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Modality pills render (per modality)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> renders a modality pill per modality</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Active pill reflects current modality</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> active modality pill reflects current modality</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Canvas renders the image</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> renders the viewer and ingests fixtures</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#8a8a8a">○</span>
+    <span class="name">Zoom % readout in status</span>
+    <span class="tag" style="color:#8a8a8a">no test</span>
+  </div>
+  
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Help modal (? open / close)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>webview</code> opens the help modal and Esc closes it</div>
+</div>
+</div></section>
+<section class="area"><h2>Backend — scanning &amp; matching</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Mode 1: dir with modality subdirs</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> mode 1: single dir</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Partial tuples (missing modality)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> partial tuple when a modality is missing</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">PPMX files scanned as images</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> PPMX files are scanned</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Trie matching: exact basenames</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> matches identical basenames</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Trie matching: pred matches gt not crop</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> _pred file matches the _gt original</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Path disambiguation (POSIX/Windows parity)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> same display names for equivalent POSIX paths<br><code>unit</code> Windows drive-letter paths disambiguate</div>
+</div>
+</div></section>
+<section class="area"><h2>Backend — formats &amp; metadata</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">PNG crop metadata round-trip</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>unit</code> round-trips crop metadata<br><code>unit</code> injects and reads back a value</div>
+</div>
+</div></section>
+<section class="area"><h2>Extension lifecycle</h2><div class="grid">
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">Extension activates</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> extension is present and activates</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">openInCompare command registered</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> openInCompare command is registered</div>
+</div>
+<div class="card">
+  <div class="top">
+    <span class="dot" style="color:#1f9d55">●</span>
+    <span class="name">results.txt CRLF parsing (cross-platform)</span>
+    <span class="tag" style="color:#1f9d55">tested</span>
+  </div>
+  <div class="tests"><code>integration</code> CRLF-encoded results</div>
+</div>
+</div></section>
+</main></body></html>

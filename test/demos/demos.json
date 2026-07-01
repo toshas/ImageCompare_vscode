@@ -1,0 +1,15 @@
+{
+  "_comment": "Metadata for the feature demo gallery. id matches the test title in demos.spec.ts (and the raw/demos-<id>-chromium/ folder). build-gallery.mjs converts each recorded video to a small H.264 MP4 and renders test/demos/gallery/index.html.",
+  "demos": [
+    { "id": "navigate-tuples", "title": "Navigate tuples", "keys": "↑ / ↓", "description": "Move between image tuples; the carousel highlight and main image follow." },
+    { "id": "switch-modality", "title": "Switch modality", "keys": "← / →", "description": "Flip between modalities (e.g. GT vs PRED) for the current tuple; the active pill updates." },
+    { "id": "zoom", "title": "Zoom", "keys": "scroll / Esc", "description": "Scroll to zoom into the image; press Esc to reset to fit." },
+    { "id": "pan", "title": "Pan", "keys": "drag", "description": "When zoomed in, drag to move around the image." },
+    { "id": "crop", "title": "Crop", "keys": "C, drag, Enter", "description": "Enter crop mode, draw a rectangle, and confirm to crop all modalities at once." },
+    { "id": "winner-vote", "title": "Vote a winner", "keys": "Enter", "description": "Mark the current modality as the winner for this tuple; saved to results.txt." },
+    { "id": "reorder-modality", "title": "Reorder modalities", "keys": "[ / ]", "description": "Reorder the modality pills to change comparison order (and PPTX export order)." },
+    { "id": "help-modal", "title": "Keyboard help", "keys": "?", "description": "Open the keyboard-shortcut reference; Esc closes it." },
+    { "id": "collapse-panel", "title": "Collapse tools panel", "keys": "click ▾", "description": "Collapse or expand the floating Tools/navigator panel." },
+    { "id": "click-pill", "title": "Click a modality pill", "keys": "click", "description": "Click a colored modality pill to jump straight to that modality." }
+  ]
+}

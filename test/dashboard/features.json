@@ -1,0 +1,597 @@
+{
+  "_comment": "Feature catalog for the ImageCompare test dashboard. Each feature maps to the test(s) that cover it. `tests` references {suite: unit|webview|integration, match: <substring of the test title>}. An empty `tests` array means the feature is NOT yet covered (shown gray in the dashboard). The generator (generate.mjs) fills in pass/fail from real JSON reports.",
+  "areas": [
+    {
+      "area": "Keyboard — navigation",
+      "features": [
+        {
+          "id": "kbd-next-modality",
+          "name": "→ next modality",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Right/Left switch modality"
+            }
+          ]
+        },
+        {
+          "id": "kbd-prev-modality",
+          "name": "← previous modality",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Right/Left switch modality"
+            }
+          ]
+        },
+        {
+          "id": "kbd-next-tuple",
+          "name": "↓ next tuple",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Down/Up move between tuples"
+            }
+          ]
+        },
+        {
+          "id": "kbd-prev-tuple",
+          "name": "↑ previous tuple",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Down/Up move between tuples"
+            }
+          ]
+        },
+        {
+          "id": "kbd-digit-jump",
+          "name": "1–9 jump to modality N",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "number keys jump to a modality"
+            }
+          ]
+        },
+        {
+          "id": "kbd-space-flip",
+          "name": "Space (hold) flip to previous modality",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Space (hold) flips to the previous modality"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Keyboard — actions",
+      "features": [
+        {
+          "id": "kbd-reorder-right",
+          "name": "] reorder modality right",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "] key reorder also keeps tooltips correct"
+            }
+          ]
+        },
+        {
+          "id": "kbd-reorder-left",
+          "name": "[ reorder modality left",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "reorders the current modality left"
+            }
+          ]
+        },
+        {
+          "id": "kbd-toggle-winner",
+          "name": "Enter toggle winner",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Enter toggles a winner and posts setWinner"
+            }
+          ]
+        },
+        {
+          "id": "kbd-toggle-crop",
+          "name": "C toggle crop mode",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "C enters crop mode"
+            }
+          ]
+        },
+        {
+          "id": "kbd-escape",
+          "name": "Esc reset zoom / cancel crop / close help",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Escape cancels crop mode"
+            },
+            {
+              "suite": "webview",
+              "match": "wheel zooms in; Escape resets"
+            }
+          ]
+        },
+        {
+          "id": "kbd-delete",
+          "name": "Del delete tuple (NOTE: not actually bound — button only)",
+          "tests": []
+        }
+      ]
+    },
+    {
+      "area": "Mouse / pointer",
+      "features": [
+        {
+          "id": "mouse-zoom",
+          "name": "Scroll wheel zoom in/out",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "wheel zooms in; Escape resets"
+            }
+          ]
+        },
+        {
+          "id": "mouse-pan",
+          "name": "Drag to pan",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "drag pans the image when zoomed in"
+            }
+          ]
+        },
+        {
+          "id": "mouse-click-pill",
+          "name": "Click modality pill to switch",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "clicking a modality pill switches modality"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Tools window (floating panel)",
+      "features": [
+        {
+          "id": "tool-crop",
+          "name": "Crop button",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "shows the floating panel tools"
+            },
+            {
+              "suite": "webview",
+              "match": "C enters crop mode"
+            }
+          ]
+        },
+        {
+          "id": "tool-delete",
+          "name": "Delete button → deleteTuple",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "shows the floating panel tools"
+            }
+          ]
+        },
+        {
+          "id": "tool-pptx",
+          "name": "PPTX button → exportPptx",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "shows the floating panel tools"
+            }
+          ]
+        },
+        {
+          "id": "tool-minimap",
+          "name": "Minimap navigator + viewport rect",
+          "tests": []
+        },
+        {
+          "id": "tool-panel-drag",
+          "name": "Drag panel to reposition",
+          "tests": []
+        },
+        {
+          "id": "tool-panel-collapse",
+          "name": "Collapse/expand panel",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "collapse button toggles the floating panel"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Crop tool",
+      "features": [
+        {
+          "id": "crop-enter",
+          "name": "Enter crop mode (crosshair)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "C enters crop mode"
+            }
+          ]
+        },
+        {
+          "id": "crop-draw",
+          "name": "Draw crop rectangle",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "drawing sets a crop rect"
+            }
+          ]
+        },
+        {
+          "id": "crop-confirm",
+          "name": "Confirm → cropImages message",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Enter posts cropImages"
+            }
+          ]
+        },
+        {
+          "id": "crop-cancel",
+          "name": "Cancel crop (Esc / ✗)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Escape cancels crop mode"
+            }
+          ]
+        },
+        {
+          "id": "crop-resize",
+          "name": "Resize via 8 handles",
+          "tests": []
+        },
+        {
+          "id": "crop-move",
+          "name": "Move rectangle by dragging inside",
+          "tests": []
+        },
+        {
+          "id": "crop-snap-square",
+          "name": "Double-click cardinal handle → snap to square",
+          "tests": []
+        },
+        {
+          "id": "crop-coords-math",
+          "name": "Screen↔image coordinate mapping",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "viewer center maps to image center"
+            },
+            {
+              "suite": "unit",
+              "match": "are inverses"
+            },
+            {
+              "suite": "unit",
+              "match": "carousel offset"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Modality reorder",
+      "features": [
+        {
+          "id": "reorder-name",
+          "name": "Reorder swaps pill name",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "reorder-right swaps both the pill name"
+            }
+          ]
+        },
+        {
+          "id": "reorder-tooltip",
+          "name": "Reorder swaps pill tooltip (path)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "reorder-right swaps both the pill name"
+            },
+            {
+              "suite": "webview",
+              "match": "] key reorder also keeps tooltips correct"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Winner voting",
+      "features": [
+        {
+          "id": "winner-enter",
+          "name": "Toggle winner via Enter",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Enter toggles a winner and posts setWinner"
+            }
+          ]
+        },
+        {
+          "id": "winner-circle",
+          "name": "Toggle winner via carousel circle click",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "clicking a carousel winner circle posts setWinner"
+            }
+          ]
+        },
+        {
+          "id": "winner-counts",
+          "name": "Win counts shown on pills",
+          "tests": []
+        },
+        {
+          "id": "winner-persist",
+          "name": "Persistence to results.txt",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "write then read round-trips"
+            },
+            {
+              "suite": "integration",
+              "match": "CRLF-encoded results"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Carousel",
+      "features": [
+        {
+          "id": "carousel-render",
+          "name": "Thumbnail grid renders",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "renders the viewer and ingests fixtures"
+            }
+          ]
+        },
+        {
+          "id": "carousel-click",
+          "name": "Click thumbnail to navigate",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "clicking a carousel thumbnail navigates"
+            }
+          ]
+        },
+        {
+          "id": "carousel-scroll",
+          "name": "Scroll carousel",
+          "tests": []
+        },
+        {
+          "id": "carousel-resize",
+          "name": "Drag resize handle",
+          "tests": []
+        }
+      ]
+    },
+    {
+      "area": "Viewer / status bar",
+      "features": [
+        {
+          "id": "view-init",
+          "name": "Viewer activates on init",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "renders the viewer and ingests fixtures"
+            }
+          ]
+        },
+        {
+          "id": "view-pills",
+          "name": "Modality pills render (per modality)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "renders a modality pill per modality"
+            }
+          ]
+        },
+        {
+          "id": "view-active-pill",
+          "name": "Active pill reflects current modality",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "active modality pill reflects current modality"
+            }
+          ]
+        },
+        {
+          "id": "view-canvas",
+          "name": "Canvas renders the image",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "renders the viewer and ingests fixtures"
+            }
+          ]
+        },
+        {
+          "id": "view-zoom-readout",
+          "name": "Zoom % readout in status",
+          "tests": []
+        },
+        {
+          "id": "help-modal",
+          "name": "Help modal (? open / close)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "opens the help modal and Esc closes it"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Backend — scanning & matching",
+      "features": [
+        {
+          "id": "scan-mode1",
+          "name": "Mode 1: dir with modality subdirs",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "mode 1: single dir"
+            }
+          ]
+        },
+        {
+          "id": "scan-partial",
+          "name": "Partial tuples (missing modality)",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "partial tuple when a modality is missing"
+            }
+          ]
+        },
+        {
+          "id": "scan-ppmx",
+          "name": "PPMX files scanned as images",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "PPMX files are scanned"
+            }
+          ]
+        },
+        {
+          "id": "match-exact",
+          "name": "Trie matching: exact basenames",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "matches identical basenames"
+            }
+          ]
+        },
+        {
+          "id": "match-crop",
+          "name": "Trie matching: pred matches gt not crop",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "_pred file matches the _gt original"
+            }
+          ]
+        },
+        {
+          "id": "match-crossplatform",
+          "name": "Path disambiguation (POSIX/Windows parity)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "same display names for equivalent POSIX paths"
+            },
+            {
+              "suite": "unit",
+              "match": "Windows drive-letter paths disambiguate"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Backend — formats & metadata",
+      "features": [
+        {
+          "id": "png-crop-meta",
+          "name": "PNG crop metadata round-trip",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "round-trips crop metadata"
+            },
+            {
+              "suite": "unit",
+              "match": "injects and reads back a value"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Extension lifecycle",
+      "features": [
+        {
+          "id": "ext-activate",
+          "name": "Extension activates",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "extension is present and activates"
+            }
+          ]
+        },
+        {
+          "id": "ext-command",
+          "name": "openInCompare command registered",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "openInCompare command is registered"
+            }
+          ]
+        },
+        {
+          "id": "results-crlf",
+          "name": "results.txt CRLF parsing (cross-platform)",
+          "tests": [
+            {
+              "suite": "integration",
+              "match": "CRLF-encoded results"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
