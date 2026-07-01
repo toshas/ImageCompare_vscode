@@ -1,4 +1,5 @@
 .DS_Store
+.claude/settings.local.json
 node_modules/
 dist/
 out/
@@ -7,3 +8,17 @@ out/
 
 # Test data (large image files)
 test_images/
+
+# Test artifacts
+out-integration/
+.dashboard-data/
+test-results/
+playwright-report/
+test/webview/harness/
+
+# stray tsc declaration output under test/ (configs + specs)
+test/**/*.d.ts
+test/**/*.d.ts.map
+
+# Demo recordings (raw); the built gallery/ webps are kept
+test/demos/raw/
