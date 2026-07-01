@@ -85,7 +85,7 @@ export function screenToImage(screenX: number, screenY: number, vp: ViewportInfo
   };
 }
 
-function imageToScreen(imgX: number, imgY: number, vp: ViewportInfo): { x: number; y: number } {
+export function imageToScreen(imgX: number, imgY: number, vp: ViewportInfo): { x: number; y: number } {
   const rect = vp.viewerEl.getBoundingClientRect();
   const vw = rect.width - vp.carouselOffset;
   const vh = rect.height;

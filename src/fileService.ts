@@ -100,7 +100,7 @@ interface MatchedTuple {
  * Complexity: O(N * L) for trie ops, O(ties * L²) for LCS tie-breaking
  * where N = total files, L = max filename length
  */
-function matchTuplesWithTrie(
+export function matchTuplesWithTrie(
   modalityFiles: Map<string, Array<{ name: string; uri: vscode.Uri }>>,
   modalities: string[]
 ): MatchedTuple[] {
@@ -332,7 +332,7 @@ function findCommonSubstring(names: string[]): string {
 /**
  * Find differing parts of filenames (for modality naming when files are selected)
  */
-function findDifferingParts(names: string[]): string[] {
+export function findDifferingParts(names: string[]): string[] {
   if (names.length < 2) return names;
 
   // Remove extensions
