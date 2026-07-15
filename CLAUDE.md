@@ -10,7 +10,8 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 
 ### Key Components
 
-- **`extension.ts`** - Entry point, registers the `openInCompare` command
+- **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
+- **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
 - **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities
 - **`thumbnailService.ts`** - Image processing (thumbnail generation, full image loading, cropping) with Sharp → WASM → Jimp fallback chain
@@ -97,6 +98,18 @@ selected_folder/
 - Modality names derived from filename differences via `findDifferingParts()`
 - No directory structure to track
 - File watchers monitor parent directories of selected files
+
+### Session Files (the single entry point)
+
+**Every comparison opens through a `*.imagecompare` session file** (custom editor `imageCompare.sessionFile`, registered in `extension.ts`). The file is JSON `{"paths": [...], "labels"?: [...], "colors"?: [...]}`, parsed and validated by `sessionFile.ts` (pure, no vscode dependency); relative paths resolve against the file's directory. `colors` (aligned with `paths`, hex `#rgb`/`#rrggbb`) override pill colors, keyed by directory URI through to `sendInitData`'s `modalityColors` (falling back to the `MODALITY_COLORS` palette cycle). The resolved URIs go through `openCompare()`, so mode detection (1/2/3 above) applies unchanged — the custom editor's webview panel is passed in; `openCompare()` never creates panels itself. Because comparisons are custom editors, VSCode restores them automatically on window reload.
+
+There are two ways a session file gets opened:
+- **Explorer command** (`imageCompare.openInCompare`): persists the selection as `{"paths": [...]}` in `globalStorage/sessions/`, named via `suggestSessionFileName()` (common prefix of basenames, generic names rejected), then runs `vscode.openWith`. Identical re-selections reuse the existing file (focusing the open tab, since `supportsMultipleEditorsPerDocument: false`); name collisions with different content get a numeric suffix. Generated files older than 30 days are pruned on activation, skipping files open in any tab.
+- **Directly** — clicking a user-authored file, `code session.imagecompare` from a terminal, or a script. This is the only CLI bridge that works with the remote CLI, which supports file opening but not URIs or commands.
+
+Optional `labels` (aligned with `paths`, unique) override modality display names in multi-directory mode. They are injected at the naming source — `applyLabels()` wraps `disambiguateDirectoryNames()` both in `scanForImages()` and in `openCompare()`'s `modalityDirs` construction — so watchers, winner voting (`results.txt`), and pill tooltips all see the labeled names consistently. Needed because epoch dirs from different runs share basenames (e.g. `0_affine_033_fp32`), which auto-disambiguation would expand to unwieldy full paths.
+
+Tab titles for custom editors are controlled by VSCode (resource basename; `panel.title` is ignored) — name the session file meaningfully, and optionally use the `workbench.editor.customLabels.patterns` user setting to hide the `.imagecompare` suffix.
 
 ### Invalid: Single Directory with Only Files
 **Prevented**: Opening a single directory that contains only image files (no subdirectories) is **not allowed**. This would create a nonsensical comparison with each file as a separate "modality".
@@ -227,7 +240,9 @@ Available only in directory-based modes (mode 1 and 2). Allows declaring one mod
   - Green with white outline = winner
 
 ### Persistence
-Winners are saved to `results.txt` alongside modality folders:
+Winners are saved to `results.txt` alongside modality folders. `getResultsTarget()` decides the location: the shared root in mode 1, or the common parent in mode 2. When the compared folders have **no common parent** (e.g. epoch dirs from separate runs) and the comparison was opened from a `.imagecompare` session file, results go next to that session file as `<session-stem>.results.txt` (per-session name avoids collisions between sessions kept in one directory) rather than being buried in the first folder's parent.
+
+Example file:
 ```
 # ImageCompare Results
 # Generated: 2026-01-27T12:00:00.000Z
@@ -241,8 +256,8 @@ image002 = modB
 ```
 
 ### Implementation
-- `fileService.ts`: `readResultsFile()`, `writeResultsFile()`, `mapWinnersToIndices()`
-- `imageCompareProvider.ts`: `PanelState.winners`, `PanelState.votingEnabled`, `handleSetWinner()`, `saveResults()`
+- `fileService.ts`: `readResultsFile()`, `writeResultsFile()` (both take an optional `filename`), `mapWinnersToIndices()`
+- `imageCompareProvider.ts`: `PanelState.winners`, `PanelState.votingEnabled`, `PanelState.sessionFileUri`, `handleSetWinner()`, `saveResults()`, `getResultsTarget()`
 - Winner indices are adjusted when modalities are added/removed
 
 ## Crop Tool
@@ -428,6 +443,15 @@ These tests exercise `matchTuplesWithTrie()` logic with real-world filename patt
 
 The tests use pure TypeScript copies of the matching functions (no vscode dependency) for fast execution.
 
+### Session File Tests
+
+Run the session file parsing tests (imports `sessionFile.ts` directly — it has no vscode dependency):
+```bash
+npx ts-node src/test/sessionFile.test.ts
+```
+
+Tests verify: absolute/relative path resolution, label validation (alignment, uniqueness, types), rejection of malformed JSON, `applyLabels()` override semantics, and `suggestSessionFileName()` (common prefix, generic fallback, sanitization, length cap).
+
 ### PNG tEXt Chunk Tests
 
 Run the PNG metadata injection/reading tests:
@@ -481,7 +505,7 @@ To debug tuple matching issues:
 
 ## Publishing (GitHub Actions)
 
-Publishing is automated via GitHub Actions. The workflow builds on native runners for each platform.
+Publishing is automated via GitHub Actions. The workflow first runs the standalone test suites (`test` job, ubuntu), then builds on native runners for each platform.
 
 ### Release Checklist (for Claude)
 

@@ -37,6 +37,18 @@
         "title": "Open in ImageCompare"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "imageCompare.sessionFile",
+        "displayName": "ImageCompare",
+        "selector": [
+          {
+            "filenamePattern": "*.imagecompare"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "menus": {
       "explorer/context": [
         {
@@ -98,6 +110,7 @@
     "@typescript-eslint/parser": "^6.13.0",
     "eslint": "^8.54.0",
     "ts-loader": "^9.5.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.2",
     "webpack": "^5.89.0",
     "webpack-cli": "^5.1.4"

@@ -2,6 +2,24 @@
 
 All notable changes to the ImageCompare extension will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Session files (CLI entry point)**: Opening a `*.imagecompare` file (JSON `{"paths": [...], "labels"?: [...]}`) starts a comparison via a custom editor — enables scripted invocation (`code session.imagecompare`) and reopenable comparison artifacts. Relative paths resolve against the file's directory
+- **Modality labels**: The optional `labels` array overrides modality display names in multi-directory mode (useful when compared directories share a basename, e.g. epoch dirs from different training runs)
+- **CI test job**: The publish workflow now runs the standalone test suites before building platform packages
+- **All comparisons are session-file backed**: The explorer command now saves the selection as a session file in extension storage and opens it via the custom editor. Comparisons survive window reloads, appear in Open Recent, and re-selecting the same folders focuses the existing tab. Generated session files are pruned after 30 days (user-authored files untouched)
+
+### Changed
+- Editor tab titles now show the session file name (VSCode controls custom editor tab labels); the explorer command derives it from the selection's common prefix. Use the `workbench.editor.customLabels.patterns` setting to hide the `.imagecompare` suffix
+- **Modality order follows the order directories are provided**: For multiple selected directories (or a session file's `paths`), modalities now display in that given order instead of being sorted alphabetically — the caller controls the order. A single directory's subfolders are still sorted for a stable view. `classifyUris` also assembles results in input order so this is deterministic.
+- **Explicit session-file labels are shown in full**: Modality pills normally truncate long names to 20 characters, but when the names come from a session file's `labels` they are shown untruncated (the pill widens to fit and the status bar wraps as needed).
+- **Per-pill colors via session files**: A `.imagecompare` file may include a `colors` array (aligned with `paths`, hex `#rgb`/`#rrggbb`) to override modality pill colors; unspecified sessions keep the default palette cycle.
+
+### Fixed
+- **Missing/malformed session files no longer crash the editor**: A `.imagecompare` file that is deleted, renamed, or contains invalid JSON now shows an error message in the tab instead of throwing (which left VSCode with an unresolved custom editor after a window reload)
+- **Winner results stored next to the session file when folders have no common root**: When comparing directories in different locations (e.g. epoch dirs from separate training runs), `results.txt` was written into the first folder's parent, burying votes in one arbitrary run. Such comparisons opened from a `.imagecompare` file now store results next to the session file as `<session>.results.txt` (named per-session to avoid collisions). Single-root comparisons are unchanged
+
 ## [0.2.1] - 2026
 
 ### Added

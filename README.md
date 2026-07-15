@@ -48,6 +48,31 @@ Select 2+ image files → Right-click → **"Open in ImageCompare"**
 
 Select multiple folders (Ctrl+Click) → Right-click → **"Open in ImageCompare"**
 
+### Open from a Script or CLI
+
+Write a `.imagecompare` session file listing folders (or image files) to compare, then open it — from the terminal, a script, or by clicking it in the explorer:
+
+```bash
+cat > session.imagecompare <<'EOF'
+{
+  "paths": ["/experiments/run_a/images", "/experiments/run_b/images"],
+  "labels": ["baseline", "no_asset_gen"],
+  "colors": ["#0af", "#f60"]
+}
+EOF
+code session.imagecompare
+```
+
+Relative paths are resolved against the file's location. The optional `labels` array (same length as `paths`, unique) overrides modality names when comparing multiple folders — useful when folders share a basename (e.g. epoch dirs from different training runs). The optional `colors` array (same length as `paths`, hex `#rgb`/`#rrggbb`) overrides the pill colors. Reopening the file restores the comparison.
+
+Right-click comparisons work the same way under the hood: the selection is saved as a session file in extension storage, so comparisons survive window reloads and appear in **File > Open Recent**. Auto-generated session files are cleaned up after 30 days (files you write yourself are never touched).
+
+Tip: tab titles show the full filename; add this setting to display `session` instead of `session.imagecompare`:
+
+```jsonc
+"workbench.editor.customLabels.patterns": { "**/*.imagecompare": "${filename}" }
+```
+
 ## Keyboard Shortcuts
 
 | Key | Action |

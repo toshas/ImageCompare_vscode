@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import PptxGenJS from 'pptxgenjs';
-import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, disambiguateDirectoryNames } from './fileService';
+import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, disambiguateDirectoryNames, RESULTS_FILENAME } from './fileService';
+import { applyLabels } from './sessionFile';
 import { ThumbnailService } from './thumbnailService';
 import { parsePpmx } from './ppmxParser';
 import {
@@ -13,7 +14,8 @@ import {
   WebViewMessage,
   ExtensionMessage,
   LoadedImage,
-  isImageFile
+  isImageFile,
+  MODALITY_COLORS
 } from './types';
 
 /**
@@ -39,10 +41,13 @@ interface PanelState {
   deleteCheckTimer?: ReturnType<typeof setInterval>; // Polling timer for delete detection
   watchedDirs: Set<string>;
   baseUri?: vscode.Uri; // Root directory for single-directory mode (mode 1)
+  sessionFileUri?: vscode.Uri; // The .imagecompare file this comparison was opened from
+  colorsByUri?: Map<string, string>; // URI string -> pill color override (from session-file colors)
   modalityDirs: Map<string, vscode.Uri>; // Modality name -> directory URI (for mode 2)
   recentlyDeleted: DeletedFileInfo[];
   winners: Map<number, number>; // tupleIndex -> modalityIndex (display index)
   votingEnabled: boolean; // true for mode 1 and 2 (directory-based modes)
+  labelsExplicit: boolean; // modality names came from user-provided session-file labels
   webviewReady: boolean;
   pendingDebugMessages: string[];
 }
@@ -51,13 +56,10 @@ interface PanelState {
  * Provider for the ImageCompare WebView panel
  */
 export class ImageCompareProvider {
-  public static readonly viewType = 'imageCompare.viewer';
-
   private thumbnailService: ThumbnailService;
   private disposables: vscode.Disposable[] = [];
   // Track all open panels (for cleanup on deactivate)
   private panels: Set<PanelState> = new Set();
-  private panelCounter = 0; // For fallback naming
 
   constructor(
     private readonly context: vscode.ExtensionContext
@@ -73,35 +75,22 @@ export class ImageCompareProvider {
   }
 
   /**
-   * Open the ImageCompare viewer for the given URIs
-   * Each call creates a new independent panel/tab
+   * Open the ImageCompare viewer for the given URIs in the supplied panel.
+   * All entry points (explorer command, CLI) go through .imagecompare session
+   * files, whose custom editor provides the panel.
+   * Labels (keyed by URI string) override modality names in multi-directory mode.
+   * Colors (keyed by URI string) override modality pill colors.
+   * sessionFileUri is the .imagecompare file this was opened from (for results.txt placement).
    */
-  async openCompare(uris: vscode.Uri[]): Promise<void> {
+  async openCompare(uris: vscode.Uri[], panel: vscode.WebviewPanel, labels?: Map<string, string>, sessionFileUri?: vscode.Uri, colors?: Map<string, string>): Promise<void> {
     try {
       // Scan for images
-      const scanResult = await scanForImages(uris);
+      const scanResult = await scanForImages(uris, labels);
 
       if (scanResult.tuples.length === 0) {
         vscode.window.showErrorMessage('No image tuples found');
         return;
       }
-
-      // Derive a title - use common prefix from tuple names or folder name
-      const title = this.deriveTitle(scanResult, uris);
-
-      // Create a new panel
-      const panel = vscode.window.createWebviewPanel(
-        ImageCompareProvider.viewType,
-        title,
-        vscode.ViewColumn.Active,
-        {
-          enableScripts: true,
-          retainContextWhenHidden: true,
-          localResourceRoots: [
-            vscode.Uri.joinPath(this.context.extensionUri, 'dist')
-          ]
-        }
-      );
 
       // Determine mode and set up directory tracking
       // Mode 1: Single directory with subdirectories -> baseUri is set
@@ -116,7 +105,7 @@ export class ImageCompareProvider {
       } else if (uris.length >= 2 && scanResult.isMultiTupleMode) {
         // Mode 2: Multiple directories - map modality names to directory URIs
         // Use disambiguated names (same logic as fileService scanning)
-        const disambiguated = disambiguateDirectoryNames(uris);
+        const disambiguated = applyLabels(disambiguateDirectoryNames(uris), labels);
         for (const { name, uri } of disambiguated) {
           if (scanResult.modalities.includes(name)) {
             modalityDirs.set(name, uri);
@@ -158,7 +147,10 @@ export class ImageCompareProvider {
         nodeWatchers: [],
         watchedDirs,
         baseUri,
+        sessionFileUri,
+        colorsByUri: colors,
         modalityDirs,
+        labelsExplicit: !!labels && labels.size > 0,
         recentlyDeleted: [],
         winners: new Map<number, number>(),
         votingEnabled,
@@ -723,30 +715,37 @@ export class ImageCompareProvider {
   }
 
   /**
-   * Get the base URI for saving results.txt
-   * Returns undefined if voting is not enabled
+   * Get the directory and filename for the results file, or undefined if
+   * voting is not enabled.
+   *
+   * Mode 1 and mode-2-with-a-common-parent store `results.txt` in that shared
+   * root, next to the modality folders. When the compared folders live in
+   * different places (no common parent — e.g. epoch dirs from separate runs),
+   * there is no natural shared root, so results go next to the .imagecompare
+   * session file instead, named after it to avoid collisions between sessions
+   * kept in the same directory.
    */
-  private getResultsBaseUri(state: PanelState): vscode.Uri | undefined {
-    // Mode 1: Single directory with subdirectories
+  private getResultsTarget(state: PanelState): { baseUri: vscode.Uri; filename: string } | undefined {
     if (state.baseUri) {
-      return state.baseUri;
+      return { baseUri: state.baseUri, filename: RESULTS_FILENAME };
     }
 
-    // Mode 2: Multiple directories - use common parent or first directory's parent
     if (state.modalityDirs.size > 0) {
       const uris = Array.from(state.modalityDirs.values());
-      // Try to find common parent
       const paths = uris.map(u => u.path);
       const firstParent = paths[0].substring(0, paths[0].lastIndexOf('/'));
-
-      // Check if all paths share this parent
       const allSameParent = paths.every(p => p.startsWith(firstParent + '/'));
-      if (allSameParent) {
-        return vscode.Uri.file(firstParent).with({ scheme: uris[0].scheme });
+
+      if (!allSameParent && state.sessionFileUri) {
+        const sessionPath = state.sessionFileUri.fsPath;
+        const stem = path.basename(sessionPath).replace(/\.imagecompare$/i, '');
+        return {
+          baseUri: state.sessionFileUri.with({ path: path.dirname(state.sessionFileUri.path) }),
+          filename: `${stem}.results.txt`
+        };
       }
 
-      // Fallback: use first directory's parent
-      return vscode.Uri.file(firstParent).with({ scheme: uris[0].scheme });
+      return { baseUri: vscode.Uri.file(firstParent).with({ scheme: uris[0].scheme }), filename: RESULTS_FILENAME };
     }
 
     return undefined;
@@ -757,10 +756,11 @@ export class ImageCompareProvider {
    * If no winners remain, deletes the file
    */
   private async saveResults(state: PanelState): Promise<void> {
-    const baseUri = this.getResultsBaseUri(state);
-    if (!baseUri) return;
+    const target = this.getResultsTarget(state);
+    if (!target) return;
+    const { baseUri, filename } = target;
 
-    const resultsUri = vscode.Uri.joinPath(baseUri, 'results.txt');
+    const resultsUri = vscode.Uri.joinPath(baseUri, filename);
 
     // If no winners, delete the file
     if (state.winners.size === 0) {
@@ -786,7 +786,8 @@ export class ImageCompareProvider {
         baseUri,
         state.scanResult.tuples,
         winnersWithNames,
-        state.scanResult.modalities
+        state.scanResult.modalities,
+        filename
       );
     } catch (error) {
       // Silently fail - results file is optional
@@ -813,10 +814,10 @@ export class ImageCompareProvider {
 
     // Load winners from results.txt if voting is enabled
     if (state.votingEnabled) {
-      const baseUri = this.getResultsBaseUri(state);
-      if (baseUri) {
+      const target = this.getResultsTarget(state);
+      if (target) {
         try {
-          const savedWinners = await readResultsFile(baseUri);
+          const savedWinners = await readResultsFile(target.baseUri, target.filename);
           const indexedWinners = mapWinnersToIndices(
             savedWinners,
             state.scanResult.tuples,
@@ -860,14 +861,24 @@ export class ImageCompareProvider {
       return mod;
     });
 
+    // Pill color per modality: session-file override (keyed by directory URI) or
+    // the default palette cycle.
+    const modalityColors: string[] = allModalities.map((mod, i) => {
+      const dirUri = state.modalityDirs.get(mod);
+      const override = dirUri && state.colorsByUri?.get(dirUri.toString());
+      return override || MODALITY_COLORS[i % MODALITY_COLORS.length];
+    });
+
     const initMessage: ExtensionMessage = {
       type: 'init',
       tuples,
       modalities: allModalities,
       modalityPaths,
+      modalityColors,
       config: { thumbnailSize, prefetchCount },
       winners: winnersRecord,
-      votingEnabled: state.votingEnabled
+      votingEnabled: state.votingEnabled,
+      labelsExplicit: state.labelsExplicit
     };
 
     state.panel.webview.postMessage(initMessage);
@@ -2610,85 +2621,4 @@ body {
     }
   }
 
-  /**
-   * Derive a meaningful title for the panel
-   */
-  private deriveTitle(scanResult: ScanResult, uris: vscode.Uri[]): string {
-    const MAX_LENGTH = 40;
-    this.panelCounter++;
-
-    // Generic names that shouldn't be used as titles
-    const GENERIC_NAMES = new Set([
-      'image', 'images', 'img', 'imgs', 'photo', 'photos', 'pic', 'pics', 'picture', 'pictures',
-      'file', 'files', 'folder', 'folders', 'dir', 'directory', 'directories',
-      'data', 'output', 'input', 'result', 'results', 'test', 'tests', 'tmp', 'temp',
-      'new', 'old', 'copy', 'backup', 'untitled', 'unnamed'
-    ]);
-
-    const isGenericName = (name: string): boolean => {
-      const lower = name.toLowerCase().replace(/[\s_\-./\\0-9]+/g, '');
-      return GENERIC_NAMES.has(lower) || lower.length < 2;
-    };
-
-    const truncate = (str: string): string => {
-      return str.length > MAX_LENGTH ? str.slice(0, MAX_LENGTH - 1) + '…' : str;
-    };
-
-    const findCommonPrefix = (names: string[]): string => {
-      if (names.length === 0) return '';
-      let commonPrefix = names[0];
-      for (let i = 1; i < names.length && commonPrefix.length > 0; i++) {
-        while (commonPrefix.length > 0 && !names[i].startsWith(commonPrefix)) {
-          commonPrefix = commonPrefix.slice(0, -1);
-        }
-      }
-      // Clean up trailing separators
-      return commonPrefix.replace(/[\s_\-./\\]+$/, '').trim();
-    };
-
-    // Mode 3: Multiple files selected (not multi-tuple mode, uris are files)
-    if (!scanResult.isMultiTupleMode && uris.length > 1) {
-      const fileNames = uris.map(u => u.path.split('/').pop()?.replace(/\.[^.]+$/, '') || '');
-      const commonPrefix = findCommonPrefix(fileNames);
-      
-      if (commonPrefix.length >= 3 && !isGenericName(commonPrefix)) {
-        return `Compare: ${truncate(commonPrefix)}`;
-      }
-      return `Compare: ${uris.length} files`;
-    }
-
-    // Mode 2: Multiple directories selected
-    if (uris.length > 1) {
-      const dirNames = uris.map(u => u.path.split('/').pop() || '');
-      const commonPrefix = findCommonPrefix(dirNames);
-      
-      if (commonPrefix.length >= 3 && !isGenericName(commonPrefix)) {
-        return `Compare: ${truncate(commonPrefix)}`;
-      }
-      return `Compare: ${uris.length} directories`;
-    }
-
-    // Mode 1: Single directory - try tuple names first, then fall back to dir name
-    if (scanResult.tuples.length > 0) {
-      const tupleNames = scanResult.tuples.map(t => t.name).filter(n => n && n !== 'Untitled');
-      if (tupleNames.length > 0) {
-        const commonPrefix = findCommonPrefix(tupleNames);
-        
-        if (commonPrefix.length >= 3 && !isGenericName(commonPrefix)) {
-          return `Compare: ${truncate(commonPrefix)}`;
-        }
-      }
-    }
-
-    // Fallback to folder name from URI
-    if (uris.length > 0) {
-      const folderName = uris[0].path.split('/').pop() || '';
-      if (folderName.length >= 2 && !isGenericName(folderName)) {
-        return `Compare: ${truncate(folderName)}`;
-      }
-    }
-
-    // Final fallback - use counter
-    return `Compare: ${this.panelCounter}`;
-  }
 }

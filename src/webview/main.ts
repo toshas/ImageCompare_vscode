@@ -135,6 +135,10 @@ const LOAD_DEBOUNCE_MS = 150; // wait this long before loading full images
 let winners: Map<number, number> = new Map(); // tupleIndex -> modalityIndex (display index)
 let votingEnabled = false;
 
+// When modality names come from user-provided session-file labels, show them in
+// full (never truncate the pill) so the intended label is always readable.
+let labelsExplicit = false;
+
 // Floating panel drag state
 let fpDragging = false;
 let fpDragStartX = 0;
@@ -397,13 +401,16 @@ function handleWinnersReset(message: { winners: Record<number, number> }) {
   updateModalitySelector();
 }
 
-function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }) {
+function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean; labelsExplicit: boolean }) {
   // Reset all state for new comparison
   tuples = message.tuples;
   modalities = message.modalities;
   modalityPaths = message.modalityPaths || modalities;
+  labelsExplicit = message.labelsExplicit;
   config = message.config;
-  modalityColors = modalities.map((_, i) => MODALITY_COLORS[i % MODALITY_COLORS.length]);
+  modalityColors = message.modalityColors && message.modalityColors.length === modalities.length
+    ? message.modalityColors.slice()
+    : modalities.map((_, i) => MODALITY_COLORS[i % MODALITY_COLORS.length]);
   modalityOrder = modalities.map((_, i) => i); // Initialize order: [0, 1, 2, ...]
 
   // Load winner state
@@ -1286,6 +1293,13 @@ function goToTupleAndModality(tupleIdx: number, modalityIdx: number) {
   }
 }
 
+// Pill label: full text for explicit session-file labels, else truncated so
+// long auto-derived directory names don't blow out the status bar.
+function pillLabel(name: string): string {
+  if (labelsExplicit || name.length <= 20) return name;
+  return name.slice(0, 19) + '\u2026';
+}
+
 function buildModalitySelector() {
   modalitySelectorEl.innerHTML = '';
 
@@ -1294,8 +1308,7 @@ function buildModalitySelector() {
   for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
     const btn = document.createElement('button');
     btn.className = 'modality-btn';
-    const truncName = modalities[displayIdx].length > 20 ? modalities[displayIdx].slice(0, 19) + '\u2026' : modalities[displayIdx];
-    btn.textContent = truncName;
+    btn.textContent = pillLabel(modalities[displayIdx]);
     btn.title = modalityPaths[displayIdx];
     btn.style.background = modalityColors[displayIdx];
     btn.dataset.displayIndex = String(displayIdx);
@@ -1337,8 +1350,7 @@ function updateModalitySelector() {
     }
 
     // Update button text with win count if voting enabled and has wins
-    const modalityName = modalities[displayIdx];
-    const truncName = modalityName.length > 20 ? modalityName.slice(0, 19) + '\u2026' : modalityName;
+    const truncName = pillLabel(modalities[displayIdx]);
     (btn as HTMLElement).title = modalityPaths[displayIdx];
     if (votingEnabled && winCounts[displayIdx] > 0) {
       btn.textContent = `${truncName} (${winCounts[displayIdx]})`;

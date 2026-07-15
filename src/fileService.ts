@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ImageFile, ImageTuple, ScanResult, isImageFile } from './types';
+import { applyLabels } from './sessionFile';
 
 /**
  * Debug logging for tuple matching (controlled by imageCompare.debug setting)
@@ -368,10 +369,12 @@ function findDifferingParts(names: string[]): string[] {
  * 
  * Three modes:
  * 1. Single directory with subdirectories → each subdirectory is a modality
- * 2. Multiple directories selected → each directory is a modality  
+ * 2. Multiple directories selected → each directory is a modality
  * 3. Multiple image files selected → single tuple with files as modalities
+ *
+ * Optional labels (keyed by URI string) override modality names in mode 2.
  */
-export async function scanForImages(uris: vscode.Uri[]): Promise<ScanResult> {
+export async function scanForImages(uris: vscode.Uri[], labels?: Map<string, string>): Promise<ScanResult> {
   if (uris.length === 0) {
     throw new Error('No files or directories provided');
   }
@@ -386,7 +389,7 @@ export async function scanForImages(uris: vscode.Uri[]): Promise<ScanResult> {
 
   // Case 2: Multiple directories → each directory is a modality
   if (classified.directories.length >= 2 && classified.files.length === 0) {
-    const dirs = disambiguateDirectoryNames(classified.directories);
+    const dirs = applyLabels(disambiguateDirectoryNames(classified.directories), labels);
     const result = await scanDirectoriesAsModalities(dirs);
     if (result) {
       return result;
@@ -414,18 +417,22 @@ async function classifyUris(uris: vscode.Uri[]): Promise<{ files: vscode.Uri[]; 
   const files: vscode.Uri[] = [];
   const directories: vscode.Uri[] = [];
 
-  await Promise.all(uris.map(async (uri) => {
+  // Stat in parallel but assemble in input order (Promise.all preserves order),
+  // so downstream modality ordering is deterministic and matches the caller's list.
+  const types = await Promise.all(uris.map(async (uri) => {
     try {
-      const stat = await vscode.workspace.fs.stat(uri);
-      if (stat.type === vscode.FileType.Directory) {
-        directories.push(uri);
-      } else if (stat.type === vscode.FileType.File) {
-        files.push(uri);
-      }
+      return (await vscode.workspace.fs.stat(uri)).type;
     } catch {
-      // Skip URIs that can't be stat'd
+      return undefined;
     }
   }));
+  uris.forEach((uri, i) => {
+    if (types[i] === vscode.FileType.Directory) {
+      directories.push(uri);
+    } else if (types[i] === vscode.FileType.File) {
+      files.push(uri);
+    }
+  });
 
   return { files, directories };
 }
@@ -450,6 +457,8 @@ async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
 
   // Check for multi-modality mode (2+ subdirectories with images)
   if (subdirs.length >= 2) {
+    // Subdirectories have no caller-intended order, so sort them for a stable view.
+    subdirs.sort((a, b) => naturalSort(a.name, b.name));
     const modalityResult = await scanDirectoriesAsModalities(subdirs);
     if (modalityResult) {
       return modalityResult;
@@ -481,8 +490,9 @@ async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
 async function scanDirectoriesAsModalities(
   dirs: Array<{ name: string; uri: vscode.Uri }>
 ): Promise<ScanResult | null> {
-  // Sort modalities alphabetically
-  dirs.sort((a, b) => naturalSort(a.name, b.name));
+  // Preserve the caller's directory order as the modality display order — for
+  // explicitly selected/passed directories that order is intentional. (Callers
+  // that want a sorted order, e.g. a single directory's subfolders, sort first.)
 
   // Read image files from each directory
   const modalityFiles: Map<string, Array<{ name: string; uri: vscode.Uri }>> = new Map();
@@ -613,8 +623,8 @@ export const RESULTS_FILENAME = 'results.txt';
  * Read results.txt and parse winner data
  * Returns a Map of tuple key (name) -> winner modality name
  */
-export async function readResultsFile(baseUri: vscode.Uri): Promise<Map<string, string>> {
-  const resultsUri = vscode.Uri.joinPath(baseUri, RESULTS_FILENAME);
+export async function readResultsFile(baseUri: vscode.Uri, filename: string = RESULTS_FILENAME): Promise<Map<string, string>> {
+  const resultsUri = vscode.Uri.joinPath(baseUri, filename);
   const winners = new Map<string, string>();
 
   try {
@@ -655,9 +665,10 @@ export async function writeResultsFile(
   baseUri: vscode.Uri,
   tuples: ImageTuple[],
   winners: Map<number, string>, // tupleIndex -> modality name
-  modalities: string[]
+  modalities: string[],
+  filename: string = RESULTS_FILENAME
 ): Promise<void> {
-  const resultsUri = vscode.Uri.joinPath(baseUri, RESULTS_FILENAME);
+  const resultsUri = vscode.Uri.joinPath(baseUri, filename);
 
   // Build file content
   const lines: string[] = [
