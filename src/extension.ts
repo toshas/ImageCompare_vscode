@@ -12,11 +12,7 @@ function sessionsDir(context: vscode.ExtensionContext): vscode.Uri {
   return vscode.Uri.joinPath(context.globalStorageUri, 'sessions');
 }
 
-/**
- * Persist the explorer selection as a session file in globalStorage and open
- * it with the custom editor. All comparisons go through session files, so
- * they survive window reloads and can be reopened from Open Recent.
- */
+/** Persist the explorer selection as a session file in globalStorage and open it with the custom editor. */
 async function openSelectionAsSession(context: vscode.ExtensionContext, uris: vscode.Uri[]): Promise<void> {
   const dir = sessionsDir(context);
   await vscode.workspace.fs.createDirectory(dir);
@@ -26,8 +22,7 @@ async function openSelectionAsSession(context: vscode.ExtensionContext, uris: vs
   const base = suggestSessionFileName(names);
   const body = Buffer.from(JSON.stringify({ paths: uris.map(u => u.fsPath) }, null, 2) + '\n');
 
-  // Reuse the file when it holds the same selection (focuses the existing
-  // tab); otherwise uniquify with a numeric suffix.
+  // Reuse before uniquify: identical content reopens the same tab (docs/session-files.md).
   for (let i = 1; ; i++) {
     const fileUri = vscode.Uri.joinPath(dir, `${base}${i === 1 ? '' : `_${i}`}.imagecompare`);
     let existing: Uint8Array | undefined;
@@ -44,10 +39,7 @@ async function openSelectionAsSession(context: vscode.ExtensionContext, uris: vs
   }
 }
 
-/**
- * Best-effort cleanup of generated session files: delete files older than
- * 30 days unless they are open in some tab.
- */
+/** Best-effort prune of generated sessions older than 30 days, skipping open ones (docs/session-files.md: prune-double-guard). */
 async function pruneOldSessions(context: vscode.ExtensionContext): Promise<void> {
   const dir = sessionsDir(context);
   let entries: [string, vscode.FileType][];
@@ -67,7 +59,7 @@ async function pruneOldSessions(context: vscode.ExtensionContext): Promise<void>
       continue;
     }
     const fileUri = vscode.Uri.joinPath(dir, name);
-    if (openUris.has(fileUri.toString())) {
+    if (openUris.has(fileUri.toString()) || openSessionUris.has(fileUri.toString())) {
       continue;
     }
     try {
@@ -81,26 +73,23 @@ async function pruneOldSessions(context: vscode.ExtensionContext): Promise<void>
   }
 }
 
-/**
- * Custom editor for .imagecompare session files (see sessionFile.ts for the
- * format). Opening such a file from the CLI (`code session.imagecompare`) or
- * the explorer starts a comparison, enabling scripted/automated invocation.
- */
+// Session files with an open/restoring custom editor; pruneOldSessions skips these (docs/session-files.md).
+const openSessionUris = new Set<string>();
+
+/** Custom editor for .imagecompare session files — the only entry point to a comparison (docs/session-files.md: custom-editor-entry). */
 class SessionFileEditorProvider implements vscode.CustomReadonlyEditorProvider {
   constructor(private readonly extensionUri: vscode.Uri) {}
 
   openCustomDocument(uri: vscode.Uri): vscode.CustomDocument {
-    return { uri, dispose: () => {} };
+    openSessionUris.add(uri.toString());
+    return { uri, dispose: () => { openSessionUris.delete(uri.toString()); } };
   }
 
   async resolveCustomEditor(
     document: vscode.CustomDocument,
     webviewPanel: vscode.WebviewPanel
   ): Promise<void> {
-    // Configure the webview up front so we can always render into it — a
-    // missing or malformed session file (common, since generated ones live in
-    // a cache and get pruned/deleted) must show a message here rather than
-    // throwing, which would leave VSCode with an unresolved custom editor.
+    // Configure the webview before parsing so a bad/missing session renders the error or empty-scan page instead of throwing (docs/session-files.md: resolve-never-throws).
     webviewPanel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'dist')]
@@ -170,6 +159,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(disposable);
 
+  // webview/context menu items (package.json contributes.menus); ctx is the element's data-vscode-context.
+  const menuProvider = provider;
+  for (const [cmd, action] of [
+    ['imageCompare.copyImage', 'copyImage'],
+    ['imageCompare.copyPath', 'copyPath'],
+    ['imageCompare.revealInExplorer', 'revealInExplorer'],
+    ['imageCompare.hideModality', 'toggleHidden'],
+    ['imageCompare.showModality', 'toggleHidden']
+  ] as const) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(cmd, (ctx) => menuProvider.handleMenuCommand(action, ctx))
+    );
+  }
+
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
       SESSION_VIEW_TYPE,
@@ -181,10 +184,12 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  void pruneOldSessions(context);
+  // Prune stays deferred so reload-restored editors register first (docs/session-files.md: prune-double-guard).
+  const pruneTimer = setTimeout(() => void pruneOldSessions(context), 15000);
 
   context.subscriptions.push({
     dispose: () => {
+      clearTimeout(pruneTimer);
       if (provider) {
         provider.dispose();
       }

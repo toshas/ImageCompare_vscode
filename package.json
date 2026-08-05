@@ -2,7 +2,7 @@
   "name": "image-compare",
   "displayName": "ImageCompare",
   "description": "Compare multiple images (tuples) with multiple modalities",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "obukhovai",
   "license": "MIT",
   "icon": "icon.png",
@@ -35,6 +35,26 @@
       {
         "command": "imageCompare.openInCompare",
         "title": "Open in ImageCompare"
+      },
+      {
+        "command": "imageCompare.copyImage",
+        "title": "Copy Image"
+      },
+      {
+        "command": "imageCompare.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "imageCompare.revealInExplorer",
+        "title": "Reveal in Explorer"
+      },
+      {
+        "command": "imageCompare.hideModality",
+        "title": "Hide Modality"
+      },
+      {
+        "command": "imageCompare.showModality",
+        "title": "Show Modality"
       }
     ],
     "customEditors": [
@@ -61,6 +81,55 @@
           "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(png|jpg|jpeg|gif|bmp|webp|tiff|tif|ppmx)$/i",
           "group": "navigation@10"
         }
+      ],
+      "webview/context": [
+        {
+          "command": "imageCompare.copyImage",
+          "when": "webviewSection == 'imageCompareImage'",
+          "group": "1_imagecompare@1"
+        },
+        {
+          "command": "imageCompare.copyPath",
+          "when": "webviewSection == 'imageCompareImage' || webviewSection == 'imageComparePill'",
+          "group": "1_imagecompare@2"
+        },
+        {
+          "command": "imageCompare.revealInExplorer",
+          "when": "webviewSection == 'imageCompareImage' || webviewSection == 'imageComparePill'",
+          "group": "1_imagecompare@3"
+        },
+        {
+          "command": "imageCompare.hideModality",
+          "when": "webviewSection == 'imageComparePill' && !imageCompareHidden",
+          "group": "2_imagecompare@1"
+        },
+        {
+          "command": "imageCompare.showModality",
+          "when": "webviewSection == 'imageComparePill' && imageCompareHidden",
+          "group": "2_imagecompare@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "imageCompare.copyImage",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.revealInExplorer",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.hideModality",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.showModality",
+          "when": "false"
+        }
       ]
     },
     "configuration": {
@@ -71,7 +140,7 @@
           "default": 100,
           "minimum": 50,
           "maximum": 200,
-          "description": "Size of thumbnails in the carousel (pixels)"
+          "description": "Resolution carousel thumbnails are decoded and cached at, in pixels (longest side, 2x this value). Not the on-screen size: that is derived from the carousel width divided by the number of modalities."
         },
         "imageCompare.prefetchCount": {
           "type": "number",
@@ -90,7 +159,7 @@
         "imageCompare.debug": {
           "type": "boolean",
           "default": false,
-          "description": "Enable debug logging (file watcher events, polling, etc.) in the webview developer console"
+          "description": "Enable debug logging. Watcher and sweep events ([IC-EXT]) go to the webview developer console (Help > Toggle Developer Tools); tuple-matching traces ([IC-MATCH]) go to the Extension Host output."
         }
       }
     }
@@ -101,7 +170,7 @@
     "watch": "webpack --watch",
     "package": "webpack --mode production --devtool hidden-source-map",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "ts-node src/test/tupleMatching.test.ts && ts-node src/test/pngTextChunk.test.ts && ts-node src/test/sessionFile.test.ts && ts-node src/test/watcherLogic.test.ts && ts-node src/test/workPool.test.ts && ts-node src/test/ppmxParser.test.ts && ts-node src/test/modalityVisibility.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

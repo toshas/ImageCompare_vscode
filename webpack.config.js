@@ -15,6 +15,7 @@ const extensionConfig = {
   },
   externals: {
     vscode: 'commonjs vscode',
+    // Sharp must stay external: bundling freezes its runtime binary resolution (docs/image-backends.md: sharp-externalized).
     sharp: 'commonjs sharp'
   },
   resolve: {

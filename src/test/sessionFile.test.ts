@@ -61,8 +61,8 @@ console.log('Test 2: relative paths resolve against the session file dir');
 
 console.log('Test 3: labels accepted when aligned with paths');
 {
-  const spec = parseSessionFile('{"paths": ["/a", "/b"], "labels": ["flat5@033", "noassetgen@033"]}', BASE);
-  assert(spec.labels !== undefined && spec.labels[1] === 'noassetgen@033', `got ${spec.labels}`);
+  const spec = parseSessionFile('{"paths": ["/a", "/b"], "labels": ["baseline@v1", "variant@v1"]}', BASE);
+  assert(spec.labels !== undefined && spec.labels[1] === 'variant@v1', `got ${spec.labels}`);
 }
 
 console.log('Test 4: invalid JSON rejected');
@@ -126,6 +126,32 @@ console.log('Test 11: suggestSessionFileName length cap and empty fallback');
   const long = suggestSessionFileName(['x'.repeat(100)]);
   assert(long.length === 60, `expected 60 chars, got ${long.length}`);
   assert(suggestSessionFileName(['--']) === 'comparison', `got ${suggestSessionFileName(['--'])}`);
+}
+
+console.log('Test 12: duplicate paths are rejected');
+{
+  // Two identical paths become two modalities sharing one URI, and every URI-keyed lookup then
+  // resolves both to the first — the second column would never receive a thumbnail.
+  let threw = false;
+  try {
+    parseSessionFile(JSON.stringify({ paths: ['/a/x.png', '/a/x.png', '/a/y.png'] }), '/base');
+  } catch (e: any) {
+    threw = /must not repeat/.test(e.message);
+  }
+  assert(threw, 'duplicate paths must be rejected');
+
+  // Relative and absolute spellings of the same location collide only after resolution.
+  let threwRel = false;
+  try {
+    parseSessionFile(JSON.stringify({ paths: ['x.png', '/base/x.png'] }), '/base');
+  } catch (e: any) {
+    threwRel = /must not repeat/.test(e.message);
+  }
+  assert(threwRel, 'duplicates must be detected after resolving against baseDir');
+
+  // Distinct paths still parse.
+  const ok = parseSessionFile(JSON.stringify({ paths: ['/a/x.png', '/a/y.png'] }), '/base');
+  assert(ok.paths.length === 2, `expected 2 paths, got ${ok.paths.length}`);
 }
 
 printResults();

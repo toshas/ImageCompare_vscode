@@ -32,11 +32,20 @@ jobs:
       - name: Compile
         run: npm run compile
 
+      # An uncited invariant is decoration; a dangling citation is a lie. See CLAUDE.md.
+      - name: Check invariant citations
+        run: node scripts/check-invariants.mjs
+
+      # A run of consecutive // lines is a comment block; it belongs in docs/. See CLAUDE.md.
+      - name: Check comment length
+        run: node scripts/comment-lint.mjs
+
+      # One list of suites, in package.json — a second copy here would silently go stale.
       - name: Run tests
-        run: |
-          npx ts-node src/test/tupleMatching.test.ts
-          npx ts-node src/test/pngTextChunk.test.ts
-          npx ts-node src/test/sessionFile.test.ts
+        run: npm test
+
+      - name: Mutation check
+        run: node scripts/mutation-check.mjs
 
   build:
     needs: test
@@ -83,6 +92,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The wasm32 pack/untar/@emnapi steps below are one of the two hand-maintained lists building the VSIX's node_modules (docs/image-backends.md: vsix-modules-hand-assembled).
       - name: Install platform-specific Sharp
         run: |
           SHARP_VERSION=$(node -p "require('./package.json').dependencies.sharp")
@@ -100,6 +110,29 @@ jobs:
 
       - name: Package extension
         run: npx vsce package --target ${{ matrix.target }}
+
+      # Losing the hand-extracted WASM tier is a silent perf cliff; see docs/image-backends.md.
+      - name: Verify WASM fallback is in the VSIX
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const vsix = fs.readdirSync(".").find(f => f.endsWith(".vsix"));
+            if (!vsix) { console.error("::error::no .vsix produced"); process.exit(1); }
+            const bytes = fs.readFileSync(vsix);
+            // Zip entry names are stored uncompressed, so a substring scan needs no unzip dep.
+            const required = [
+              "node_modules/@img/sharp-wasm32/lib/sharp-wasm32.node.wasm",
+              "node_modules/@emnapi/runtime/",
+            ];
+            const missing = required.filter(p => !bytes.includes(p));
+            if (missing.length) {
+              console.error("::error::" + vsix + " is missing the WASM fallback: " + missing.join(", ") +
+                " — check the order of the Sharp install steps; see docs/image-backends.md");
+              process.exit(1);
+            }
+            console.log("OK: " + vsix + " contains the WASM fallback");
+          '
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

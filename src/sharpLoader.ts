@@ -1,33 +1,14 @@
-/**
- * Dynamic Sharp loader with WASM fallback.
- *
- * Sharp's native binaries require x86-64-v2 (SSE4.2+). On older CPUs the
- * native @img/sharp-linux-x64 package is *present* but fails to load with
- * "Unsupported CPU". Sharp only auto-falls back to @img/sharp-wasm32 when
- * the native package is completely *missing*.
- *
- * Strategy:
- *  1. Try require('sharp') normally — works on modern CPUs.
- *  2. If that throws an "Unsupported CPU" (or similar load) error, flush
- *     every sharp-related entry from the require cache, temporarily block
- *     resolution of native @img/sharp-* packages so Sharp can only find
- *     @img/sharp-wasm32, and retry.
- *  3. If WASM also fails, set sharpInstance to null — callers must handle
- *     the fallback path.
- */
+/** Dynamic Sharp loader with WASM fallback; null when neither loads. See docs/image-backends.md. */
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 
 export type SharpType = typeof import('sharp');
-export type SharpInstance = ReturnType<SharpType>;
 
 let sharpModule: SharpType | null = null;
 let loadAttempted = false;
 let loadError: string | null = null;
 
-/**
- * Returns the loaded Sharp module, or null if unavailable.
- */
+/** Returns the loaded Sharp module, or null if unavailable. */
 export function getSharp(): SharpType | null {
   if (!loadAttempted) {
     loadSharp();
@@ -35,9 +16,7 @@ export function getSharp(): SharpType | null {
   return sharpModule;
 }
 
-/**
- * Human-readable reason why Sharp could not be loaded (empty when loaded OK).
- */
+/** Human-readable reason why Sharp could not be loaded (null when loaded OK). */
 export function getSharpError(): string | null {
   if (!loadAttempted) {
     loadSharp();
@@ -73,8 +52,7 @@ function loadSharp(): void {
 
   // --- Attempt 2: force WASM by blocking native @img/sharp-* resolution ------
   try {
-    // Clear every sharp-related entry from the require cache so a fresh
-    // require('sharp') re-runs the platform-detection logic.
+    // Purge the require cache so the retry re-runs Sharp's platform detection instead of returning the failed module.
     for (const key of Object.keys(require.cache)) {
       if (/[/\\](sharp|@img)[/\\]/.test(key)) {
         delete require.cache[key];
@@ -84,8 +62,7 @@ function loadSharp(): void {
     const Module = require('module');
     const origResolve: Function = Module._resolveFilename;
 
-    // Monkey-patch: any require of a *native* @img/sharp-<platform> package
-    // throws, so Sharp's fallback chain skips to wasm32.
+    // Make native @img/sharp-* look absent, which is the only case Sharp's own fallback chain handles.
     Module._resolveFilename = function (request: string, ...args: any[]) {
       if (
         request.startsWith('@img/sharp-') &&
@@ -103,7 +80,7 @@ function loadSharp(): void {
     try {
       sharpModule = require('sharp');
     } finally {
-      // Always restore the original resolver.
+      // Restore on every path: this is a process-global mutation (docs/image-backends.md: resolver-always-restored).
       Module._resolveFilename = origResolve;
     }
 

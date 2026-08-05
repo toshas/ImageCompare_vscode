@@ -1,57 +1,12 @@
 /**
- * Tests for PNG tEXt chunk injection and reading.
- * Verifies the crop metadata round-trip works for the Jimp fallback path.
+ * Tests for PNG tEXt chunk injection and reading — the real shipped code in ../pngText,
+ * which thumbnailService.ts imports. Verifies the crop metadata round-trip works for the
+ * Jimp fallback path.
  *
  * Run: npx ts-node src/test/pngTextChunk.test.ts
  */
 
-import * as zlib from 'zlib';
-
-// ── Copies of the functions under test (same as thumbnailService.ts) ──────
-
-function pngInjectText(png: Buffer, keyword: string, value: string): Buffer {
-  const keyBuf = Buffer.from(keyword, 'latin1');
-  const valBuf = Buffer.from(value, 'latin1');
-  const data = Buffer.concat([keyBuf, Buffer.from([0]), valBuf]);
-  const typeAndData = Buffer.concat([Buffer.from('tEXt', 'ascii'), data]);
-  const crc = zlib.crc32(typeAndData);
-
-  const chunk = Buffer.alloc(12 + data.length);
-  chunk.writeUInt32BE(data.length, 0);
-  typeAndData.copy(chunk, 4);
-  chunk.writeUInt32BE(crc >>> 0, 8 + data.length);
-
-  // Scan for IEND chunk and insert before it
-  let iendOffset = png.length - 12; // fallback
-  let offset = 8;
-  while (offset + 8 <= png.length) {
-    const type = png.subarray(offset + 4, offset + 8).toString('ascii');
-    if (type === 'IEND') { iendOffset = offset; break; }
-    offset += 12 + png.readUInt32BE(offset);
-  }
-  return Buffer.concat([png.subarray(0, iendOffset), chunk, png.subarray(iendOffset)]);
-}
-
-function pngReadText(png: Buffer, keyword: string): string | null {
-  let offset = 8;
-  while (offset + 8 <= png.length) {
-    const len = png.readUInt32BE(offset);
-    const type = png.subarray(offset + 4, offset + 8).toString('ascii');
-    if (type === 'tEXt' && offset + 12 + len <= png.length) {
-      const data = png.subarray(offset + 8, offset + 8 + len);
-      const nullIdx = data.indexOf(0);
-      if (nullIdx >= 0) {
-        const key = data.subarray(0, nullIdx).toString('latin1');
-        if (key === keyword) {
-          return data.subarray(nullIdx + 1).toString('latin1');
-        }
-      }
-    }
-    if (type === 'IEND') break;
-    offset += 12 + len;
-  }
-  return null;
-}
+import { crc32, pngInjectText, pngReadText } from '../pngText';
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -175,6 +130,45 @@ async function runTests() {
     const injected = pngInjectText(testPng, 'ImageCompare:CropRect', value);
     const result = pngReadText(injected, 'ImageCompare:CropRect');
     assert(result === value, `Expected "${value}", got "${result}"`);
+  }
+
+  // Test 9: CRC-32 pinned to the IEEE check value, not to our own (or zlib's) implementation
+  {
+    console.log('\nTest 9: CRC-32 matches the canonical IEEE check value');
+    const check = crc32(Buffer.from('123456789', 'ascii'));
+    assert(check === 0xcbf43926, `CRC-32("123456789") should be 0xCBF43926, got 0x${check.toString(16).toUpperCase()}`);
+    assert(crc32(Buffer.alloc(0)) === 0, `CRC-32 of an empty buffer should be 0, got ${crc32(Buffer.alloc(0))}`);
+    // "123456789" touches only 8 of the 256 table entries; these bytes touch all 256, so any single
+    // corrupt entry moves the result. Expected value cross-checked against zlib.crc32 and a
+    // table-free bitwise CRC-32 — pinned as a constant so neither is needed at run time.
+    const fullTableProbe = Buffer.from(
+      'fffe6be0d834aa3263bdabe8bf53cd5514aea85c16fa64fcad736526719d039bfa88ae3445a937affe20367522ce50c8' +
+      '893335c18b67f96130eef8bbec009e0627c5a2e4e30f9109588690d38468f66e2f9593672dc15fc796485e1d4aa638a0' +
+      'c1b3950f7e920c94c51b0d4e19f56bf3b2080efab05cc25a0bd5c380d73ba53d9c5eba44ae42dc4415cbdd9ec925bb23' +
+      '62d8de2a608c128adb05135007eb75ed8cfed84233df41d98856400354b826beff4543b7fd118f1746988ecd9a76e870' +
+      '51b3d4929579e77f2ef0e6a5f21e801859e3e5115bb729b1e03e286b3cd04ed6b7c5e37908e47ae2b36d7b386f831d85' +
+      'c47e788cc62ab42c7da3b5f6a14dd34b',
+      'hex'
+    );
+    const probe = crc32(fullTableProbe);
+    assert(probe === 0xd2a7d615, `CRC-32 of the full-table probe should be 0xD2A7D615, got 0x${probe.toString(16).toUpperCase()}`);
+    // The bytes a decoder checks: chunk CRC covers type+data and lands in the last 4 bytes of the chunk.
+    const injected = pngInjectText(testPng, 'K', 'v');
+    let off = 8;
+    let found = false;
+    while (off + 8 <= injected.length) {
+      const len = injected.readUInt32BE(off);
+      const type = injected.subarray(off + 4, off + 8).toString('ascii');
+      if (type === 'tEXt') {
+        const stored = injected.readUInt32BE(off + 8 + len);
+        assert(stored === crc32(injected.subarray(off + 4, off + 8 + len)), `Stored tEXt CRC 0x${stored.toString(16)} disagrees with the chunk bytes`);
+        found = true;
+        break;
+      }
+      if (type === 'IEND') break;
+      off += 12 + len;
+    }
+    assert(found, 'Injected PNG should contain a tEXt chunk');
   }
 
   printResults();

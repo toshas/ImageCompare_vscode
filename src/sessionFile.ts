@@ -1,12 +1,7 @@
+/** Pure, vscode-free core of the .imagecompare format — keep it importable by ts-node tests (docs/session-files.md: sessionfile-vscode-free). */
 import * as path from 'path';
 
-/**
- * Parsed .imagecompare session file.
- * Format: JSON {"paths": [...], "labels"?: [...], "colors"?: [...]}
- * Relative paths are resolved against the session file's directory.
- * Labels and colors are aligned with paths; labels override modality display
- * names and colors override modality pill colors (multi-directory mode only).
- */
+/** Parsed .imagecompare session file; format and semantics: docs/session-files.md. */
 export interface SessionSpec {
   paths: string[];
   labels?: string[];
@@ -28,7 +23,15 @@ export function parseSessionFile(text: string, baseDir: string): SessionSpec {
       !rawPaths.every((p) => typeof p === 'string' && p.length > 0)) {
     throw new Error('"paths" must be a non-empty array of non-empty strings');
   }
+  // baseDir is the session file's directory, never workspace root or cwd (docs/session-files.md: relative-to-session-dir).
   const paths = rawPaths.map((p) => path.resolve(baseDir, p));
+
+  /* A repeated path puts two modalities on one URI; every URI-keyed lookup then resolves both to the first (docs/session-files.md: unique-modality-names). */
+  /* win32 only: APFS is frequently case-sensitive, so folding there would reject two real directories. */
+  const compared = process.platform === 'win32' ? paths.map(p => p.toLowerCase()) : paths;
+  if (new Set(compared).size !== compared.length) {
+    throw new Error('"paths" must not repeat the same location');
+  }
 
   const spec: SessionSpec = { paths };
 
@@ -40,6 +43,7 @@ export function parseSessionFile(text: string, baseDir: string): SessionSpec {
     if (labels.length !== paths.length) {
       throw new Error(`"labels" length (${labels.length}) must match "paths" length (${paths.length})`);
     }
+    // A modality name is the downstream join key; duplicates would silently merge modalities (docs/session-files.md: aligned-unique-labels).
     if (new Set(labels).size !== labels.length) {
       throw new Error('"labels" must be unique');
     }
@@ -84,12 +88,7 @@ function findCommonPrefix(names: string[]): string {
   return prefix.replace(/[\s_\-./\\]+$/, '').trim();
 }
 
-/**
- * Suggest a session file name (without extension) from the selection's
- * display names (directory basenames, or file basenames without extension).
- * The name becomes the editor tab title, so prefer the meaningful common
- * prefix over generic fallbacks.
- */
+/** Session file name (no extension) from selection display names — it is the tab title (docs/session-files.md: filename-is-tab-title). */
 export function suggestSessionFileName(names: string[]): string {
   let base: string;
   if (names.length === 1) {
@@ -105,10 +104,7 @@ export function suggestSessionFileName(names: string[]): string {
   return base.length >= 2 ? base : 'comparison';
 }
 
-/**
- * Override directory display names with user-provided labels, keyed by URI string.
- * Structural typing keeps this vscode-free for standalone tests.
- */
+/** Override directory display names with labels keyed by URI string (structurally typed to stay vscode-free). */
 export function applyLabels<T extends { toString(): string }>(
   dirs: Array<{ name: string; uri: T }>,
   labels?: Map<string, string>

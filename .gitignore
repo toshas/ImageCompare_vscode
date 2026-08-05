@@ -7,3 +7,13 @@ out/
 
 # Test data (large image files)
 test_images/
+
+# Agent config: ignore local state, keep the shared symlinks into /skills and /agents
+/.claude/*
+!/.claude/skills/
+!/.claude/agents/
+/.agents/*
+!/.agents/skills/
+
+# Scratch for an audit round: ledgers and the pre-images a fix-verifier diffs against
+.agent-runs/

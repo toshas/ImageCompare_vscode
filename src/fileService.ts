@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { ImageFile, ImageTuple, ScanResult, isImageFile } from './types';
+import { disambiguateDirectoryNames, uniquify } from './modalityNames';
+export { disambiguateDirectoryNames };
 import { applyLabels } from './sessionFile';
-
 /**
  * Debug logging for tuple matching (controlled by imageCompare.debug setting)
  */
@@ -12,12 +13,8 @@ function debugLog(...args: unknown[]): void {
   }
 }
 
-/**
- * Natural sort comparator for filenames
- */
-function naturalSort(a: string, b: string): number {
-  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-}
+// One comparator shared with the watcher-time row insertion (docs/file-watching.md: rows-insert-in-order).
+import { naturalCompare as naturalSort } from './watcherLogic';
 
 /**
  * Strip file extension from filename
@@ -26,37 +23,9 @@ function stripExtension(filename: string): string {
   return filename.replace(/\.[^.]+$/, '');
 }
 
-/**
- * Disambiguate directory names by prepending parent path components
- * when multiple URIs share the same basename.
- * E.g. ["/a/x/results", "/b/y/results"] → ["x/results", "y/results"]
- */
-export function disambiguateDirectoryNames(uris: vscode.Uri[]): Array<{ name: string; uri: vscode.Uri }> {
-  const segments = uris.map(u => u.path.split('/').filter(s => s.length > 0));
-  // Start with just the basename (last segment)
-  let depth = 1;
-  const maxDepth = Math.min(...segments.map(s => s.length));
+/** Prepend parent segments until basenames are unique: ["/a/x/results", "/b/y/results"] → ["x/results", "y/results"]. */
 
-  while (depth < maxDepth) {
-    const names = segments.map(s => s.slice(s.length - depth).join('/'));
-    const hasDuplicates = new Set(names).size < names.length;
-    if (!hasDuplicates) {
-      return uris.map((uri, i) => ({ name: names[i], uri }));
-    }
-    depth++;
-  }
-
-  // Fallback: use as many segments as we have
-  return uris.map((uri, i) => ({
-    name: segments[i].slice(segments[i].length - depth).join('/'),
-    uri
-  }));
-}
-
-/**
- * Longest Common Subsequence length for tie-breaking
- * Uses O(n) space with two-row optimization
- */
+/** Longest Common Subsequence length (two-row, O(n) space) — the last tie-break in tuple matching. */
 function lcsLength(a: string, b: string): number {
   const m = a.length, n = b.length;
   let prev = new Array(n + 1).fill(0);
@@ -86,21 +55,7 @@ interface MatchedTuple {
   files: Map<string, { name: string; uri: vscode.Uri }>;
 }
 
-/**
- * Trie-based tuple matching with LCP scoring and LCS tie-breaking
- *
- * Algorithm:
- * 1. Pick reference modality (one with most files)
- * 2. Build trie from reference filenames - each node tracks which files pass through
- * 3. For each file in other modalities:
- *    - Walk trie to find longest matching prefix (LCP)
- *    - Collect candidate reference files at deepest matched node
- *    - Use LCS (longest common subsequence) as tie-breaker
- * 4. Group files by their matched reference file
- *
- * Complexity: O(N * L) for trie ops, O(ties * L²) for LCS tie-breaking
- * where N = total files, L = max filename length
- */
+/** Group each modality's files into tuples keyed by the reference modality's basenames — see docs/tuple-matching.md. */
 function matchTuplesWithTrie(
   modalityFiles: Map<string, Array<{ name: string; uri: vscode.Uri }>>,
   modalities: string[]
@@ -118,7 +73,7 @@ function matchTuplesWithTrie(
     return [];
   }
 
-  // Pick reference modality (most files) - ensures best coverage
+  // Reference modality = most files (max coverage); ties go to the earliest in `modalities`.
   let refMod = modalities[0];
   let maxCount = (modalityFiles.get(refMod) || []).length;
   for (const mod of modalities) {
@@ -140,8 +95,7 @@ function matchTuplesWithTrie(
     debugLog(`  ${mod}: ${files.length} files -`, files.map(f => stripExtension(f.name)).join(', '));
   }
 
-  // Build trie from reference filenames
-  // Each node has: children (Map), indices (array of refFile indices that pass through)
+  // Trie of reference basenames; each node holds the indices of every ref file passing through it.
   const trie: TrieNode = { children: new Map(), indices: [] };
 
   for (let i = 0; i < refFiles.length; i++) {
@@ -167,6 +121,7 @@ function matchTuplesWithTrie(
 
   // Create tuple map: refIndex -> Map(modality -> file)
   const tupleMap = new Map<number, Map<string, { name: string; uri: vscode.Uri }>>();
+  // Every reference file seeds exactly one tuple; nothing else creates tuples (docs/tuple-matching.md: reference-seeds-one-tuple).
   for (let i = 0; i < refFiles.length; i++) {
     tupleMap.set(i, new Map([[refMod, refFiles[i]]]));
   }
@@ -188,6 +143,7 @@ function matchTuplesWithTrie(
 
   // Pass 2: fuzzy matches via trie (for files without exact ref match)
   debugLog('--- Pass 2: Fuzzy matches ---');
+  // Pass 1 must have run to completion over all modalities before this loop (docs/tuple-matching.md: exact-before-fuzzy).
   for (const mod of modalities) {
     if (mod === refMod) continue;
 
@@ -220,9 +176,8 @@ function matchTuplesWithTrie(
         continue;
       }
 
-      // Find best match among candidates
-      // Prefer: 1) non-crop over crop ref, 2) smaller length difference, 3) higher LCS
-      const cropSuffixRe = /_crop\d+$/;
+      // A crop ref never beats a non-crop one (docs/tuple-matching.md: crop-never-beats-noncrop); then length diff, then LCS.
+      const cropSuffixRe = /_crop\d+$/; // Must keep matching the writer (docs/crop-and-pptx.md: cropnn-writer-reader-match).
       let bestIdx = candidates[0];
 
       if (candidates.length > 1) {
@@ -236,7 +191,6 @@ function matchTuplesWithTrie(
           const lenDiff = Math.abs(refName.length - query.length);
           const lcs = lcsLength(query, refName);
           debugLog(`    candidate ref[${idx}] ${refName}: crop=${isCrop}, lenDiff=${lenDiff}, LCS=${lcs}`);
-          // Non-crop refs always beat crop refs; then smaller lenDiff; then higher LCS
           const isBetter = (!isCrop && bestIsCrop) ||
             (isCrop === bestIsCrop && lenDiff < bestLenDiff) ||
             (isCrop === bestIsCrop && lenDiff === bestLenDiff && lcs > bestLcs);
@@ -252,12 +206,10 @@ function matchTuplesWithTrie(
         debugLog(`  FUZZY: ${mod}/${file.name} -> ref[${bestIdx}] (${refFiles[bestIdx].name}) (single candidate)`);
       }
 
-      // Add to tuple
       tupleMap.get(bestIdx)!.set(mod, file);
     }
   }
 
-  // Convert to array format
   const result: MatchedTuple[] = [];
   for (const [idx, filesMap] of tupleMap) {
     result.push({
@@ -266,10 +218,9 @@ function matchTuplesWithTrie(
     });
   }
 
-  // Sort by key for consistent ordering
+  // Rows are keyed and sorted by reference basename; the elected reference decides both (docs/tuple-matching.md: rows-keyed-by-reference).
   result.sort((a, b) => naturalSort(a.key, b.key));
 
-  // Log final tuples
   debugLog('--- Final tuples ---');
   for (const tuple of result) {
     const mods = Array.from(tuple.files.keys());
@@ -308,55 +259,43 @@ function longestCommonSubstring(s1: string, s2: string): string {
   return s1.substring(endPos - maxLen, endPos);
 }
 
-/**
- * Find common substring among multiple filenames (for tuple naming)
- */
+/** Tuple name from the cluster's filenames — the durable vote key, see docs/session-files.md. */
 function findCommonSubstring(names: string[]): string {
   if (names.length === 0) return '';
   if (names.length === 1) return names[0].replace(/\.[^.]+$/, '');
 
-  // Remove extensions
   const basenames = names.map(n => n.replace(/\.[^.]+$/, ''));
 
-  // Find longest common substring
   let common = basenames[0];
   for (let i = 1; i < basenames.length; i++) {
     common = longestCommonSubstring(common, basenames[i]);
     if (!common) break;
   }
 
-  // Clean up trailing/leading underscores, dashes, spaces
   common = common.replace(/^[\s_-]+|[\s_-]+$/g, '');
   return common;
 }
 
-/**
- * Find differing parts of filenames (for modality naming when files are selected)
- */
+/** Modality names for mode 3: each filename stripped of the common prefix and suffix. */
 function findDifferingParts(names: string[]): string[] {
   if (names.length < 2) return names;
 
-  // Remove extensions
   const basenames = names.map(n => n.replace(/\.[^.]+$/, ''));
 
-  // Find common prefix and suffix
   let prefix = basenames[0];
   let suffix = basenames[0];
 
   for (const name of basenames) {
-    // Find common prefix
     let i = 0;
     while (i < prefix.length && i < name.length && prefix[i] === name[i]) i++;
     prefix = prefix.substring(0, i);
 
-    // Find common suffix
     let j = 0;
     while (j < suffix.length && j < name.length &&
       suffix[suffix.length - 1 - j] === name[name.length - 1 - j]) j++;
     suffix = suffix.substring(suffix.length - j);
   }
 
-  // Extract differing parts
   return basenames.map(name => {
     let diff = name.substring(prefix.length, name.length - suffix.length);
     diff = diff.replace(/^[\s_-]+|[\s_-]+$/g, '');
@@ -365,14 +304,8 @@ function findDifferingParts(names: string[]): string[] {
 }
 
 /**
- * Scan a directory or set of files and return structured image data
- * 
- * Three modes:
- * 1. Single directory with subdirectories → each subdirectory is a modality
- * 2. Multiple directories selected → each directory is a modality
- * 3. Multiple image files selected → single tuple with files as modalities
- *
- * Optional labels (keyed by URI string) override modality names in mode 2.
+ * Scan URIs into modalities and tuples; `labels` (keyed by URI string) override modality names in mode 2.
+ * Mode is decided here from what the paths are on disk; a session file adds none (docs/session-files.md: sessions-add-no-mode).
  */
 export async function scanForImages(uris: vscode.Uri[], labels?: Map<string, string>): Promise<ScanResult> {
   if (uris.length === 0) {
@@ -389,8 +322,9 @@ export async function scanForImages(uris: vscode.Uri[], labels?: Map<string, str
 
   // Case 2: Multiple directories → each directory is a modality
   if (classified.directories.length >= 2 && classified.files.length === 0) {
+    // The second of the two naming sites; both must apply labels or neither (docs/session-files.md: labels-all-or-none).
     const dirs = applyLabels(disambiguateDirectoryNames(classified.directories), labels);
-    const result = await scanDirectoriesAsModalities(dirs);
+    const result = await scanDirectoriesAsModalities(dirs, 2);
     if (result) {
       return result;
     }
@@ -417,8 +351,7 @@ async function classifyUris(uris: vscode.Uri[]): Promise<{ files: vscode.Uri[]; 
   const files: vscode.Uri[] = [];
   const directories: vscode.Uri[] = [];
 
-  // Stat in parallel but assemble in input order (Promise.all preserves order),
-  // so downstream modality ordering is deterministic and matches the caller's list.
+  // Stat in parallel, assemble in input order — modality order is the caller's (docs/tuple-matching.md: modality-order-is-callers).
   const types = await Promise.all(uris.map(async (uri) => {
     try {
       return (await vscode.workspace.fs.stat(uri)).type;
@@ -459,17 +392,13 @@ async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
   if (subdirs.length >= 2) {
     // Subdirectories have no caller-intended order, so sort them for a stable view.
     subdirs.sort((a, b) => naturalSort(a.name, b.name));
-    const modalityResult = await scanDirectoriesAsModalities(subdirs);
+    const modalityResult = await scanDirectoriesAsModalities(subdirs, 1);
     if (modalityResult) {
-      return modalityResult;
+      return { ...modalityResult, roots: [dirUri] };
     }
   }
 
-  // Single directory with only files (no valid subdirectory structure)
-  // This is NOT a valid comparison mode - user should either:
-  // - Select a directory with 2+ subdirectories (each subdirectory = modality)
-  // - Select multiple directories (each directory = modality)  
-  // - Select specific image files to compare
+  // A directory of only files has no second axis and is not a mode (docs/session-files.md).
   if (files.length > 0) {
     throw new Error(
       'This directory contains only image files without subdirectory structure.\n\n' +
@@ -483,18 +412,11 @@ async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
   throw new Error('Directory must contain 2+ subdirectories with images for comparison');
 }
 
-/**
- * Scan directories as modalities (each directory = one modality)
- * Works for both subdirectories of a parent and independently selected directories
- */
+/** Each directory becomes one modality, in the caller's order — callers sort first (docs/tuple-matching.md: modality-order-is-callers). */
 async function scanDirectoriesAsModalities(
-  dirs: Array<{ name: string; uri: vscode.Uri }>
+  dirs: Array<{ name: string; uri: vscode.Uri }>,
+  mode: 1 | 2
 ): Promise<ScanResult | null> {
-  // Preserve the caller's directory order as the modality display order — for
-  // explicitly selected/passed directories that order is intentional. (Callers
-  // that want a sorted order, e.g. a single directory's subfolders, sort first.)
-
-  // Read image files from each directory
   const modalityFiles: Map<string, Array<{ name: string; uri: vscode.Uri }>> = new Map();
 
   for (const dir of dirs) {
@@ -509,6 +431,7 @@ async function scanDirectoriesAsModalities(
 
     if (images.length > 0) {
       images.sort((a, b) => naturalSort(a.name, b.name));
+      // Keyed by name, so a duplicate silently merges two modalities (docs/tuple-matching.md: names-are-join-key).
       modalityFiles.set(dir.name, images);
     }
   }
@@ -519,20 +442,20 @@ async function scanDirectoriesAsModalities(
 
   const modalities = Array.from(modalityFiles.keys());
 
-  // Use trie-based matching to group files into tuples
   const matchedTuples = matchTuplesWithTrie(modalityFiles, modalities);
 
   if (matchedTuples.length === 0) {
     return null;
   }
 
-  // Build tuples from matched files
   const tuples: ImageTuple[] = [];
+  // Tuple name is the durable vote key; collisions apply one vote to many tuples (docs/session-files.md).
+  const takenTupleNames = new Set<string>();
   for (const matched of matchedTuples) {
     const images: ImageFile[] = [];
     const names: string[] = [];
 
-    // Add files in modality order
+    // Sparse: only modalities the tuple actually has (docs/tuple-matching.md: sparse-vs-dense-tuples).
     for (const modality of modalities) {
       const file = matched.files.get(modality);
       if (file) {
@@ -547,14 +470,20 @@ async function scanDirectoriesAsModalities(
 
     // Only create tuple if at least one image exists
     if (images.length > 0) {
-      const tupleName = findCommonSubstring(names) || matched.key;
-      tuples.push({ name: tupleName, images });
+      const baseName = findCommonSubstring(names) || matched.key;
+      // Suffix collisions ` (2)`, `(3)`… in tuple order (docs/session-files.md: durable-vote-key).
+      tuples.push({ name: uniquify(baseName, takenTupleNames), images });
     }
   }
+
+  // Final order is by tuple NAME, the one the watcher-time insertion maintains — reference keys put `X_crop01` before an `X_gt`-keyed parent (docs/file-watching.md: rows-insert-in-order).
+  tuples.sort((a, b) => naturalSort(a.name, b.name));
 
   return {
     modalities,
     tuples,
+    mode,
+    roots: dirs.map(d => d.uri),
     isMultiTupleMode: tuples.length > 1
   };
 }
@@ -563,14 +492,12 @@ async function scanDirectoriesAsModalities(
  * Scan selected files as a single tuple
  */
 async function scanFiles(uris: vscode.Uri[]): Promise<ScanResult> {
-  // Filter to only image files
   const imageUris = uris.filter(uri => isImageFile(uri.path));
 
   if (imageUris.length < 2) {
     throw new Error('Please select at least 2 image files');
   }
 
-  // Sort by filename
   imageUris.sort((a, b) => naturalSort(
     a.path.split('/').pop() || '',
     b.path.split('/').pop() || ''
@@ -591,13 +518,9 @@ function scanFilesAsTuple(
   const names = files.map(f => f.name);
   const modalities = findDifferingParts(names);
 
-  // Ensure unique modality names
-  const seen = new Map<string, number>();
-  const uniqueModalities = modalities.map(m => {
-    const count = seen.get(m) || 0;
-    seen.set(m, count + 1);
-    return count > 0 ? `${m} (${count + 1})` : m;
-  });
+  // Modality names are the join key downstream; duplicates would silently merge (docs/tuple-matching.md: names-are-join-key).
+  const takenModalities = new Set<string>();
+  const uniqueModalities = modalities.map(m => uniquify(m, takenModalities));
 
   const images: ImageFile[] = files.map((f, i) => ({
     uri: f.uri,
@@ -610,19 +533,15 @@ function scanFilesAsTuple(
   return {
     modalities: uniqueModalities,
     tuples: [{ name: tupleName, images }],
+    mode: 3,
+    roots: files.map(f => f.uri),
     isMultiTupleMode: false
   };
 }
 
-/**
- * Results file name
- */
 export const RESULTS_FILENAME = 'results.txt';
 
-/**
- * Read results.txt and parse winner data
- * Returns a Map of tuple key (name) -> winner modality name
- */
+/** Read a results file into Map<tuple name, winner modality name>; empty when unreadable. */
 export async function readResultsFile(baseUri: vscode.Uri, filename: string = RESULTS_FILENAME): Promise<Map<string, string>> {
   const resultsUri = vscode.Uri.joinPath(baseUri, filename);
   const winners = new Map<string, string>();
@@ -653,14 +572,7 @@ export async function readResultsFile(baseUri: vscode.Uri, filename: string = RE
   return winners;
 }
 
-/**
- * Write results.txt with current winner data
- * Format is human-readable and editable:
- *   # ImageCompare Results
- *   # Format: tuple_key = winner_modality
- *   tuple_name_1 = ModA
- *   tuple_name_2 = ModB
- */
+/** Write the human-editable `<tuple name> = <winner modality>` results file (docs/session-files.md). */
 export async function writeResultsFile(
   baseUri: vscode.Uri,
   tuples: ImageTuple[],
@@ -670,7 +582,6 @@ export async function writeResultsFile(
 ): Promise<void> {
   const resultsUri = vscode.Uri.joinPath(baseUri, filename);
 
-  // Build file content
   const lines: string[] = [
     '# ImageCompare Results',
     `# Generated: ${new Date().toISOString()}`,
@@ -681,10 +592,10 @@ export async function writeResultsFile(
     ''
   ];
 
-  // Add winner entries for tuples that have winners
   for (let i = 0; i < tuples.length; i++) {
     const winnerModality = winners.get(i);
     if (winnerModality) {
+      // The on-disk key is the tuple name, never the index i (docs/session-files.md: durable-vote-key).
       lines.push(`${tuples[i].name} = ${winnerModality}`);
     }
   }
@@ -693,10 +604,7 @@ export async function writeResultsFile(
   await vscode.workspace.fs.writeFile(resultsUri, Buffer.from(content, 'utf-8'));
 }
 
-/**
- * Map loaded winners (by tuple name) to tuple indices
- * Returns Map<tupleIndex, modalityIndex>
- */
+/** Resolve loaded winners (by tuple name) to Map<tupleIndex, modalityIndex>; unknown names are dropped. */
 export function mapWinnersToIndices(
   winners: Map<string, string>,
   tuples: ImageTuple[],
@@ -706,6 +614,7 @@ export function mapWinnersToIndices(
 
   for (let tupleIndex = 0; tupleIndex < tuples.length; tupleIndex++) {
     const tuple = tuples[tupleIndex];
+    // Must look up by the same durable key writeResultsFile wrote (docs/session-files.md: durable-vote-key).
     const winnerModality = winners.get(tuple.name);
 
     if (winnerModality) {

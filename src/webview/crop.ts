@@ -1,8 +1,6 @@
 /**
- * Crop mode module for ImageCompare webview.
- *
- * Handles crop rectangle drawing, resize handles, coordinate mapping
- * between screen space and image-pixel space, and overlay rendering.
+ * Crop mode: rectangle drawing, resize handles, screen<->image-pixel mapping, overlay rendering.
+ * The rect is stored in displayed-image pixels — see docs/crop-and-pptx.md.
  */
 
 // ---------------------------------------------------------------------------
@@ -59,6 +57,7 @@ let lastViewport: ViewportInfo | null = null;
 // Coordinate conversion
 // ---------------------------------------------------------------------------
 
+// carouselOffset is subtracted because the carousel overlays the viewer rather than shrinking it.
 function getBaseScale(vp: ViewportInfo): number {
   const rect = vp.viewerEl.getBoundingClientRect();
   const vw = rect.width - vp.carouselOffset;
@@ -110,8 +109,7 @@ function createOverlay(viewerEl: HTMLElement): void {
   overlayEl.id = 'crop-overlay';
   viewerEl.appendChild(overlayEl);
 
-  // 4 dim regions (top, bottom, left, right of crop rect)
-  // Start hidden to prevent flash before first renderCropOverlay call
+  // 4 dim regions (top/bottom/left/right); hidden until the first renderCropOverlay, else they flash.
   for (let i = 0; i < 4; i++) {
     const dim = document.createElement('div');
     dim.className = 'crop-dim';
@@ -154,7 +152,7 @@ function createOverlay(viewerEl: HTMLElement): void {
   toolbarEl.querySelector('.crop-cancel')!.addEventListener('mousedown', (e) => {
     e.stopPropagation();
     e.preventDefault();
-    exitCropMode(true);
+    exitCropMode();
   });
 
   // Initially hide handles and toolbar
@@ -191,7 +189,8 @@ function getCursorForHandle(id: HandleId): string {
 // Enter / exit
 // ---------------------------------------------------------------------------
 
-export function enterCropMode(viewerEl: HTMLElement, confirmCallback: () => void, viewport?: ViewportInfo): void {
+// Required, not optional: without a viewport no rect can be drawn, so an unguarded caller is a compile error.
+export function enterCropMode(viewerEl: HTMLElement, confirmCallback: () => void, viewport: ViewportInfo): void {
   if (cropMode) return;
   cropMode = true;
   cropRect = null;
@@ -199,11 +198,11 @@ export function enterCropMode(viewerEl: HTMLElement, confirmCallback: () => void
   isDrawing = false;
   isMoving = false;
   isResizing = false;
-  if (viewport) lastViewport = viewport;
+  lastViewport = viewport;
   createOverlay(viewerEl);
 }
 
-export function exitCropMode(_cancel: boolean): void {
+export function exitCropMode(): void {
   cropMode = false;
   cropRect = null;
   isDrawing = false;
@@ -406,7 +405,7 @@ export function handleCropKeyDown(e: KeyboardEvent): boolean {
   }
   if (e.code === 'Escape') {
     e.preventDefault();
-    exitCropMode(true);
+    exitCropMode();
     return true;
   }
   return false;
@@ -417,6 +416,18 @@ export function handleCropKeyDown(e: KeyboardEvent): boolean {
 // ---------------------------------------------------------------------------
 
 export function renderCropOverlay(vp: ViewportInfo): void {
+  // The rect lives in the drawn image's pixel space; when the image under it changes resolution (modality switch), re-map it relatively (docs/crop-and-pptx.md: relative-coords-only).
+  if (cropRect && lastViewport && lastViewport.imgW > 0 && lastViewport.imgH > 0 &&
+      (lastViewport.imgW !== vp.imgW || lastViewport.imgH !== vp.imgH)) {
+    const sx = vp.imgW / lastViewport.imgW;
+    const sy = vp.imgH / lastViewport.imgH;
+    cropRect = {
+      x: Math.round(cropRect.x * sx),
+      y: Math.round(cropRect.y * sy),
+      w: Math.round(cropRect.w * sx),
+      h: Math.round(cropRect.h * sy)
+    };
+  }
   lastViewport = vp;
 
   if (!overlayEl || !rectEl || !cropRect) {

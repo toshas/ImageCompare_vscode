@@ -1,10 +1,10 @@
 /**
- * Tuple matching tests — exercises matchTuplesWithTrie logic
- * with real-world filename patterns including crop files.
+ * Tuple matching tests — matchTuplesWithTrie over filename patterns including crop files.
+ * These are pure copies of fileService.ts, not the shipped code (docs/tuple-matching.md).
  *
  * Run: npx ts-node src/test/tupleMatching.test.ts
  */
-export {};
+import { disambiguateDirectoryNames, uniquify } from '../modalityNames';
 
 // ── Pure copies of the matching functions (no vscode dependency) ──────────
 
@@ -192,6 +192,7 @@ function buildTuples(
 ): ResultTuple[] {
   const matchedTuples = matchTuplesWithTrie(modalityFiles, modalities);
   const tuples: ResultTuple[] = [];
+  const takenTupleNames = new Set<string>();
   for (const matched of matchedTuples) {
     const images: Array<{ name: string; modality: string }> = [];
     const names: string[] = [];
@@ -203,8 +204,8 @@ function buildTuples(
       }
     }
     if (images.length > 0) {
-      const tupleName = findCommonSubstring(names) || matched.key;
-      tuples.push({ name: tupleName, images });
+      const baseName = findCommonSubstring(names) || matched.key;
+      tuples.push({ name: uniquify(baseName, takenTupleNames), images });
     }
   }
   return tuples;
@@ -222,12 +223,12 @@ function assert(condition: boolean, msg: string) {
   else { failed++; console.error(`  FAIL: ${msg}`); }
 }
 
-// ── Test case 1: User's exact tree ────────────────────────────────────────
+// ── Test case 1: originals + crop01 files ─────────────────────────────────
 
-function testUserTree() {
-  console.log('\nTest 1: User tree (originals + crop01 files)');
+function testOriginalsAndCrops() {
+  console.log('\nTest 1: Originals + crop01 files (5 modalities)');
 
-  const modalities = ['GT', 'res518_p14', 'res672_p16_new', 'res768_p16', 'RGB'];
+  const modalities = ['GT', 'pred_a', 'pred_b_new', 'pred_c', 'RGB'];
   const modalityFiles = new Map<string, SimpleFile[]>();
 
   modalityFiles.set('GT', makeFiles('GT', [
@@ -237,21 +238,21 @@ function testUserTree() {
     'dataset_b_1024x768_rgb_00000042_gt.png',
     'dataset_c_1024x768_rgb_00000409_gt.png',
   ]));
-  modalityFiles.set('res518_p14', makeFiles('res518_p14', [
+  modalityFiles.set('pred_a', makeFiles('pred_a', [
     'dataset_a_1024x768_rgb_00000079_crop01.png',
     'dataset_a_1024x768_rgb_00000079_pred.png',
     'dataset_b_1024x768_rgb_00000005_pred.png',
     'dataset_b_1024x768_rgb_00000042_pred.png',
     'dataset_c_1024x768_rgb_00000409_pred.png',
   ]));
-  modalityFiles.set('res672_p16_new', makeFiles('res672_p16_new', [
+  modalityFiles.set('pred_b_new', makeFiles('pred_b_new', [
     'dataset_a_1024x768_rgb_00000079_crop01.png',
     'dataset_a_1024x768_rgb_00000079_pred.png',
     'dataset_b_1024x768_rgb_00000005_pred.png',
     'dataset_b_1024x768_rgb_00000042_pred.png',
     'dataset_c_1024x768_rgb_00000409_pred.png',
   ]));
-  modalityFiles.set('res768_p16', makeFiles('res768_p16', [
+  modalityFiles.set('pred_c', makeFiles('pred_c', [
     'dataset_a_1024x768_rgb_00000079_crop01.png',
     'dataset_a_1024x768_rgb_00000079_pred.png',
     'dataset_b_1024x768_rgb_00000005_pred.png',
@@ -274,10 +275,7 @@ function testUserTree() {
     console.log(`    "${t.name}" => [${mods}]`);
   }
 
-  // Expected: 5 tuples, each with exactly 5 modalities
-  // - Original _gt/_pred/_rgb tuple for 00000079
-  // - Crop tuple for 00000079_crop01 (identical filename in all dirs)
-  // - 3 other original tuples (00000005, 00000042, 00000409)
+  // 5 tuples of 5 modalities: 00000079 original, its crop01, and 00000005/42/409.
   assert(tuples.length === 5, `Expected 5 tuples, got ${tuples.length}`);
 
   // Find the crop tuple (name should contain "crop01")
@@ -316,7 +314,7 @@ function testUserTree() {
 function testDoubleCrop() {
   console.log('\nTest 2: Originals + crop01 + crop01_crop01');
 
-  const modalities = ['GT', 'res518_p14', 'RGB'];
+  const modalities = ['GT', 'pred_a', 'RGB'];
   const modalityFiles = new Map<string, SimpleFile[]>();
 
   modalityFiles.set('GT', makeFiles('GT', [
@@ -324,7 +322,7 @@ function testDoubleCrop() {
     'dataset_a_1024x768_rgb_00000079_crop01.png',
     'dataset_a_1024x768_rgb_00000079_gt.png',
   ]));
-  modalityFiles.set('res518_p14', makeFiles('res518_p14', [
+  modalityFiles.set('pred_a', makeFiles('pred_a', [
     'dataset_a_1024x768_rgb_00000079_crop01_crop01.png',
     'dataset_a_1024x768_rgb_00000079_crop01.png',
     'dataset_a_1024x768_rgb_00000079_pred.png',
@@ -399,26 +397,23 @@ function testBaseline() {
   }
 }
 
-// ── Test case 4: _pred should match _gt, not _crop01 (equal lenDiff) ──────
+// ── Test case 4: _pred matches _gt, not _crop01 (crop rule, lenDiff tied) ─
 
 function testPredMatchesGtNotCrop() {
-  console.log('\nTest 4: _pred should match _gt, not _crop01 (equal lenDiff, prefer shorter ref)');
+  console.log('\nTest 4: _pred matches _gt, not _crop01 (lenDiff ties at 2, so the crop rule decides)');
 
-  // This tests the specific bug where _pred files were incorrectly matching _crop01
-  // because LCS(_pred, _crop01) > LCS(_pred, _gt), even though lenDiff is equal.
-  // The fix prefers shorter reference names (originals like _gt) over longer ones (crops).
-
+  // Rule 1 is the only rule that can decide: lenDiff is 2 to either ref (47 and 43 vs query 45),
+  // so rule 2 is inert, and rule 3 would actively pick _crop01 (LCS 42 vs 41).
   const modalities = ['GT', 'pred'];
   const modalityFiles = new Map<string, SimpleFile[]>();
 
-  // Reference modality with both _gt (short) and _crop01 (long) files
   modalityFiles.set('GT', makeFiles('GT', [
-    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_crop01.png',  // long: 57 chars (no ext)
-    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_gt.png',      // short: 52 chars (no ext)
+    'dataset_a_scene_01_1024x768_rgb_00000079_crop01.png',  // long: 47 chars (no ext)
+    'dataset_a_scene_01_1024x768_rgb_00000079_gt.png',      // short: 43 chars (no ext)
   ]));
   modalityFiles.set('pred', makeFiles('pred', [
-    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_crop01.png',  // exact match to crop01
-    'hq_25_11_06_jewellery_dataset_1024x768_rgb_00000079_pred.png',    // should match _gt, not _crop01
+    'dataset_a_scene_01_1024x768_rgb_00000079_crop01.png',  // exact match to crop01
+    'dataset_a_scene_01_1024x768_rgb_00000079_pred.png',    // should match _gt, not _crop01
   ]));
 
   const tuples = buildTuples(modalityFiles, modalities);
@@ -462,10 +457,7 @@ function testPredMatchesGtNotCrop() {
 function testLongModalityMatchesGtNotCrop() {
   console.log('\nTest 5: long modality name should match _gt, not _crop01 (crop deprioritized)');
 
-  // When a modality has a very long suffix, lenDiff alone would prefer _crop01
-  // over _gt because _crop01 is closer in length. The explicit crop deprioritization
-  // ensures originals always win over crops regardless of query length.
-
+  // Pins crop deprioritization: a long query suffix makes _crop01 the closer ref by length alone.
   const modalities = ['GT', 'longmodality'];
   const modalityFiles = new Map<string, SimpleFile[]>();
 
@@ -502,13 +494,161 @@ function testLongModalityMatchesGtNotCrop() {
   }
 }
 
+// ── Test case 6: length tie-break alone decides (docs/tuple-matching.md rule 2) ──
+
+function testLengthTieBreak() {
+  console.log('\nTest 6: the closer-length non-crop ref wins (rule 2 decides alone)');
+
+  // Rule 2 is the only rule that can decide. Rule 1 is inert (neither ref is a crop).
+  // Rule 3 cannot run (it needs a lenDiff tie) and could not decide anyway: LCS is 10 to
+  // both refs. So inverting `lenDiff < bestLenDiff` must flip the match.
+  const modalities = ['ref', 'query'];
+  const modalityFiles = new Map<string, SimpleFile[]>();
+
+  // Both refs break from the query at the same char, so the trie hands back both as candidates.
+  modalityFiles.set('ref', makeFiles('ref', [
+    'img_00001_alpha.png', // base len 15 -> lenDiff 4
+    'img_00001_a.png',     // base len 11 -> lenDiff 0  <- must win
+  ]));
+  modalityFiles.set('query', makeFiles('query', [
+    'img_00001_q.png',     // base len 11; shares LCP "img_00001_" with both refs
+  ]));
+
+  const matched = matchTuplesWithTrie(modalityFiles, modalities);
+  const withQuery = matched.filter(t => t.files.has('query'));
+  assert(withQuery.length === 1, `exactly one tuple should absorb the query, got ${withQuery.length}`);
+  assert(withQuery[0]?.key === 'img_00001_a',
+    `query must attach to the closer-length ref (lenDiff 0), got: ${withQuery[0]?.key}`);
+}
+
+// ── Test case 7: LCS alone decides (docs/tuple-matching.md rule 3) ────────
+
+function testLcsTieBreak() {
+  console.log('\nTest 7: higher LCS wins among refs tied on crop-ness and length (rule 3 decides alone)');
+
+  // The doc says LCS "decides only among candidates already tied on crop-ness *and* length" —
+  // that state is reachable, and this is it. Rule 1 is inert (neither ref is a crop); rule 2 is
+  // inert (both refs are 13 chars, as is the query, so lenDiff is 0 for both). Only LCS separates
+  // them: 12 to _zab vs 11 to _zba. The winner is at index 1, so the greedy comparator can only
+  // reach it through the LCS clause.
+  const modalities = ['ref', 'query'];
+  const modalityFiles = new Map<string, SimpleFile[]>();
+
+  modalityFiles.set('ref', makeFiles('ref', [
+    'img_00001_zba.png', // LCS 11 with the query
+    'img_00001_zab.png', // LCS 12 with the query  <- must win
+  ]));
+  modalityFiles.set('query', makeFiles('query', [
+    'img_00001_qab.png', // diverges from both refs at the same char -> both are candidates
+  ]));
+
+  const matched = matchTuplesWithTrie(modalityFiles, modalities);
+  const withQuery = matched.filter(t => t.files.has('query'));
+  assert(withQuery.length === 1, `exactly one tuple should absorb the query, got ${withQuery.length}`);
+  assert(withQuery[0]?.key === 'img_00001_zab',
+    `query must attach to the higher-LCS ref, got: ${withQuery[0]?.key}`);
+}
+
+// ── Test case 8: rows sorted by ref basename (docs/tuple-matching.md: rows-keyed-by-reference) ──
+
+function testSortOrderByIndex() {
+  console.log('\nTest 8: rows are sorted by reference basename, asserted by index (docs/tuple-matching.md: rows-keyed-by-reference)');
+
+  const modalities = ['GT', 'pred'];
+  const modalityFiles = new Map<string, SimpleFile[]>();
+
+  // Insertion order (2, 10, 1) is neither the sorted nor the reverse-sorted order, so asserting
+  // by index catches an inverted sort, a removed sort, and a lexicographic (non-natural) sort.
+  modalityFiles.set('GT', makeFiles('GT', [
+    'img_2_gt.png', 'img_10_gt.png', 'img_1_gt.png',
+  ]));
+  modalityFiles.set('pred', makeFiles('pred', [
+    'img_2_pred.png', 'img_10_pred.png', 'img_1_pred.png',
+  ]));
+
+  const matched = matchTuplesWithTrie(modalityFiles, modalities);
+  assert(matched.length === 3, `Expected 3 matched tuples, got ${matched.length}`);
+  ['img_1_gt', 'img_2_gt', 'img_10_gt'].forEach((key, i) => {
+    assert(matched[i]?.key === key, `matched[${i}].key should be "${key}", got: ${matched[i]?.key}`);
+  });
+
+  const tuples = buildTuples(modalityFiles, modalities);
+  assert(tuples.length === 3, `Expected 3 tuples, got ${tuples.length}`);
+  ['img_1', 'img_2', 'img_10'].forEach((name, i) => {
+    assert(tuples[i]?.name === name, `tuples[${i}].name should be "${name}", got: ${tuples[i]?.name}`);
+  });
+}
+
+// ── Test case 9: colliding tuple names are made unique ────────────────────
+
+function testCollidingTupleNames() {
+  console.log('\nTest 9: colliding tuple names get a " (N)" suffix');
+  // Both reference files reduce to the same emergent name. `ImageTuple.name` is the durable
+  // results.txt key, so without a suffix one vote would land on both rows.
+  const modalityFiles = new Map<string, SimpleFile[]>();
+  modalityFiles.set('GT', makeFiles('GT', ['img.png', 'img.tiff']));
+  modalityFiles.set('pred', makeFiles('pred', ['img.png', 'img.tiff']));
+
+  const tuples = buildTuples(modalityFiles, ['GT', 'pred']);
+  const names = tuples.map(t => t.name);
+  console.log(`  names: ${JSON.stringify(names)}`);
+  assert(new Set(names).size === names.length, `tuple names must be unique, got ${JSON.stringify(names)}`);
+  assert(names.some(n => / \(\d+\)$/.test(n)), `expected a " (N)" suffix, got ${JSON.stringify(names)}`);
+}
+
 // ── Run all tests ─────────────────────────────────────────────────────────
 
 testBaseline();
-testUserTree();
+testOriginalsAndCrops();
 testDoubleCrop();
 testPredMatchesGtNotCrop();
 testLongModalityMatchesGtNotCrop();
+testLengthTieBreak();
+testLcsTieBreak();
+testSortOrderByIndex();
+testCollidingTupleNames();
+
+console.log('Test 10: disambiguateDirectoryNames yields unique modality names');
+{
+  // Shortest unique tail.
+  const a = disambiguateDirectoryNames([{ path: '/runs/exp1/out' }, { path: '/runs/exp2/out' }]);
+  assert(a.map(x => x.name).join(',') === 'exp1/out,exp2/out', `got ${a.map(x => x.name).join(',')}`);
+
+  // Already unique at depth 1.
+  const b = disambiguateDirectoryNames([{ path: '/a/gt' }, { path: '/b/pred' }]);
+  assert(b.map(x => x.name).join(',') === 'gt,pred', `got ${b.map(x => x.name).join(',')}`);
+
+  // The fallback: equal tails with one path shorter, so the loop exhausts maxDepth. Without a suffix
+  // these collide, and a duplicate name silently merges two modalities.
+  const c = disambiguateDirectoryNames([
+    { path: '/data/results' },
+    { path: '/home/u/data/results' },
+    { path: '/tmp/other' }
+  ]);
+  const names = c.map(x => x.name);
+  assert(new Set(names).size === names.length, `names must be unique, got ${JSON.stringify(names)}`);
+  assert(names.some(n => / \(\d+\)$/.test(n)), `expected a " (N)" suffix, got ${JSON.stringify(names)}`);
+
+  // Every input keeps its own uri.
+  assert(c[1].uri.path === '/home/u/data/results', 'uri must stay paired with its name');
+
+  // The generated suffix must not collide with a directory literally named `x (2)`. Counting
+  // occurrences instead of probing the set gets this wrong and silently drops a column.
+  const d = disambiguateDirectoryNames([
+    { path: '/data/results' },
+    { path: '/home/u/data/results' },
+    { path: '/x/data/results (2)' }
+  ]);
+  const dn = d.map(x => x.name);
+  assert(new Set(dn).size === dn.length, `suffix must not collide with a real name, got ${JSON.stringify(dn)}`);
+
+  // Three colliding bases: the second takes ` (2)`, so the third must probe past it to ` (3)`.
+  // A counter that stops at the first candidate hands out ` (2)` twice.
+  const e = disambiguateDirectoryNames([{ path: '/p/out' }, { path: '/q/out' }, { path: '/out' }]);
+  const en = e.map(x => x.name);
+  assert(new Set(en).size === en.length, `expected unique names, got ${JSON.stringify(en)}`);
+  assert(en.includes('out (3)'), `expected a third distinct suffix, got ${JSON.stringify(en)}`);
+}
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
