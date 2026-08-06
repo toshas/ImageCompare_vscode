@@ -870,7 +870,7 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
   }
   winners = newWinners;
 
-  // Adjust current tuple index if needed
+  // The >= guard mirrors the extension side (docs/file-watching.md: mutation-never-strands-view).
   if (currentTupleIndex >= message.tupleIndex) {
     currentTupleIndex++;
   }
@@ -972,7 +972,7 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
     tupleIndices: Array.from({ length: tuples.length }, (_, i) => i)
   });
 
-  // The re-indexed cache serves every old slot; loadTuple requests only the new column's.
+  // The re-indexed cache serves every old slot; loadTuple requests only the new column's (docs/file-watching.md: mutation-never-strands-view).
   loadTuple(currentTupleIndex);
 }
 
@@ -1071,7 +1071,7 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
     tupleIndices: Array.from({ length: tuples.length }, (_, i) => i)
   });
   
-  // Force reload current tuple
+  // Reload the current tuple so the removed column never strands the view (docs/file-watching.md: mutation-never-strands-view).
   loadTuple(currentTupleIndex);
 }
 

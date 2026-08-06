@@ -480,7 +480,16 @@ export class ImageCompareProvider {
               height: meta.height || 100
             };
           }
-          // No Sharp: pass bytes through, which only renders for browser-decodable formats.
+          // No Sharp: Jimp must still cap and recompress (docs/crop-and-pptx.md: deck-images-bounded).
+          const capped = await this.thumbnailService.capSlideImage(buffer, ext);
+          if (capped) {
+            return {
+              data: `data:image/jpeg;base64,${capped.bytes.toString('base64')}`,
+              width: capped.width || 100,
+              height: capped.height || 100
+            };
+          }
+          // Last resort, no backend at all: pass bytes through, which only renders for browser-decodable formats.
           const mimeByExt: Record<string, string> = {
             '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
             '.bmp': 'image/bmp', '.webp': 'image/webp'
@@ -790,7 +799,7 @@ export class ImageCompareProvider {
     }
   }
 
-  /** Save-dialog default: comparison_NN.pptx (max existing + 1) in the base dir or the first modality's parent. */
+  /** Export output target: comparison_NN.pptx (max existing + 1) in the base dir or the first modality's parent. */
   private async suggestPptxUri(state: PanelState): Promise<vscode.Uri | undefined> {
     const baseDir = state.baseUri?.fsPath ||
       (state.modalityDirs.size > 0 ? Array.from(state.modalityDirs.values())[0].fsPath : undefined);
@@ -916,9 +925,10 @@ export class ImageCompareProvider {
   }
 
   /**
-   * Terminal reply for a request whose file is no longer in the view. Sent only when the enqueued
-   * slot is *empty* — if another file has taken it, that slot is healthy and marking it missing
-   * would blank it for good, since the webview never re-requests a filled slot
+   * Terminal reply for a request whose file is no longer in the view. Suppressed only when the
+   * enqueued slot still exists and another file occupies it — that slot is healthy, and marking it
+   * missing would blank it for good, since the webview never re-requests a filled slot. A slot that
+   * no longer exists still gets the post; the webview's range guard discards it
    * (docs/loading-architecture.md: reply-exactly-once).
    */
   private postVacatedSlotError(state: PanelState, tupleIndex: TupleIndex, modalityIndex: number, error: string): void {
@@ -1189,8 +1199,8 @@ ${lead}
   }
 
   /**
-   * Send a full image to the webview. Replies exactly once (`image` or `imageError`)
-   * unless the panel is gone — a silent drop is a stuck spinner
+   * Send a full image to the webview. Replies exactly once (`image` or `imageError`) unless the
+   * panel is gone or another file now occupies the enqueued slot — a silent drop is a stuck spinner
    * (docs/loading-architecture.md: reply-exactly-once).
    */
   private async sendImage(
@@ -2106,7 +2116,8 @@ body {
   }
 
   /**
-   * The path shown in a modality pill's tooltip, and copied on click. Every mode resolves to a real
+   * The path shown in a modality pill's tooltip and used by its context-menu copy/reveal. Every
+   * mode resolves to a real
    * filesystem path: the modality directory in mode 2, `base/<name>` in mode 1, and otherwise the
    * first file carrying that modality — a file list has no directory of its own to name
    * (docs/session-files.md: modality-path-always-real).
@@ -2946,6 +2957,7 @@ body {
         }
       }
 
+      // The >= guard shifts the current index with the splice (docs/file-watching.md: mutation-never-strands-view).
       if (state.currentTupleIndex >= insertIndex) {
         state.currentTupleIndex++;
       }
@@ -3115,6 +3127,7 @@ body {
       state.panel.dispose();
     }
     this.panels.clear();
+    this.thumbnailService.dispose();
     this.thumbnailService.clearMemoryCache();
 
     while (this.disposables.length) {

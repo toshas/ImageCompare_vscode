@@ -265,8 +265,10 @@ on the next reopen. Cosmetic, and reopening is the fix.
 
 ## What is pinned
 
-`watcherLogic.test.ts` imports `watcherLogic.ts` directly and covers rename disambiguation and
-re-indexing. The provider-side glue around it imports `vscode` and is therefore untested; exercise it
+`watcherLogic.test.ts` imports `watcherLogic.ts` directly and covers rename disambiguation
+(`matchDeletedFile`), index re-shifting on removal (`shiftIndexAfterRemoval`), and the
+insertion-position helpers (`tupleInsertIndex`, `modalityInsertIndex`). The provider-side glue
+around it imports `vscode` and is therefore untested; exercise it
 by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to see `onDidCreate` /
 `fs.watch` / `poll delete detected` in the webview console.
 
@@ -295,9 +297,10 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
 - **`mutation-never-strands-view`** — a structural mutation cannot strand the current view, but only
   `removeTuple` discharges that from the extension side (`refreshCurrentTupleImages`, its only caller).
   `removeModality` / `addNewModality` rely on the webview's `modalityRemoved` / `modalityAdded`
-  handlers re-running `loadTuple(currentTupleIndex)`; `handleNewFile`'s insert lands *after* the
-  current tuple, so its indices never move. A new path that shifts the current tuple's indices must
-  re-send or be matched by a webview handler that does.
+  handlers re-running `loadTuple(currentTupleIndex)`; `handleNewFile`'s sorted insert can land at or
+  before the current tuple, and discharges it by shifting `currentTupleIndex` with the splice on both
+  sides (see the `handleNewFile` bullet above). A new path that shifts the current tuple's indices
+  must re-send or be matched by a webview handler that does.
 - **`sweep-reverifies-before-report`** — the sweep re-verifies before reporting a deletion. A batched
   "missing" observation is stale by the time it is acted on.
 - **`duplicate-reports-idempotent`** — duplicate reports are idempotent. The same delete from watcher

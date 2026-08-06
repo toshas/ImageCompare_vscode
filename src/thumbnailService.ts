@@ -4,18 +4,28 @@ import * as path from 'path';
 import { getSharp, getSharpError } from './sharpLoader';
 import { parsePpmx } from './ppmxParser';
 import { CROP_RECT_KEYWORD, CropMeta, encodeCropMeta, parseCropMeta, pngInjectText, pngReadText } from './pngText';
+import { buildPack, parsePack } from './thumbPack';
 
 /** Byte-capped, not entry-capped: `thumbnailSize` maxes at 200, so entries range 4x in size. Sized
- *  past a realistic session — a real cache of 26k thumbnails at ~5.7KB each is ~143MB, and a cap that
- *  bites turns every revisit into a disk read on the mounts this extension exists to serve. */
+ *  past a realistic session — a real cache of 26k thumbnails at ~4.3KB of raw JPEG each is ~110MB,
+ *  and a cap that bites turns every revisit into a disk read on the mounts this extension exists to
+ *  serve. The cap also bounds the packfile snapshot built from this cache. */
 const MEMORY_CACHE_MAX_BYTES = 192 * 1024 * 1024;
+const PACK_SNAPSHOT_IDLE_MS = 30_000;
+
+const toDataUrl = (bytes: Buffer): string => `data:image/jpeg;base64,${bytes.toString('base64')}`;
 
 /** Generates and caches thumbnails via Sharp, falling back to Jimp. See docs/image-backends.md. */
 export class ThumbnailService {
   private cacheDir: vscode.Uri;
-  /** Bounded: a 2000x4 session is ~8000 base64 thumbnails, ~85MB retained for the host's lifetime otherwise. */
-  private memoryCache: Map<string, string> = new Map();
+  /** Raw JPEG bytes, base64-encoded per delivery: one representation feeds hits and the pack snapshot alike. */
+  private memoryCache: Map<string, Buffer> = new Map();
   private memoryCacheBytes = 0;
+  private packMap: Map<string, Buffer> | undefined;
+  private packLoad: Promise<Map<string, Buffer>> | undefined;
+  private packDirty = false;
+  private packTimer: ReturnType<typeof setTimeout> | undefined;
+  private packWriting = false;
   /** Lazily loaded Jimp constructor — only required when Sharp is unavailable. */
   private jimpModule: any = undefined;
   private jimpLoadAttempted = false;
@@ -128,21 +138,28 @@ export class ThumbnailService {
         /* Re-insert so eviction is by recency — the rows a user scrolls back to are the oldest. */
         this.memoryCache.delete(cacheKey);
         this.memoryCache.set(cacheKey, hit);
-        return hit;
+        return toDataUrl(hit);
       }
 
-      const cachedDataUrl = await this.loadFromDiskCache(cacheKey);
-      if (cachedDataUrl) {
-        this.rememberInMemory(cacheKey, cachedDataUrl);
-        return cachedDataUrl;
+      // One sequential read serves the whole warm open; per-entry files are the fallback (docs/image-backends.md).
+      const packed = (await this.ensurePackLoaded()).get(cacheKey);
+      if (packed !== undefined) {
+        this.rememberInMemory(cacheKey, packed, false);
+        return toDataUrl(packed);
       }
 
-      const dataUrl = await this.generateThumbnail(uri, size);
+      const cachedBytes = await this.loadFromDiskCache(cacheKey);
+      if (cachedBytes) {
+        this.rememberInMemory(cacheKey, cachedBytes, true);
+        return toDataUrl(cachedBytes);
+      }
 
-      this.rememberInMemory(cacheKey, dataUrl);
-      this.saveToDiskCache(cacheKey, dataUrl); // deliberately not awaited
+      const bytes = await this.generateThumbnail(uri, size);
 
-      return dataUrl;
+      this.rememberInMemory(cacheKey, bytes, true);
+      this.saveToDiskCache(cacheKey, bytes); // deliberately not awaited
+
+      return toDataUrl(bytes);
     } catch (error) {
       console.error(`Failed to generate thumbnail for ${uri.toString()}:`, error);
       throw error;
@@ -153,7 +170,7 @@ export class ThumbnailService {
   // Thumbnail generation
   // ---------------------------------------------------------------------------
 
-  private async generateThumbnail(uri: vscode.Uri, size: number): Promise<string> {
+  private async generateThumbnail(uri: vscode.Uri, size: number): Promise<Buffer> {
     const fileData = await vscode.workspace.fs.readFile(uri);
     const buffer = Buffer.from(fileData);
     const ext = path.extname(uri.path).toLowerCase();
@@ -162,11 +179,10 @@ export class ThumbnailService {
     if (sharp) {
       const inst = this.createSharpInstance(sharp, buffer, ext);
       // Both backends must emit identical size and JPEG quality 70, or which one ran becomes user-visible (docs/image-backends.md: backends-agree-output).
-      const thumbnailBuffer = await inst
+      return inst
         .resize(size, size, { fit: 'inside' })
         .jpeg({ quality: 70 })
         .toBuffer();
-      return `data:image/jpeg;base64,${thumbnailBuffer.toString('base64')}`;
     }
 
     const Jimp = this.getJimp();
@@ -176,8 +192,7 @@ export class ThumbnailService {
     const image = await this.createJimpImage(Jimp, buffer, ext);
     // Must match the Sharp branch's size and quality 70 above (docs/image-backends.md: backends-agree-output).
     image.scaleToFit({ w: size, h: size });
-    const jpegBuffer: Buffer = await image.getBuffer('image/jpeg', { quality: 70 });
-    return `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`;
+    return image.getBuffer('image/jpeg', { quality: 70 });
   }
 
   // ---------------------------------------------------------------------------
@@ -222,6 +237,22 @@ export class ThumbnailService {
       width: image.width,
       height: image.height
     };
+  }
+
+  /** Jimp fallback for slide images: cap at 2560px longest side (no enlargement), JPEG quality 85, mirroring the provider's Sharp branch; null when Jimp is unavailable (docs/crop-and-pptx.md: deck-images-bounded). */
+  async capSlideImage(buffer: Buffer, ext: string): Promise<{ bytes: Buffer; width: number; height: number } | null> {
+    const Jimp = this.getJimp();
+    if (!Jimp) {
+      return null;
+    }
+    const image = await this.createJimpImage(Jimp, buffer, ext);
+    const width: number = image.width;
+    const height: number = image.height;
+    if (width > 2560 || height > 2560) {
+      image.scaleToFit({ w: 2560, h: 2560 });
+    }
+    const bytes: Buffer = await image.getBuffer('image/jpeg', { quality: 85 });
+    return { bytes, width, height };
   }
 
   // ---------------------------------------------------------------------------
@@ -342,25 +373,75 @@ export class ThumbnailService {
   // Disk cache
   // ---------------------------------------------------------------------------
 
-  private async loadFromDiskCache(cacheKey: string): Promise<string | null> {
+  private async loadFromDiskCache(cacheKey: string): Promise<Buffer | null> {
     const cacheFile = vscode.Uri.joinPath(this.cacheDir, `${cacheKey}.jpg`);
     try {
-      const data = await vscode.workspace.fs.readFile(cacheFile);
-      return `data:image/jpeg;base64,${Buffer.from(data).toString('base64')}`;
+      return Buffer.from(await vscode.workspace.fs.readFile(cacheFile));
     } catch {
       return null;
     }
   }
 
-  private async saveToDiskCache(cacheKey: string, dataUrl: string): Promise<void> {
+  private async saveToDiskCache(cacheKey: string, bytes: Buffer): Promise<void> {
     const cacheFile = vscode.Uri.joinPath(this.cacheDir, `${cacheKey}.jpg`);
     try {
-      const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-      const buffer = Buffer.from(base64Data, 'base64');
-      await vscode.workspace.fs.writeFile(cacheFile, buffer);
+      await vscode.workspace.fs.writeFile(cacheFile, bytes);
     } catch (err) {
       console.warn(`Failed to save thumbnail to cache: ${err}`);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Packfile snapshot — a rename-only snapshot of the memory cache; one sequential read on a warm open (docs/image-backends.md: thumb-pack-atomic).
+  // ---------------------------------------------------------------------------
+
+  private ensurePackLoaded(): Promise<Map<string, Buffer>> {
+    if (this.packMap) return Promise.resolve(this.packMap);
+    if (!this.packLoad) {
+      this.packLoad = (async () => {
+        try {
+          const idx = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.cacheDir, 'thumbs.idx'))).toString('utf8');
+          const pack = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.cacheDir, 'thumbs.pack')));
+          this.packMap = parsePack(idx, pack) ?? new Map();
+        } catch {
+          this.packMap = new Map(); // no pack yet, or unreadable: per-entry files serve everything
+        }
+        return this.packMap;
+      })();
+    }
+    return this.packLoad;
+  }
+
+  private schedulePackSnapshot(): void {
+    if (this.packTimer) clearTimeout(this.packTimer);
+    // Idle-debounced: one snapshot after the churn, not one per thumbnail.
+    this.packTimer = setTimeout(() => { void this.writePackSnapshot(); }, PACK_SNAPSHOT_IDLE_MS);
+  }
+
+  private async writePackSnapshot(): Promise<void> {
+    if (this.packWriting || !this.packDirty) return;
+    this.packWriting = true;
+    try {
+      const uuid = crypto.randomUUID();
+      const entries = [...this.memoryCache].map(([key, bytes]) => ({ key, bytes }));
+      const { pack, idx } = buildPack(uuid, entries);
+      const packTmp = vscode.Uri.joinPath(this.cacheDir, `thumbs.pack.tmp-${process.pid}`);
+      const idxTmp = vscode.Uri.joinPath(this.cacheDir, `thumbs.idx.tmp-${process.pid}`);
+      await vscode.workspace.fs.writeFile(packTmp, pack);
+      await vscode.workspace.fs.writeFile(idxTmp, Buffer.from(idx, 'utf8'));
+      // Rename-only publication: the uuid pairing lets a reader reject any torn pack/idx combination (docs/image-backends.md: thumb-pack-atomic).
+      await vscode.workspace.fs.rename(packTmp, vscode.Uri.joinPath(this.cacheDir, 'thumbs.pack'), { overwrite: true });
+      await vscode.workspace.fs.rename(idxTmp, vscode.Uri.joinPath(this.cacheDir, 'thumbs.idx'), { overwrite: true });
+      this.packDirty = false;
+    } catch (err) {
+      console.warn(`Failed to write thumbnail pack: ${err}`);
+    } finally {
+      this.packWriting = false;
+    }
+  }
+
+  dispose(): void {
+    if (this.packTimer) clearTimeout(this.packTimer);
   }
 
   private async cleanupOldCache(): Promise<void> {
@@ -390,11 +471,11 @@ export class ThumbnailService {
   }
 
   /** Least-recently-used eviction, by bytes: the disk cache backs every entry, so a miss costs one readFile. */
-  private rememberInMemory(cacheKey: string, dataUrl: string): void {
+  private rememberInMemory(cacheKey: string, bytes: Buffer, newToPack: boolean): void {
     const prev = this.memoryCache.get(cacheKey);
     if (prev !== undefined) this.memoryCacheBytes -= prev.length;
-    this.memoryCache.set(cacheKey, dataUrl);
-    this.memoryCacheBytes += dataUrl.length;
+    this.memoryCache.set(cacheKey, bytes);
+    this.memoryCacheBytes += bytes.length;
     while (this.memoryCacheBytes > MEMORY_CACHE_MAX_BYTES) {
       const oldest = this.memoryCache.keys().next();
       if (oldest.done) break;
@@ -402,6 +483,8 @@ export class ThumbnailService {
       this.memoryCache.delete(oldest.value);
       this.memoryCacheBytes -= evicted ? evicted.length : 0;
     }
+    if (newToPack) this.packDirty = true;
+    this.schedulePackSnapshot();
   }
 
   clearMemoryCache(): void {

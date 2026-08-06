@@ -208,6 +208,8 @@ function buildTuples(
       tuples.push({ name: uniquify(baseName, takenTupleNames), images });
     }
   }
+  // Final order is by tuple NAME, mirroring fileService.ts — key order is intermediate only.
+  tuples.sort((a, b) => naturalSort(a.name, b.name));
   return tuples;
 }
 
@@ -552,7 +554,7 @@ function testLcsTieBreak() {
 // ── Test case 8: rows sorted by ref basename (docs/tuple-matching.md: rows-keyed-by-reference) ──
 
 function testSortOrderByIndex() {
-  console.log('\nTest 8: rows are sorted by reference basename, asserted by index (docs/tuple-matching.md: rows-keyed-by-reference)');
+  console.log('\nTest 8: matcher keys sort naturally, and the final row order is by tuple NAME (docs/tuple-matching.md: rows-keyed-by-reference)');
 
   const modalities = ['GT', 'pred'];
   const modalityFiles = new Map<string, SimpleFile[]>();
@@ -577,6 +579,17 @@ function testSortOrderByIndex() {
   ['img_1', 'img_2', 'img_10'].forEach((name, i) => {
     assert(tuples[i]?.name === name, `tuples[${i}].name should be "${name}", got: ${tuples[i]?.name}`);
   });
+
+  // Key order and NAME order differ here: by key, img_1_crop01_gt < img_1_gt (c < g); by name,
+  // img_1 < img_1_crop01. The shipped final sort is by name, so the parent row precedes its crop —
+  // a fixture where the orders coincide would leave the name-sort deletable without a failure.
+  const cropFiles = new Map<string, SimpleFile[]>();
+  cropFiles.set('GT', makeFiles('GT', ['img_1_crop01_gt.png', 'img_1_gt.png']));
+  cropFiles.set('pred', makeFiles('pred', ['img_1_crop01_pred.png', 'img_1_pred.png']));
+  const cropTuples = buildTuples(cropFiles, modalities);
+  assert(cropTuples.length === 2, `Expected 2 tuples, got ${cropTuples.length}`);
+  assert(cropTuples[0]?.name === 'img_1' && cropTuples[1]?.name === 'img_1_crop01',
+    `parent row must precede its crop despite reversed key order: got [${cropTuples.map(t => t.name).join(', ')}]`);
 }
 
 // ── Test case 9: colliding tuple names are made unique ────────────────────

@@ -5,7 +5,8 @@ How ImageCompare turns bytes into pixels, and the traps in the fallback chain.
 Code: `sharpLoader.ts` (`getSharp`, the CPU workaround), `thumbnailService.ts` (`getJimp`,
 `createSharpInstance`, `createJimpImage`), `ppmxParser.ts`, plus two packaging inputs —
 `webpack.config.js`/`.vscodeignore` and `.github/workflows/publish.yml`. Pinned by
-`src/test/ppmxParser.test.ts` (the decode half only); see [Testing](#testing).
+`src/test/ppmxParser.test.ts` (the decode half only) and `src/test/thumbPack.test.ts` (the packfile
+wire format); see [Testing](#testing).
 
 ## The intended chain
 
@@ -141,14 +142,27 @@ original bytes and only decodes TIFF/PPMX: re-encoding a 12MP JPEG to PNG both b
 and inflated the string being synchronously encoded ~10x. See `docs/loading-architecture.md` for the
 scheduling side of this.
 
-Thumbnails are cached on disk as raw `.jpg`; a disk hit is re-base64'd, an in-memory hit returns the
-stored string. That re-encode is cheap only because the images are small — `thumbnailSize` (default
-100) is decoded at 2x, so 200px by default and 400px at the setting's maximum.
+Thumbnails are cached on disk as raw `.jpg`, one file per entry; the memory cache holds raw JPEG
+bytes and every delivery base64-encodes on the way out. That per-delivery encode is cheap only
+because the images are small — `thumbnailSize` (default 100) is decoded at 2x, so 200px by default
+and 400px at the setting's maximum.
+
+On top of the per-entry files sits the **packfile**: `thumbs.pack` + `thumbs.idx` in the cache dir, a
+rename-only snapshot of the memory cache (so its size is bounded by the cache cap). A warm open costs
+one sequential read instead of thousands of small ones — the difference between seconds and
+sub-second on a network mount. The pack is lazily loaded on the first thumbnail request; entries are
+`key → offset/length` slices sharing one buffer (`thumbPack.ts`, pure and suite-pinned). Per-entry
+files remain the only *write* path during a session — concurrent windows never append to a shared
+file — and the snapshot is idle-debounced, written to temp names and published by rename. Invalidation
+needs nothing new: the cache key already encodes the file's mtime and the requested thumbnail size,
+so a changed file misses via mtime, a changed `thumbnailSize` setting misses via the size component,
+and either falls through to the per-entry path.
 
 ## Testing
 
-Of the suites `publish.yml` gates on (`docs/testing.md`), only `ppmxParser.test.ts` touches this
-subsystem, and only the pure decode half. `pngTextChunk.test.ts` uses Sharp to mint a fixture PNG and
+Of the suites `publish.yml` gates on (`docs/testing.md`), only `ppmxParser.test.ts` (the pure decode
+half) and `thumbPack.test.ts` (the packfile wire format, importing the real `thumbPack.ts`) touch
+this subsystem. `pngTextChunk.test.ts` uses Sharp to mint a fixture PNG and
 re-read it, so a native Sharp must load for it to run at all — but that exercises Sharp incidentally,
 not the loader or the tiers. Nothing tests Jimp or `sharpLoader.ts`, so the fallback chain is
 verified by hand or not at all. `sharpLoader.ts` is ordinary bundled source — of the npm packages only `sharp`
@@ -159,6 +173,12 @@ then hit a wasm32 tier that a normal install does not have (above).
 
 ## Invariants
 
+- **`thumb-pack-atomic`** — the pack and its idx are only ever valid as a *pair*: both carry the same
+  uuid, the reader (`parsePack`) rejects any mismatch, size discrepancy, out-of-bounds entry or
+  duplicate key by discarding the whole pack, and the writer publishes exclusively by rename of both
+  temp files. A discarded pack costs a slower open; a torn pair that served bytes would show wrong
+  thumbnails. Writers never append — two windows snapshotting concurrently means the last rename
+  wins wholesale, never an interleaved file.
 - **`sharp-externalized`** — Sharp stays externalized. Bundling it breaks native binary resolution
   and disables the `Module._resolveFilename` workaround entirely.
 - **`resolver-always-restored`** — `Module._resolveFilename` is always restored, on every path,

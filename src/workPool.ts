@@ -123,7 +123,7 @@ export class WorkPool {
     let best = -1;
     for (let q = Priority.PREFETCH; q < PRIORITY_COUNT; q++) {
       if (this.queues[q].length === 0 || !this.canStart(q)) continue;
-      // Max-min fair share: the emptiest running class goes first, so no queued class starves behind a wave (docs/loading-architecture.md: background-trickle).
+      // Max-min fair share: the emptiest running class goes first; ties fall to priority, so at spec width 1 this is strict priority (docs/loading-architecture.md: background-trickle).
       if (best === -1 || this.activeByPrio[q] < this.activeByPrio[best]) best = q;
     }
     return best;

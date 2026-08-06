@@ -51,7 +51,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
 - **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
-- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem: `matchDeletedFile` (rename disambiguation) and `shiftIndexAfterRemoval` (index re-indexing on tuple/modality removal), unit-tested in `src/test/watcherLogic.test.ts`
+- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `src/test/watcherLogic.test.ts`
 - **`workPool.ts`** - Pure: the bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
 - **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities → `docs/tuple-matching.md`
@@ -59,6 +59,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`sharpLoader.ts`** - Dynamic Sharp loader with the "Unsupported CPU" workaround → `docs/image-backends.md`
 - **`pngText.ts`** - Pure (no vscode dependency): PNG tEXt chunk reader/writer, CRC-32, and the crop-metadata wire format → `docs/crop-and-pptx.md`
 - **`modalityNames.ts`** - Pure (no vscode dependency): shortest-unique-tail naming of modality columns from directory paths → `docs/session-files.md`
+- **`thumbPack.ts`** - Pure (no vscode dependency): the thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
@@ -102,7 +103,7 @@ npm run compile      # One-off build
 
 ## Testing
 
-Seven `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
+Eight `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
 script in `package.json` is the list CI executes, and `docs/testing.md` repeats it only to show the
 per-suite invocation. What each suite pins, what nothing covers, the manual checks worth walking
 before a release, and `imageCompare.debug` logging: `docs/testing.md`.

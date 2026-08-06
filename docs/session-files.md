@@ -253,9 +253,12 @@ value the pill stamps.
   index.
 - **`mode-is-explicit`** — code asking "which selection shape is this?" reads `ScanResult.mode`, and
   what the scan *used* from `ScanResult.roots` — never the caller's raw URI list, which still holds
-  paths that failed to stat. `isMultiTupleMode` means only "more than one row"; it has exactly one
-  sanctioned reader, `findMatchingDeletedFile()`, where the row count is genuinely the question
-  (sibling-directory rename matching means nothing in single-tuple mode). Using it as a mode test silently disabled voting and new-file
+  paths that failed to stat. `isMultiTupleMode` means only "more than one row"; the `ScanResult`
+  field has exactly one sanctioned reader, `findMatchingDeletedFile()`, where the row count is
+  genuinely the question (sibling-directory rename matching means nothing in single-tuple mode). The
+  webview's same-named module-local in `src/webview/main.ts` is not this field — it is recomputed
+  there from `tuples.length > 1` as a row-count convenience for the UI, so a grep for the identifier
+  finds readers this invariant does not cover. Using it as a mode test silently disabled voting and new-file
   pickup for any *single-tuple* multi-directory comparison; the deleted-path case broke separately,
   from reading the caller's raw URI list instead of `roots`.
 - **`modality-path-always-real`** — every reachable path through `resolveModalityPath` returns a real

@@ -5,7 +5,7 @@ remembers where it came from, and how the exporter reassembles that into callout
 
 Code: `webview/crop.ts` and `webview/main.ts` (draw + send), `imageCompareProvider.ts`
 (`handleCropImages`, `getNextCropNumber`, `handleExportPptx`), `thumbnailService.ts`
-(`getImageDimensions`, `cropImage`, `readCropMetadata`, `parseExifDescription`), and `pngText.ts` —
+(`getImageDimensions`, `cropImage`, `capSlideImage`, `readCropMetadata`, `parseExifDescription`), and `pngText.ts` —
 the pure, `vscode`-free wire-format module `thumbnailService.ts` imports (with the test):
 `CROP_RECT_KEYWORD`,
 `encodeCropMeta`/`parseCropMeta`, `pngInjectText`/`pngReadText`, and `crc32` (test-only).
@@ -78,7 +78,8 @@ the same format in-file to find the next free number.
 The writer's format and those readers' patterns must keep agreeing. Break the agreement and nothing
 throws: crops start winning matches away from originals, and tuples quietly bind the wrong files.
 Zero-padding, by contrast, buys nothing inside this codebase: every sort that *orders* a `_cropNN`
-name is natural (`fileService.ts`'s `naturalSort`, `localeCompare(…, { numeric: true })`) — the two
+name is natural (`naturalCompare` in `watcherLogic.ts`, `localeCompare(…, { numeric: true })`,
+which `fileService.ts` imports as `naturalSort`) — the two
 `tuple.images.sort` calls in `imageCompareProvider.ts` order by modality index and never look at the
 name — and every reader parses `\d+`, so `_crop2` beside `_crop10` would still order and parse
 correctly. (The
@@ -178,11 +179,16 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
 
 ## Invariants
 
-- **`deck-images-bounded`** — every image placed on a slide is downscale-capped (2560px longest side)
-  and JPEG-recompressed, never embedded as a full-resolution PNG. Not a quality preference: pptxgenjs
-  zips with jszip, which has no ZIP64, so a deck whose media crosses the 4 GB zip offset limit is
-  structurally corrupt — PowerPoint "repairs" it by dropping the trailing entries, which read as
-  "images missing from the last slides". A slide is 10 inches wide; full resolution buys nothing.
+- **`deck-images-bounded`** — every image placed on a slide is downscale-capped (2560px longest side,
+  never enlarged) and JPEG-recompressed at quality 85 by whichever backend is available — Sharp, or
+  `ThumbnailService.capSlideImage` (Jimp) when Sharp is absent — never embedded at full resolution.
+  The one exception is the no-backend last resort: when Sharp and Jimp both fail to load (already a
+  hard-error state for thumbnails), original bytes pass through uncapped. Not a quality preference:
+  pptxgenjs zips with jszip (3.10.1 installed), whose *read* path handles ZIP64 (`lib/signature.js`,
+  `lib/zipEntries.js`) but whose `lib/generate/` write path contains no ZIP64 code at all, so a deck
+  it writes whose media crosses the 4 GB zip offset limit is structurally corrupt — PowerPoint
+  "repairs" it by dropping the trailing entries, which read as "images missing from the last
+  slides". A slide is 10 inches wide; full resolution buys nothing.
 
 - **`relative-coords-only`** — a crop rect only crosses modalities in relative (0–1) form. Pixel
   coordinates are valid only against the image whose dimensions produced them. This binds the webview

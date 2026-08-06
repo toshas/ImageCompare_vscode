@@ -38,7 +38,9 @@ simpler rule.
 Pairwise all-to-all matching has no anchor and no stable identity for a row. Instead one
 modality is elected reference and *its* files define the rows: each file of every other modality is
 attached to the reference file it best matches. `MatchedTuple.key` (the reference basename) is what
-the row is keyed and sorted on.
+the row is keyed on. The matcher's sort by key is intermediate — it fixes the tuple order the
+collision suffixes below follow — and the displayed order is a final `naturalSort` by tuple *name*
+(`rows-keyed-by-reference`).
 
 The key is not what `results.txt` persists. Votes are written against `ImageTuple.name`
 (`writeResultsFile`, resolved back by `mapWinnersToIndices`), which is

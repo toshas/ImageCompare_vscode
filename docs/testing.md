@@ -5,7 +5,7 @@ What is pinned, what is not, and the one trap that makes a green run mean less t
 Every suite is a plain `ts-node` script with no test framework: a bare `assert` counter that exits
 non-zero on failure. That is why they run without a VSCode host — and why they can only cover code
 that has no `vscode` import. (`pngTextChunk` does need a working native Sharp, to mint its fixture
-PNG; the other five need nothing but Node.)
+PNG; every other suite needs nothing but Node.)
 
 ```bash
 npx ts-node src/test/tupleMatching.test.ts
@@ -14,9 +14,11 @@ npx ts-node src/test/watcherLogic.test.ts
 npx ts-node src/test/pngTextChunk.test.ts
 npx ts-node src/test/workPool.test.ts
 npx ts-node src/test/ppmxParser.test.ts
+npx ts-node src/test/modalityVisibility.test.ts
+npx ts-node src/test/thumbPack.test.ts
 ```
 
-`.github/workflows/publish.yml` runs all seven in its `test` job, which gates the whole build matrix —
+`.github/workflows/publish.yml` runs all eight in its `test` job, which gates the whole build matrix —
 a red test blocks publishing to both marketplaces.
 
 ## The suites
@@ -25,11 +27,12 @@ a red test blocks publishing to both marketplaces.
 |---|---|---|
 | `tupleMatching` | **a copy**, plus real `modalityNames.ts` | Trie matching end to end: crop deprioritization (rule 1), each of the two remaining tie-breaks in isolation, nested crops, row sort order, colliding tuple names de-duplicated, and — against the real source — unique modality naming including the collided-tail fallback |
 | `sessionFile` | real source | Path resolution, duplicate-path rejection, `labels`/`colors` validation, malformed JSON, `applyLabels()`, `suggestSessionFileName()` |
-| `watcherLogic` | real source | `matchDeletedFile()` rename disambiguation (incl. the ambiguous-multi-delete no-hijack rule) and `shiftIndexAfterRemoval()` |
+| `watcherLogic` | real source | `matchDeletedFile()` rename disambiguation (incl. the ambiguous-multi-delete no-hijack rule), `shiftIndexAfterRemoval()`, `modalityInsertIndex()` (caller order beats alphabetical on re-add) and `tupleInsertIndex()` (crop lands after its parent; natural row order) |
 | `pngTextChunk` | real source (`pngText.ts`) | tEXt round-trip, the `x,y,w,h,srcW,srcH` crop format, PNG structure survival, CRC-32 against a full-table probe |
 | `workPool` | real source | Concurrency cap (incl. the reject path), priority + FIFO/seq order, cancellation, re-entrancy, error propagation |
 | `ppmxParser` | real source | All four magic x flags combinations, size-based flags detection, normalization, malformed input |
 | `modalityVisibility` | real source | Hidden-pill keyboard cycling: skip, run-skip, non-wrapping edges, all-hidden stay |
+| `thumbPack` | real source | Packfile round-trip, uuid pairing rejection, truncation/overflow/duplicate rejection |
 
 ## The trap: one suite still tests a copy
 
@@ -44,8 +47,9 @@ crop-breaking bug shipped. The real `pngInjectText` called `zlib.crc32` (Node 20
 `engines.vscode` allowed Node 18, so every crop threw on older VSCode — while the suite stayed green,
 because its copy had its own `zlib.crc32`. The fix was structural: the logic moved to `pngText.ts`, a
 pure `vscode`-free module the test now imports. **That is the pattern** — `watcherLogic.ts`,
-`workPool.ts`, `sessionFile.ts`, `ppmxParser.ts` and `pngText.ts` all exist because extracting a
-decision into a pure module is what makes it testable at all. Prefer that over a copy.
+`workPool.ts`, `sessionFile.ts`, `ppmxParser.ts`, `pngText.ts`, `thumbPack.ts` and
+`webview/modalityVisibility.ts` all exist because extracting a decision into a pure module is what
+makes it testable at all. Prefer that over a copy.
 
 ## A green suite is not evidence
 
@@ -59,7 +63,7 @@ with several of its rules deliberately broken. When you add a test, pin a value
 from *outside* the implementation (a spec constant, a hand-computed expectation); code compared to
 itself proves nothing.
 
-The other five suites import the real source and are real coverage.
+Every other suite imports the real source and is real coverage.
 
 ## What nothing covers
 

@@ -218,7 +218,7 @@ function matchTuplesWithTrie(
     });
   }
 
-  // Rows are keyed and sorted by reference basename; the elected reference decides both (docs/tuple-matching.md: rows-keyed-by-reference).
+  // Rows are keyed by reference basename; this key sort is intermediate — final order is by tuple name (docs/tuple-matching.md: rows-keyed-by-reference).
   result.sort((a, b) => naturalSort(a.key, b.key));
 
   debugLog('--- Final tuples ---');
@@ -476,7 +476,7 @@ async function scanDirectoriesAsModalities(
     }
   }
 
-  // Final order is by tuple NAME, the one the watcher-time insertion maintains — reference keys put `X_crop01` before an `X_gt`-keyed parent (docs/file-watching.md: rows-insert-in-order).
+  // Final order is by tuple NAME, the one the watcher-time insertion maintains — reference keys put `X_crop01` before an `X_gt`-keyed parent (docs/file-watching.md: rows-insert-in-order) (docs/tuple-matching.md: rows-keyed-by-reference).
   tuples.sort((a, b) => naturalSort(a.name, b.name));
 
   return {

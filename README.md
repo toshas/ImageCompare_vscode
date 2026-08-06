@@ -85,7 +85,7 @@ Tip: tab titles show the full filename; add this setting to display `session` in
 | `[` `]` | Reorder modalities |
 | `Scroll` | Zoom in/out (over the tuple carousel: scroll the list) |
 | `Drag` | Pan image |
-| Right-click | Menu: **Copy Image** / **Copy Path** / **Reveal in Explorer** (on the image or a modality pill) |
+| Right-click | Menu: **Copy Path** / **Reveal in Explorer** (on the image or a modality pill); **Copy Image** (on the image only); **Hide/Show Modality** (on a pill only) |
 | `Ctrl+C` | Copy the current image to the clipboard (as PNG), when no text is selected |
 | `C` | Toggle crop mode |
 | `Del` / `Backspace` | Delete current tuple files (permanent — see warning below) |

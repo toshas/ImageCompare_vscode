@@ -51,6 +51,14 @@ const mutations = [
     killedBy: 'Test 7 (higher-LCS ref must win)'
   },
   {
+    name: 'tuple: final name-sort removed (display order falls back to key order)',
+    file: 'src/test/tupleMatching.test.ts',
+    suite: 'src/test/tupleMatching.test.ts',
+    find: '  tuples.sort((a, b) => naturalSort(a.name, b.name));',
+    replace: '  /* mutated: no final name sort */',
+    killedBy: 'Test 8 (parent row precedes its crop despite reversed key order)'
+  },
+  {
     name: 'tuple: row sort reversed',
     file: 'src/test/tupleMatching.test.ts',
     suite: 'src/test/tupleMatching.test.ts',
@@ -186,6 +194,22 @@ const mutations = [
     find: 'if (r === -1 || r > rank) return i;',
     replace: 'if (r === -1 || r < rank) return i;',
     killedBy: 'Test 12/13 (mode-2 re-add lands at the caller-ordered position)'
+  },
+  {
+    name: 'thumbPack: uuid pairing check removed (torn pack/idx combo served)',
+    file: 'src/thumbPack.ts',
+    suite: 'src/test/thumbPack.test.ts',
+    find: 'if (pack.length < header.length || !pack.subarray(0, header.length).equals(header)) return null;',
+    replace: 'if (pack.length < header.length) return null;',
+    killedBy: 'Test 3 (uuid mismatch, same-size packs)'
+  },
+  {
+    name: 'thumbPack: offset bounds check weakened',
+    file: 'src/thumbPack.ts',
+    suite: 'src/test/thumbPack.test.ts',
+    find: 'if (o < header.length || l < 0 || o + l > pack.length || out.has(e.k)) return null;',
+    replace: 'if (l < 0 || out.has(e.k)) return null;',
+    killedBy: 'Test 5/6 (overflowing and header-pointing entries rejected)'
   },
   {
     name: 'modalityVisibility: hidden pills no longer skipped by cycling',

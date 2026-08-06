@@ -47,16 +47,19 @@ a 1-core box; the 16 is deliberate width — see `pool-width-hides-latency` belo
   starve a whole class outright. The courtesy also runs downward, in two forms
   (`background-trickle` below): `SIBLING`/`EXPORT` leave one pool slot to lower classes while any
   have queued work, and *within* speculation each freed slot goes to the queued
-  class with the fewest running tasks (max-min fair share, ties to the higher priority) — so a
-  prefetch wave with the sweep and the existence poll both queued splits the speculative budget
-  roughly evenly instead of freezing the sweep.
+  class with the fewest running tasks (max-min fair share, ties to the higher priority) — so with two
+  or more speculative slots, a prefetch wave with the sweep and the existence poll both queued splits
+  the speculative budget roughly evenly instead of freezing the sweep; with one, the tie-break
+  degenerates to strict priority (`background-trickle` has the width regimes).
   `THUMBNAIL` is a targeted re-request — `sendThumbnails` (a `requestThumbnails` message) and
   `regenerateThumbnail` (one slot a watcher touched — changed, restored, renamed, or newly placed —
-  or one the existence sweep placed while adopting a new modality directory). Every *thumbnail* delivery resolves its slot at the
+  or one the existence sweep placed — by adopting a new modality directory, or by finding an
+  unreported file in its per-directory listing). Every *thumbnail* delivery resolves its slot at the
   moment it lands (`resolveSlotForUri`; `docs/tuple-matching.md: revalidate-slot-before-write`), so a
   re-index between enqueue and delivery redirects the result rather than discarding it. Image loads do
-  too — `sendImage` re-resolves before posting. Only prefetch still drops on a moved slot, since
-  nobody is waiting on it.
+  too — `sendImage` re-resolves its pooled-load reply before posting (the cache-hit branch replies at
+  the enqueued indices: nothing loaded, so nothing moved while it waited). Only prefetch still drops
+  on a moved slot, since nobody is waiting on it.
   `THUMBNAIL_BULK` is the open-time sweep, ranked below
   it so a small, freshly-invalidated batch can't queue behind thousands of sweep items. Nothing here is
   scroll-driven: the carousel is built eagerly for every tuple and the only scroll listener is
@@ -68,8 +71,8 @@ a 1-core box; the 16 is deliberate width — see `pool-width-hides-latency` belo
   priority (only the existence sweep's `POLL` ranks lower). It is
   FIFO *start* order — with any concurrency above 1 and varying decode times a later item can finish
   first, so the fill is approximate, skew bounded by the sweep's running-slot window: `concurrency - 1`
-  (the speculative-rank cap above, waived at concurrency 1), where the pool's concurrency is `cpus-1`
-  capped at 16.
+  (the speculative-rank cap above, waived at concurrency 1), where the pool's concurrency is
+  `max(1, min(16, cpus-1))`.
 - **`cancel(key)`** drops queued (not-yet-started) tasks; running tasks always finish. Keys scope
   work per panel (`state.poolKey`) and per prefetch wave (`state.prefetchWaveKey`). Matching is
   exact string equality, so both keys must be cancelled explicitly.
@@ -95,9 +98,10 @@ decrements `active` and pumps, so the export's next task is already queued, at `
 slot frees. That only excludes anything while consecutive submits sit in the same async function:
 `addCropSlide`'s return adds a hop, the pool pumps in that gap, and queued speculation takes the
 slot. And it holds only *one* slot of `max(1, min(16, cpus-1))`, so above concurrency 1 the rest stay
-open regardless. Measured against the real pool: at cap 1 a same-function loop yields
-`E E E E BULK`, the same loop through `addCropSlide` yields `E BULK E E E`, and cap 2 and cap 4 both
-yield `E BULK E E E`. Crop is the fan-out case: `Promise.all` submits one task per modality at once, so a wide tuple
+open regardless. A one-off measurement — no test pins these sequences, so read them as an
+illustration of the microtask gap above (which is structural), not as a maintained property of the
+current pool: at cap 1 a same-function loop yielded `E E E E BULK`, the same loop through
+`addCropSlide` yielded `E BULK E E E`, and cap 2 and cap 4 both yielded `E BULK E E E`. Crop is the fan-out case: `Promise.all` submits one task per modality at once, so a wide tuple
 fills the foreground budget for a round — the whole pool, or one slot less while background work is
 queued (`background-trickle`). The pool is process-global, so this
 crosses panels. Bounded, because every export producer is finite.
@@ -114,8 +118,8 @@ plus a capped-and-recompressed JPEG re-encode (`docs/crop-and-pptx.md: deck-imag
 
 What the pool does **not** cover, deliberately: the base64 of each result is synchronous
 (`docs/image-backends.md`, "Why the sync/base64 work matters"), so a large export is still felt on the
-extension-host thread; the zip deflate at the end of an export (`pptx.writeFile`) is outside the pool
-too, and is the single largest CPU event of a large export; and the directory listings on the crop
+extension-host thread; the zip deflate at the end of an export (inside `pptx.write({ outputType:
+'nodebuffer' })`) is outside the pool too, and is the single largest CPU event of a large export; and the directory listings on the crop
 and export paths are not pooled — `getNextCropNumber`, which runs once per modality rather than once
 per crop, and the export's single `readdir` of the output directory — because the pool exists to
 bound image reads and decodes (memory, CPU and network round trips per *image*), not metadata calls.
@@ -134,7 +138,9 @@ outrank anything.
   That priority split (not FIFO) is what guarantees the on-screen image the first slot and stops
   tuple N's siblings queueing ahead of tuple N+1's visible image when stepping fast. The webview also
   sends the shown modality first, which only breaks ties within `VISIBLE`.
-- `sendImage` replies exactly once (`image`/`imageError`) unless the panel is gone — at the file's live slot, or at the enqueued slot when that slot has been vacated — and the
+- `sendImage` replies exactly once (`image`/`imageError`) unless the panel is gone or another file
+  now occupies the enqueued slot (see `reply-exactly-once`) — at the file's live slot, or at the
+  enqueued slot when that slot has been vacated — and the
   post is *not* gated on `currentTupleIndex`: the request is authoritative (the webview only asks for
   what it shows) and the extension mutates its own `currentTupleIndex` on watcher events, so gating
   there stranded the very request the user awaited. A reply for a tuple the user has left is harmless
@@ -210,7 +216,8 @@ preempted. It is *not* visibility-gated — a one-shot fire from
 Two things re-request: `requestThumbnails`, which the webview posts on tuple add (that row) and on
 modality add/remove (every tuple); and `regenerateThumbnail`, which the watcher fires for a single slot
 whose file changed, was restored, renamed, or newly placed — and which the existence sweep fires too,
-via `adoptNewModalityDir`, for each image in a modality directory it adopts. The second is the common one — an
+for each image in a modality directory it adopts (`adoptNewModalityDir`) and for each unknown file its
+per-directory listing hands to `handleFileCreated`. The second is the common one — an
 in-place overwrite on every training step refills that slot — so a skipped slot is not necessarily
 blank for the life of the panel.
 
@@ -313,9 +320,10 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 - **`reply-exactly-once`** — every `requestImage` yields exactly one terminal reply (`image` or
   `imageError`), re-addressed to the slot the file occupies at delivery. When the file has left the
-  view the reply still goes to the enqueued slot — but only if that slot is now *empty*: a slot
-  another file has taken is healthy, and marking it missing would blank it for good, since the
-  webview never re-requests a filled slot. Silence is only correct when neither slot exists. Nothing polls for a missing reply, so a
+  view the reply still goes to the enqueued slot — even one that no longer exists, which the
+  webview discards — unless another file has taken that slot: a taken slot is
+  healthy, and marking it missing would blank it for good, since the webview never re-requests a
+  filled slot. That occupied-slot case is the only panel-alive silence. Nothing polls for a missing reply, so a
   dropped one clears only when something re-enters `loadTuple(currentTupleIndex)` — navigating away
   and back, deleting some *other* tuple, or a modality add/remove — or when a watcher-driven
   `fileRestored` re-requests that slot. Clicking the current carousel row does not.
@@ -323,15 +331,21 @@ Opening a panel is asynchronous, and step order is load-bearing:
   polling. Every image read/decode goes through the pool — crop and PPTX export included, at
   `EXPORT` — so nothing outranks the visible image, and `VISIBLE` is exempt from the courtesy rule
   below: it takes any free slot.
-- **`background-trickle`** — two rules, one guarantee: no queued class waits longer than one task
-  completion for a slot, and contended classes converge to even shares. `SIBLING`/`EXPORT` leave one
+- **`background-trickle`** — two rules, and a guarantee scoped to the speculative width
+  (`concurrency - 1` slots). `SIBLING`/`EXPORT` leave one
   pool slot to lower classes while any have queued work; within speculation, each freed slot goes to
-  the queued class with the fewest running tasks (max-min, ties to the higher priority). Both are
-  work-conserving: no slot idles while only one class has work. Two weaker versions shipped first
+  the queued class with the fewest running tasks (max-min, ties to the higher priority). With two or
+  more speculative slots (`concurrency ≥ 3`) that pick bounds waits: contended classes converge to
+  roughly even shares of the speculative budget. With one (`concurrency ≤ 2` — a real configuration:
+  `sharedWorkPool` sizes the pool `max(1, min(16, cpus - 1))`, so a 3-core host gets exactly 2), it degenerates to
+  strict priority within speculation: a speculative task is admitted only when none is running, so
+  every successful pick is an all-zero tie that the higher-priority class wins, and a prefetch wave
+  re-takes the lone slot on each completion until its queue drains. The one
+  slot that idles by design is the foreground reservation: under speculation-only load one slot stays
+  free for user-facing arrivals (workPool Test 11 pins it). Two weaker versions shipped first
   and both starved the sweep measurably — strict priority froze it for a wave's whole duration
   (15s dead progress bar), and a one-slot courtesy left it 1-wide, where a single slow NFS read
-  stalled the bar head-of-line. Breaking either rule re-introduces stall-then-burst; breaking
-  work-conservation idles slots.
+  stalled the bar head-of-line. Breaking either rule re-introduces stall-then-burst.
 - **`pool-width-hides-latency`** — the pool cap (16) is sized for *latency*, not CPU: its tasks are
   file-service RPC reads and Sharp decodes that run on Sharp's own thread pool, so extension-host
   CPU per task is small and width is what hides a slow mount's round trips. Capping it "to match
