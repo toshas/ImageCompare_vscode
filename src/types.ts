@@ -79,6 +79,7 @@ export type WebViewMessage =
   | { type: 'cropImages'; tupleIndex: TupleIndex; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
   | { type: 'deleteTuple'; tupleIndex: TupleIndex }
   | { type: 'exportPptx'; tupleIndices: TupleIndex[]; winnerModalityIndices: (OriginalModalityIndex | null)[]; modalityOrder: OriginalModalityIndex[] }
+  | { type: 'saveSessionAs' } // Ctrl/Cmd+S in the webview; the title-bar button routes through the command instead
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
@@ -86,7 +87,7 @@ export type ExtensionMessage =
   | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean }
   | { type: 'thumbnail'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; dataUrl: string }
   | { type: 'thumbnailError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
-  | { type: 'image'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; dataUrl: string; width: number; height: number }
+  | { type: 'image'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string; width: number; height: number } // binary, not base64: string payloads cost ×1.33 and GC pauses
   | { type: 'imageError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
   | { type: 'thumbnailProgress'; current: number; total: number }
   | { type: 'copyImage' } // context-menu Copy Image: the webview owns the only image-capable clipboard
@@ -111,8 +112,10 @@ export interface WebViewConfig {
 }
 
 // Loaded image data (cached in extension)
+/** Extension-side full-image cache entry: raw encoded bytes, not base64 — see docs/loading-architecture.md. */
 export interface LoadedImage {
-  dataUrl: string;
+  bytes: Uint8Array;
+  mime: string;
   width: number;
   height: number;
 }

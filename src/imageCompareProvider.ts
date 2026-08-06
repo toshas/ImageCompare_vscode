@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import PptxGenJS from 'pptxgenjs';
 import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, disambiguateDirectoryNames, RESULTS_FILENAME } from './fileService';
-import { applyLabels } from './sessionFile';
+import { applyLabels, parseSessionFile, serializeSessionFile } from './sessionFile';
+import { normalizeImageBytes } from './wireFormat';
 import { matchDeletedFile, modalityInsertIndex, shiftIndexAfterRemoval, tupleInsertIndex } from './watcherLogic';
 import { nextPanelKey, Priority, sharedWorkPool, TaskCancelled, WorkPool } from './workPool';
 import { ThumbnailService } from './thumbnailService';
@@ -73,6 +74,9 @@ interface PanelState {
   prefetchWaveCounter: number;
   webviewReady: boolean;
   pendingDebugMessages: string[];
+  lastTupleSwitchAt: number; // last setCurrentTuple arrival; recent = the user is scrubbing
+  heldImagePosts: Map<string, Extract<ExtensionMessage, { type: 'image' }>>; // off-screen payloads parked during a scrub burst
+  burstFlushTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -232,6 +236,8 @@ export class ImageCompareProvider {
         votingEnabled,
         webviewReady: false,
         pendingDebugMessages: [],
+        lastTupleSwitchAt: 0,
+        heldImagePosts: new Map(),
         disposed: false,
         visible: panel.visible,
         deleteSweepRunning: false,
@@ -268,6 +274,8 @@ export class ImageCompareProvider {
         this.pool.cancel(panelState.poolKey);
         this.pool.cancel(panelState.prefetchWaveKey);
         panelState.loadedImages.clear();
+        panelState.heldImagePosts.clear();
+        if (panelState.burstFlushTimer) clearTimeout(panelState.burstFlushTimer);
         panelState.fileWatchers.forEach(w => w.dispose());
         panelState.nodeWatchers.forEach(w => w.close());
         if (panelState.deleteCheckTimer) clearInterval(panelState.deleteCheckTimer);
@@ -316,6 +324,14 @@ export class ImageCompareProvider {
 
       case 'setCurrentTuple':
         state.currentTupleIndex = message.tupleIndex;
+        state.lastTupleSwitchAt = Date.now();
+        // The user landed here: anything held for this tuple is delivered now, ahead of the burst flush.
+        for (const [key, held] of state.heldImagePosts) {
+          if (held.tupleIndex === message.tupleIndex) {
+            state.heldImagePosts.delete(key);
+            state.panel.webview.postMessage(held);
+          }
+        }
         break;
 
       case 'tupleFullyLoaded':
@@ -338,6 +354,10 @@ export class ImageCompareProvider {
 
       case 'exportPptx':
         await this.handleExportPptx(state, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
+        break;
+
+      case 'saveSessionAs':
+        await this.saveSessionAs(state);
         break;
 
       case 'log':
@@ -872,6 +892,72 @@ export class ImageCompareProvider {
     return undefined;
   }
 
+  /** Title-bar entry point: Save Session As for the active panel. */
+  async saveSessionAsActive(): Promise<void> {
+    const state = [...this.panels].find(s => s.panel.active && !s.disposed);
+    if (state) await this.saveSessionAs(state);
+  }
+
+  /** Save a copy of the session file (paths relativized when possible) plus the results sidecar if one exists. */
+  private async saveSessionAs(state: PanelState): Promise<void> {
+    if (!state.sessionFileUri) return;
+    try {
+      const defaultDir = this.suggestSessionSaveDir(state);
+      const stem = path.basename(state.sessionFileUri.fsPath).replace(/\.imagecompare$/i, '');
+      const destUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.joinPath(defaultDir, `${stem}.imagecompare`),
+        filters: { 'ImageCompare Session': ['imagecompare'] }
+      });
+      if (!destUri) return;
+
+      const text = Buffer.from(await vscode.workspace.fs.readFile(state.sessionFileUri)).toString('utf8');
+      const spec = parseSessionFile(text, path.dirname(state.sessionFileUri.fsPath));
+      const destDir = path.dirname(destUri.fsPath);
+      const body = serializeSessionFile(spec.paths, destDir, spec.labels, spec.colors);
+      await vscode.workspace.fs.writeFile(destUri, Buffer.from(body, 'utf8'));
+
+      // Sidecar votes ride along; folder-anchored results.txt stays put (docs/session-files.md: single-results-target).
+      const target = this.getResultsTarget(state);
+      if (target && target.filename !== RESULTS_FILENAME) {
+        const srcResults = vscode.Uri.joinPath(target.baseUri, target.filename);
+        const newStem = path.basename(destUri.fsPath).replace(/\.imagecompare$/i, '');
+        try {
+          const bytes = await vscode.workspace.fs.readFile(srcResults);
+          await vscode.workspace.fs.writeFile(
+            destUri.with({ path: `${destUri.path.substring(0, destUri.path.lastIndexOf('/'))}/${newStem}.results.txt` }),
+            bytes
+          );
+        } catch {
+          // No sidecar yet — nothing to carry.
+        }
+      }
+
+      const choice = await vscode.window.showInformationMessage(`Session saved: ${destUri.fsPath}`, 'Reveal in Explorer');
+      if (choice === 'Reveal in Explorer') {
+        await vscode.commands.executeCommand('revealInExplorer', destUri);
+      }
+    } catch (e: any) {
+      vscode.window.showErrorMessage(`Could not save the session: ${e?.message ?? e}`);
+    }
+  }
+
+  /** Default save location: base dir (mode 1), common parent (mode 2), else the first image's directory. */
+  private suggestSessionSaveDir(state: PanelState): vscode.Uri {
+    if (state.baseUri) return state.baseUri;
+    if (state.modalityDirs.size > 0) {
+      const uris = Array.from(state.modalityDirs.values());
+      const paths = uris.map(u => u.path);
+      const firstParent = paths[0].substring(0, paths[0].lastIndexOf('/'));
+      if (paths.every(p => p.startsWith(firstParent + '/'))) {
+        return vscode.Uri.file(firstParent).with({ scheme: uris[0].scheme });
+      }
+      return uris[0].with({ path: firstParent });
+    }
+    const firstImage = state.scanResult.tuples[0]?.images[0]?.uri;
+    if (firstImage) return firstImage.with({ path: firstImage.path.substring(0, firstImage.path.lastIndexOf('/')) });
+    return state.sessionFileUri!.with({ path: state.sessionFileUri!.path.substring(0, state.sessionFileUri!.path.lastIndexOf('/')) });
+  }
+
   /**
    * Persist current winners; deletes the file when no winners remain.
    */
@@ -1198,6 +1284,42 @@ ${lead}
     }
   }
 
+  /** Multi-MB payloads landing mid-scrub caused the trace's long tasks; the current tuple's are never held (docs/loading-architecture.md: held-payloads-always-flush). */
+  private postImage(state: PanelState, msg: Extract<ExtensionMessage, { type: 'image' }>): void {
+    const tight = normalizeImageBytes(msg.bytes);
+    if (tight !== msg.bytes) msg = { ...msg, bytes: tight };
+    const bursting = Date.now() - state.lastTupleSwitchAt < 150;
+    if (bursting && msg.tupleIndex !== state.currentTupleIndex) {
+      state.heldImagePosts.set(`${msg.tupleIndex}-${msg.modalityIndex}`, msg);
+      // Cap the parked payloads; a dropped one stays uncached in the webview and is simply re-requested on visit.
+      if (state.heldImagePosts.size > 48) {
+        const oldest = state.heldImagePosts.keys().next().value;
+        if (oldest !== undefined) state.heldImagePosts.delete(oldest);
+      }
+      this.scheduleBurstFlush(state);
+      return;
+    }
+    state.panel.webview.postMessage(msg);
+  }
+
+  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; only dispose discards held payloads (docs/loading-architecture.md: held-payloads-always-flush). */
+  private scheduleBurstFlush(state: PanelState, delayMs = 180): void {
+    if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
+    state.burstFlushTimer = setTimeout(() => {
+      state.burstFlushTimer = undefined;
+      if (state.disposed) return;
+      if (Date.now() - state.lastTupleSwitchAt < 150) {
+        this.scheduleBurstFlush(state);
+        return;
+      }
+      const first = state.heldImagePosts.entries().next();
+      if (first.done) return;
+      state.heldImagePosts.delete(first.value[0]);
+      state.panel.webview.postMessage(first.value[1]);
+      if (state.heldImagePosts.size > 0) this.scheduleBurstFlush(state, 32);
+    }, delayMs);
+  }
+
   /**
    * Send a full image to the webview. Replies exactly once (`image` or `imageError`) unless the
    * panel is gone or another file now occupies the enqueued slot — a silent drop is a stuck spinner
@@ -1220,15 +1342,15 @@ ${lead}
     if (state.loadedImages.has(cacheKey)) {
       const cached = state.loadedImages.get(cacheKey)!;
       if (state.disposed) return;
-      const msg: ExtensionMessage = {
+      this.postImage(state, {
         type: 'image',
         tupleIndex,
         modalityIndex,
-        dataUrl: cached.dataUrl,
+        bytes: cached.bytes,
+        mime: cached.mime,
         width: cached.width,
         height: cached.height
-      };
-      state.panel.webview.postMessage(msg);
+      });
       return;
     }
 
@@ -1250,28 +1372,28 @@ ${lead}
     }
 
     try {
-      const { dataUrl, width, height } = await this.pool.submit(
+      const { bytes, mime, width, height } = await this.pool.submit(
         () => this.thumbnailService.loadFullImage(imageFile.uri),
         { priority, key: state.poolKey }
       );
       // Guards the cache write only — never the reply below.
       if (this.slotMatchesUri(state, tupleIndex, modalityIndex, imageFile.uri)) {
-        state.loadedImages.set(cacheKey, { dataUrl, width, height });
+        state.loadedImages.set(cacheKey, { bytes, mime, width, height });
       }
 
       /* Not gated on currentTupleIndex — the request is authoritative — but addressed at delivery, since a splice would otherwise file these pixels under a neighbour's name (docs/loading-architecture.md: reply-exactly-once). */
       const replySlot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
       if (state.disposed) return;
       if (replySlot && replySlot.modalityIndex >= 0) {
-        const msg: ExtensionMessage = {
+        this.postImage(state, {
           type: 'image',
           tupleIndex: replySlot.tupleIndex,
           modalityIndex: asOriginal(replySlot.modalityIndex),
-          dataUrl,
+          bytes,
+          mime,
           width,
           height
-        };
-        state.panel.webview.postMessage(msg);
+        });
         return;
       }
       // The file left the view mid-load. The waiting slot still needs a terminal reply or it spins forever.
@@ -1352,20 +1474,19 @@ ${lead}
 
     try {
       // Keyed by wave, so navigating elsewhere cancels the whole wave.
-      const { dataUrl, width, height } = await this.pool.submit(
+      const { bytes, mime, width, height } = await this.pool.submit(
         () => this.thumbnailService.loadFullImage(imageFile.uri),
         { priority: Priority.PREFETCH, key: waveKey }
       );
       if (!this.slotMatchesUri(state, tupleIndex, modalityIndex, imageFile.uri)) return;
-      state.loadedImages.set(cacheKey, { dataUrl, width, height });
+      state.loadedImages.set(cacheKey, { bytes, mime, width, height });
 
       // Only push if still nearby: multi-MB images for tuples the user has left delay the one they want.
       const config = vscode.workspace.getConfiguration('imageCompare');
       const prefetchCount = config.get<number>('prefetchCount', 3);
       const stillNearby = Math.abs(tupleIndex - state.currentTupleIndex) <= prefetchCount;
       if (!state.disposed && state.visible && stillNearby) {
-        const msg: ExtensionMessage = { type: 'image', tupleIndex, modalityIndex: asOriginal(modalityIndex), dataUrl, width, height };
-        state.panel.webview.postMessage(msg);
+        this.postImage(state, { type: 'image', tupleIndex, modalityIndex: asOriginal(modalityIndex), bytes, mime, width, height });
       }
     } catch {
       // Prefetch is best-effort (including TaskCancelled when a wave is superseded).
@@ -1432,7 +1553,7 @@ ${lead}
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: blob:; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
   <title>ImageCompare</title>
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1682,10 +1803,13 @@ body {
   white-space: nowrap;
   min-width: 0;
 }
+/* Direct #info child so flex reserves its width — nested under #status it got squeezed under the help button. */
 #status-info {
   flex-shrink: 0;
   white-space: nowrap;
+  color: var(--vscode-descriptionForeground, #888);
 }
+#status-info:empty { display: none; }
 
 .modality-btn {
   display: inline-block;
@@ -1852,13 +1976,16 @@ body {
   background: var(--vscode-scrollbarSlider-activeBackground, #444);
 }
 
+/* 1px top+bottom on adjacent rows = 2px vertical space, matching the 2px column gap — an equidistant wall, no separator lines. */
+/* content-visibility skips layout/paint for offscreen rows; the intrinsic height must equal the real row height (tile + 2px padding) or centering math drifts. */
 .carousel-row {
   display: flex;
   gap: 2px;
-  padding: 4px 6px;
+  padding: 1px 6px;
   cursor: pointer;
-  border-bottom: 1px solid var(--vscode-panel-border, #222);
   transition: background 0.15s;
+  content-visibility: auto;
+  contain-intrinsic-height: calc(var(--thumb-size, 50px) + 2px);
 }
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
@@ -1897,8 +2024,16 @@ body {
 }
 
 /* Winner voting indicators */
+/* Sized by one CSS variable so a resize drag writes one style, not one per tile. */
 .carousel-thumb-container {
   position: relative;
+  width: var(--thumb-size, 50px);
+  height: var(--thumb-size, 50px);
+  flex-shrink: 0;
+}
+.carousel-thumb-container .carousel-thumb {
+  width: 100%;
+  height: 100%;
 }
 .winner-circle {
   position: absolute;
@@ -2030,7 +2165,8 @@ body {
       <button id="reorder-right" class="reorder-btn" title="Move modality right (])">\u2192</button>
     </div>
     <div id="modality-selector"></div>
-    <span id="status"><span id="status-name">Loading...</span><span id="status-info"></span></span>
+    <span id="status"><span id="status-name">Loading...</span></span>
+    <span id="status-info"></span>
     <button id="help-btn" title="Keyboard shortcuts">?</button>
   </div>
   <div id="pill-tooltip"></div>
@@ -2040,7 +2176,7 @@ body {
     <div class="modal-content">
       <h3>Keyboard Shortcuts</h3>
       <table>
-        <tr><td>\u2190 \u2192</td><td>Switch modality</td></tr>
+        <tr><td>\u2190 \u2192</td><td>Switch modality (skips hidden)</td></tr>
         <tr><td>\u2191 \u2193</td><td>Previous/next tuple</td></tr>
         <tr><td>Space</td><td>Flip to previous modality (hold)</td></tr>
         <tr><td>1-9</td><td>Jump to modality N</td></tr>
@@ -2048,9 +2184,12 @@ body {
         <tr><td>Enter</td><td>Toggle winner for current modality</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
+        <tr><td>Right-click</td><td>Copy path / reveal / copy image; hide or show a modality (on its pill)</td></tr>
+        <tr><td>Ctrl+C</td><td>Copy current image (when no text is selected)</td></tr>
+        <tr><td>Ctrl+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
-        <tr><td>Del</td><td>Delete current tuple files</td></tr>
-        <tr><td>Esc</td><td>Reset zoom / cancel crop</td></tr>
+        <tr><td>Del / Backspace</td><td>Delete current tuple files (permanent!)</td></tr>
+        <tr><td>Esc</td><td>Reset zoom / cancel crop / close this help</td></tr>
       </table>
       <div style="margin-top: 20px;">
         <button class="btn btn-primary" id="close-help-btn">Close</button>

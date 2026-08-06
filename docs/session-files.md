@@ -51,7 +51,7 @@ A single directory of only files is rejected: it has no second axis. Each file w
 ## Format
 
 ```json
-{ "paths": ["/abs/dir", "../rel/dir"], "labels": ["a", "b"], "colors": ["#0f0", "#ff6600"] }
+{ "version": 1, "paths": ["/abs/dir", "../rel/dir"], "labels": ["a", "b"], "colors": ["#0f0", "#ff6600"] }
 ```
 
 `parseSessionFile(text, baseDir)` in `sessionFile.ts` is pure (no `vscode` import) so it is
@@ -59,6 +59,10 @@ unit-testable standalone — `src/test/sessionFile.test.ts` runs under plain `ts
 way; that is why `applyLabels()` is structurally typed over `{ toString() }` instead of taking
 `vscode.Uri`.
 
+- `version` — optional, positive integer; absent means 1 (every pre-versioning file). The parser
+  rejects a version above `CURRENT_SESSION_VERSION` outright — an old build must fail loudly on a
+  future file, not open it minus the fields it doesn't know. Bump only for semantic changes; a new
+  optional field costs nothing (unknown keys are ignored).
 - `paths` — required, non-empty array of non-empty strings, **no two resolving to the same
   location**. **Relative paths resolve against the
   session file's directory** (`path.resolve(baseDir, p)`), so a session file can be committed
@@ -158,6 +162,20 @@ open in a custom-editor tab**. Two reasons, and both are needed:
 
 Only `globalStorage/sessions/` is pruned. User-authored session files elsewhere are never touched.
 
+### Save Session As
+
+The escape hatch from the pruned cache: the title-bar save icon (or Ctrl/Cmd+S, intercepted in the
+webview — native save no-ops on a readonly custom editor) copies the session to a user-chosen
+location. `saveSessionAs()` seeds the dialog with the mode's natural home — base dir (mode 1),
+common parent (mode 2), the first image's directory otherwise — and writes via
+`serializeSessionFile()`, which stamps `version` and relativizes paths **only when every compared
+root lies inside the destination directory**; a single escapee keeps all paths absolute, because a
+`..` in a session file breaks the moment the file moves. If votes live in a `<stem>.results.txt`
+sidecar (the no-canonical-place case), the sidecar is copied alongside under the new stem;
+folder-anchored `results.txt` needs no copy. It is a *copy*, not a move: the open panel stays on
+its original file, and votes cast after the save land at the original's results target until the
+user saves again.
+
 ## Tab titles
 
 VSCode owns custom-editor tab titles (`filename-is-tab-title`), so the *filename* is the UI — which is
@@ -229,6 +247,12 @@ value the pill stamps.
   is a function of the paths on disk only.
 - **`relative-to-session-dir`** — relative paths resolve against the session file's directory, never
   the workspace root or cwd.
+- **`version-gate-forward`** — a session file declaring a version above `CURRENT_SESSION_VERSION` is
+  rejected with an "update the extension" error, never half-opened with unknown fields dropped; the
+  version bumps only on semantic changes, since unknown keys are ignored anyway.
+- **`saveas-relative-only-inside`** — Save Session As relativizes paths only when every compared
+  root lies inside the destination directory; one path outside keeps all of them absolute. A saved
+  file containing `..` would silently re-target if the user later moves it.
 - **`unique-modality-names`** — no two modalities ever share a name or a URI. `paths` rejects a
   repeated location (two modalities on one URI would make every URI-keyed lookup resolve both to the
   first), and `disambiguateDirectoryNames` suffixes any tail collision its widening loop cannot

@@ -159,6 +159,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(disposable);
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('imageCompare.saveSessionAs', () => provider!.saveSessionAsActive())
+  );
+
   // webview/context menu items (package.json contributes.menus); ctx is the element's data-vscode-context.
   const menuProvider = provider;
   for (const [cmd, action] of [

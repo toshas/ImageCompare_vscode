@@ -16,9 +16,10 @@ npx ts-node src/test/workPool.test.ts
 npx ts-node src/test/ppmxParser.test.ts
 npx ts-node src/test/modalityVisibility.test.ts
 npx ts-node src/test/thumbPack.test.ts
+npx ts-node src/test/wireFormat.test.ts
 ```
 
-`.github/workflows/publish.yml` runs all eight in its `test` job, which gates the whole build matrix —
+`.github/workflows/publish.yml` runs all nine in its `test` job, which gates the whole build matrix —
 a red test blocks publishing to both marketplaces.
 
 ## The suites
@@ -33,6 +34,7 @@ a red test blocks publishing to both marketplaces.
 | `ppmxParser` | real source | All four magic x flags combinations, size-based flags detection, normalization, malformed input |
 | `modalityVisibility` | real source | Hidden-pill keyboard cycling: skip, run-skip, non-wrapping edges, all-hidden stay |
 | `thumbPack` | real source | Packfile round-trip, uuid pairing rejection, truncation/overflow/duplicate rejection |
+| `wireFormat` | real source | Image payload normalization: Buffer→plain Uint8Array (species-safe), offset views copied tight, structuredClone survival |
 
 ## The trap: one suite still tests a copy
 
@@ -47,7 +49,7 @@ crop-breaking bug shipped. The real `pngInjectText` called `zlib.crc32` (Node 20
 `engines.vscode` allowed Node 18, so every crop threw on older VSCode — while the suite stayed green,
 because its copy had its own `zlib.crc32`. The fix was structural: the logic moved to `pngText.ts`, a
 pure `vscode`-free module the test now imports. **That is the pattern** — `watcherLogic.ts`,
-`workPool.ts`, `sessionFile.ts`, `ppmxParser.ts`, `pngText.ts`, `thumbPack.ts` and
+`workPool.ts`, `sessionFile.ts`, `ppmxParser.ts`, `pngText.ts`, `thumbPack.ts`, `wireFormat.ts` and
 `webview/modalityVisibility.ts` all exist because extracting a decision into a pure module is what
 makes it testable at all. Prefer that over a copy.
 
@@ -94,6 +96,11 @@ Failures here are invisible to CI, so they are worth walking before a release:
    appear without reopening. The base glob is non-recursive, so no event fires for the images inside
    it — the directory entry itself is the only event, and where neither watcher reports it the
    existence sweep is what picks it up, so allow a sweep interval before calling it a failure.
+6. Carousel feel with a many-modality session (10+): it opens with every column visible, the resize
+   handle drags smoothly up to all-columns-at-50px with tiles scaling continuously (no snapping or
+   clipped columns), the current row stays centered during the drag (first row pinned top, last
+   pinned bottom), arrow-key stepping glides rather than jumping, and a wheel or scrollbar drag
+   immediately wins over the centering animation.
 
 ## Debug logging
 

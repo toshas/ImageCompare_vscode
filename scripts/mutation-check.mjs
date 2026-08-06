@@ -244,6 +244,30 @@ const mutations = [
     find: 'const paths = rawPaths.map((p) => path.resolve(baseDir, p));',
     replace: 'const paths = rawPaths.map((p) => path.resolve(p));',
     killedBy: 'Test 2 (relative paths resolve against the session file dir, not cwd)'
+  },
+  {
+    name: 'sessionFile: future-version gate removed (v2 file half-opened)',
+    file: 'src/sessionFile.ts',
+    suite: 'src/test/sessionFile.test.ts',
+    find: 'if ((version as number) > CURRENT_SESSION_VERSION) {',
+    replace: 'if (false) {',
+    killedBy: 'version-gate test (a future version must be rejected, not half-opened)'
+  },
+  {
+    name: 'wireFormat: payload normalization removed (Buffer reaches the wire)',
+    file: 'src/wireFormat.ts',
+    suite: 'src/test/wireFormat.test.ts',
+    find: '  return new Uint8Array(bytes);',
+    replace: '  return bytes;',
+    killedBy: 'Tests 1-2 (Buffer converted; view copied tight)'
+  },
+  {
+    name: 'sessionFile: save-as escape check removed (".." paths written)',
+    file: 'src/sessionFile.ts',
+    suite: 'src/test/sessionFile.test.ts',
+    find: "const escapes = rels.some((r) => r.startsWith('..') || path.isAbsolute(r));",
+    replace: 'const escapes = false;',
+    killedBy: 'serializeSessionFile test (an escaping path must force all-absolute)'
   }
 ];
 

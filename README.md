@@ -63,6 +63,11 @@ EOF
 code session.imagecompare
 ```
 
+You don't have to write one by hand: with a comparison open, press `Ctrl+S` (or click the save icon
+in the editor title bar) to save a copy of the session file wherever you like — paths are stored
+relative when the file lands in the compared folders' parent, so the saved file survives moving the
+data with it. Any voting results sidecar is copied along.
+
 Relative paths are resolved against the file's location. The optional `labels` array (same length as `paths`, unique) overrides modality names when comparing multiple folders — useful when folders share a basename (e.g. epoch dirs from different training runs). The optional `colors` array (same length as `paths`, hex `#rgb`/`#rrggbb`) overrides the pill colors, likewise only when comparing multiple folders. Multiple folders that match into a single row are still a folder comparison: `labels`, `colors`, voting and `results.txt` all apply — only the tuple carousel is hidden, because there is just one row. Reopening the file restores the comparison.
 
 Right-click comparisons work the same way under the hood: the selection is saved as a session file in extension storage, so comparisons survive window reloads and appear in **File > Open Recent**. Auto-generated session files are cleaned up after 30 days (files you write yourself are never touched).
@@ -87,6 +92,7 @@ Tip: tab titles show the full filename; add this setting to display `session` in
 | `Drag` | Pan image |
 | Right-click | Menu: **Copy Path** / **Reveal in Explorer** (on the image or a modality pill); **Copy Image** (on the image only); **Hide/Show Modality** (on a pill only) |
 | `Ctrl+C` | Copy the current image to the clipboard (as PNG), when no text is selected |
+| `Ctrl+S` | Save Session As — save a copy of the `.imagecompare` file (also via the title-bar save icon) |
 | `C` | Toggle crop mode |
 | `Del` / `Backspace` | Delete current tuple files (permanent — see warning below) |
 | `Esc` | Reset zoom / cancel crop / close the help overlay |

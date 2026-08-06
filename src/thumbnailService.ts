@@ -199,7 +199,7 @@ export class ThumbnailService {
   // Full image loading
   // ---------------------------------------------------------------------------
 
-  async loadFullImage(uri: vscode.Uri): Promise<{ dataUrl: string; width: number; height: number }> {
+  async loadFullImage(uri: vscode.Uri): Promise<{ bytes: Uint8Array; mime: string; width: number; height: number }> {
     const fileData = await vscode.workspace.fs.readFile(uri);
     const buffer = Buffer.from(fileData);
     const ext = path.extname(uri.path).toLowerCase();
@@ -212,7 +212,7 @@ export class ThumbnailService {
     const mime = passthroughMime[ext];
     if (mime) {
       // No backend call at all, not even metadata(); width/height 0 means "webview sizes from naturalWidth/Height".
-      return { dataUrl: `data:${mime};base64,${buffer.toString('base64')}`, width: 0, height: 0 };
+      return { bytes: buffer, mime, width: 0, height: 0 };
     }
 
     const sharp = getSharp();
@@ -223,7 +223,7 @@ export class ThumbnailService {
       const width = metadata.width || 0;
       const height = metadata.height || 0;
       const imageBuffer = await inst.png().toBuffer();
-      return { dataUrl: `data:image/png;base64,${imageBuffer.toString('base64')}`, width, height };
+      return { bytes: imageBuffer, mime: 'image/png', width, height };
     }
 
     const Jimp = this.getJimp();
@@ -232,11 +232,7 @@ export class ThumbnailService {
     }
     const image = await this.createJimpImage(Jimp, buffer, ext);
     const pngBuffer: Buffer = await image.getBuffer('image/png');
-    return {
-      dataUrl: `data:image/png;base64,${pngBuffer.toString('base64')}`,
-      width: image.width,
-      height: image.height
-    };
+    return { bytes: pngBuffer, mime: 'image/png', width: image.width, height: image.height };
   }
 
   /** Jimp fallback for slide images: cap at 2560px longest side (no enlargement), JPEG quality 85, mirroring the provider's Sharp branch; null when Jimp is unavailable (docs/crop-and-pptx.md: deck-images-bounded). */

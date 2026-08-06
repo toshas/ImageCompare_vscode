@@ -134,13 +134,16 @@ bytes on the pool, for nothing.
 
 ## Why the sync/base64 work matters
 
-Every backend result crosses into the webview as a base64 data URL. `toString('base64')` is
-synchronous and unyieldable on the extension-host thread, and its cost scales with payload size — so
-the size of what a backend emits is an extension-host responsiveness question, not just a memory one.
-This is why `loadFullImage` passes browser-decodable formats (jpg/png/gif/webp/bmp) through as
-original bytes and only decodes TIFF/PPMX: re-encoding a 12MP JPEG to PNG both burned Sharp pool time
-and inflated the string being synchronously encoded ~10x. See `docs/loading-architecture.md` for the
-scheduling side of this.
+Full images cross into the webview as binary (`loadFullImage` returns `Uint8Array`; the webview
+blob-URLs it and revokes after decode) — base64 delivery cost the ×1.33 inflation plus GC pauses
+that showed up as 10-22ms main-thread tasks in traces. Base64 remains on two paths: thumbnails
+(small, data-URL'd per delivery) and PPTX slide images (pptxgenjs takes base64). Where it remains,
+`toString('base64')` is synchronous and unyieldable on the extension-host thread, and its cost
+scales with payload size — so the size of what a backend emits is a responsiveness question, not
+just a memory one. This is also why `loadFullImage` passes browser-decodable formats
+(jpg/png/gif/webp/bmp) through as original bytes and only decodes TIFF/PPMX: re-encoding a 12MP
+JPEG to PNG both burned Sharp pool time and inflated the payload ~10x. See
+`docs/loading-architecture.md` for the scheduling side of this.
 
 Thumbnails are cached on disk as raw `.jpg`, one file per entry; the memory cache holds raw JPEG
 bytes and every delivery base64-encodes on the way out. That per-delivery encode is cheap only

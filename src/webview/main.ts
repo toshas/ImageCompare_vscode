@@ -217,6 +217,10 @@ function setupEventListeners() {
   carouselEl.addEventListener('wheel', handleCarouselWheel, { passive: false });
   let carouselScrollTimer: ReturnType<typeof setTimeout> | null = null;
   carouselEl.addEventListener('scroll', () => {
+    // A scroll that isn't the animation's own write is the user on the scrollbar thumb — yield to them.
+    if (carouselScrollAnim && Math.abs(carouselEl.scrollTop - carouselScrollExpected) > 1) {
+      cancelCarouselScroll();
+    }
     carouselEl.classList.add('scrolling');
     if (carouselScrollTimer) clearTimeout(carouselScrollTimer);
     carouselScrollTimer = setTimeout(() => carouselEl.classList.remove('scrolling'), 800);
@@ -497,6 +501,9 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
 
   isMultiTupleMode = tuples.length > 1;
 
+  // Open wide enough for every modality column at 30px, within a 40%-of-window budget.
+  CAROUSEL_WIDTH = Math.max(220, Math.min(carouselFitWidth(30), Math.floor(window.innerWidth * 0.4)));
+
   // Calculate carousel thumb size
   updateCarouselThumbSize();
 
@@ -504,6 +511,9 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   if (isMultiTupleMode) {
     buildCarousel();
   }
+
+  // Pills are created here once; loadTuple only updates them (rebuild per keystroke stalled the carousel).
+  buildModalitySelector();
 
   // Request first tuple's images
   loadTuple(asTuple(0));
@@ -555,9 +565,20 @@ function handleThumbnailError(message: { tupleIndex: TupleIndex; modalityIndex: 
 // Slots re-requested after a decode failure; bounds the retry to one — see docs/loading-architecture.md.
 const decodeRetried = new Set<string>();
 
-function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; dataUrl: string; width: number; height: number }) {
+let payloadShapeLogged = false;
+
+function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; bytes: Uint8Array; mime: string; width: number; height: number }) {
+  // One-time shape log: if the serializer ever mangles the binary payload, this is the first place it shows.
+  if (!payloadShapeLogged) {
+    payloadShapeLogged = true;
+    console.log(`[IC] image payload arrives as ${(message.bytes as any)?.constructor?.name} byteLength=${message.bytes?.byteLength} mime=${message.mime}`);
+  }
+  // Binary payload → Blob URL: base64 data-URL strings cost ×1.33 on the wire and GC pauses at scale.
+  const blobUrl = URL.createObjectURL(new Blob([message.bytes as Uint8Array<ArrayBuffer>], { type: message.mime }));
   const img = new Image();
   img.onload = () => {
+    // The decoded Image element holds the pixels; the URL is only needed until then.
+    URL.revokeObjectURL(blobUrl);
     // Deferred callback: the tuple may have been deleted while this decoded.
     const tuple = tuples[message.tupleIndex];
     const imageInfo = tuple && tuple.images[message.modalityIndex];
@@ -597,6 +618,8 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; d
   };
   // Transient decode failure: re-request once rather than marking the slot missing (docs/loading-architecture.md: decode-retry-once).
   img.onerror = () => {
+    URL.revokeObjectURL(blobUrl);
+    console.error(`[IC] image decode failed ${message.tupleIndex}-${message.modalityIndex}: bytes=${(message.bytes as any)?.constructor?.name} byteLength=${message.bytes?.byteLength} mime=${message.mime}`);
     const key = `${message.tupleIndex}-${message.modalityIndex}`;
     if (decodeRetried.has(key)) {
       handleImageError({
@@ -619,7 +642,7 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; d
       forceReload: true
     });
   };
-  img.src = message.dataUrl;
+  img.src = blobUrl;
 }
 
 function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: number; error: string }) {
@@ -1106,6 +1129,16 @@ function evictDistantWebviewTuples() {
   }
 }
 
+/** Coalesce canvas draws to one per frame; during fast stepping later tuples supersede queued draws instead of stacking. */
+let renderRaf = 0;
+function scheduleRender() {
+  if (renderRaf) return;
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = 0;
+    render();
+  });
+}
+
 function loadTuple(index: TupleIndex) {
   if (index < 0 || index >= tuples.length) return;
 
@@ -1126,12 +1159,13 @@ function loadTuple(index: TupleIndex) {
     loadDebounceTimer = null;
   }
 
-  buildModalitySelector();
+  // Update, not rebuild: recreating 16 pill buttons per keystroke stalled the carousel animation.
+  updateModalitySelector();
   updateCarouselSelection();
 
-  // Cached renders instantly; otherwise preview + spinner.
+  // Cached renders on the next frame; otherwise preview + spinner.
   if (images[currentModalityIndex]) {
-    render();
+    scheduleRender();
   } else {
     showPreviewOrLoading(index, currentModalityIndex);
   }
@@ -1239,12 +1273,25 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
   imageLoaderEl.classList.add('active');
 }
 
-function updateCarouselThumbSize() {
+/** Carousel width that fits every modality column at perTile px (6px row padding each side, 2px gaps). */
+function carouselFitWidth(perTile: number): number {
+  return 12 + modalities.length * perTile + (modalities.length - 1) * 2;
+}
+
+function updateCarouselThumbSize(snapToDevicePixels = true) {
   const numModalities = modalities.length;
   // Row padding: 6px left + 6px right = 12px; gaps: 2px each
   const availableWidth = CAROUSEL_WIDTH - 12 - (numModalities - 1) * 2;
-  CAROUSEL_THUMB_SIZE = Math.floor(availableWidth / numModalities);
-  CAROUSEL_THUMB_SIZE = Math.max(30, CAROUSEL_THUMB_SIZE);
+  // Fractional, not floored: integer steps made every tile snap visibly during a resize drag.
+  CAROUSEL_THUMB_SIZE = availableWidth / numModalities;
+  // Tiles scale down to fit the width — a floor here reintroduces clipped columns.
+  CAROUSEL_THUMB_SIZE = Math.max(12, CAROUSEL_THUMB_SIZE);
+  // At rest, land on the device-pixel grid: fractional row heights make edges shimmer while the wall scrolls.
+  if (snapToDevicePixels) {
+    const dpr = window.devicePixelRatio || 1;
+    CAROUSEL_THUMB_SIZE = Math.max(12, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
+  }
+  carouselEl.style.setProperty('--thumb-size', CAROUSEL_THUMB_SIZE + 'px');
 }
 
 function buildCarousel() {
@@ -1274,18 +1321,12 @@ function buildCarousel() {
     for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
       const originalModIdx = modalityOrder[displayIdx];
 
-      // Create a container for thumbnail + winner circle
+      // Create a container for thumbnail + winner circle; size comes from the --thumb-size CSS variable.
       const thumbContainer = document.createElement('div');
       thumbContainer.className = 'carousel-thumb-container';
-      thumbContainer.style.position = 'relative';
-      thumbContainer.style.width = CAROUSEL_THUMB_SIZE + 'px';
-      thumbContainer.style.height = CAROUSEL_THUMB_SIZE + 'px';
-      thumbContainer.style.flexShrink = '0';
 
       const thumb = document.createElement('img');
       thumb.className = 'carousel-thumb placeholder';
-      thumb.style.width = CAROUSEL_THUMB_SIZE + 'px';
-      thumb.style.height = CAROUSEL_THUMB_SIZE + 'px';
       thumb.dataset.tuple = String(tupleIdx);
       thumb.dataset.modality = String(originalModIdx);
       thumb.dataset.displayIndex = String(displayIdx);
@@ -1350,31 +1391,21 @@ function updateCarouselSelection() {
   if (!isMultiTupleMode) return;
 
   const rows = carouselEl.querySelectorAll('.carousel-row');
-  rows.forEach((row, rowIdx) => {
-    if (rowIdx === currentTupleIndex) {
-      row.classList.add('current');
-    } else {
-      row.classList.remove('current');
-    }
+  if (rows.length === 0) return;
 
-    const thumbContainers = row.querySelectorAll('.carousel-thumb-container');
-    thumbContainers.forEach((container, thumbIdx) => {
-      const thumb = container.querySelector('.carousel-thumb');
-      if (!thumb) return;
+  // Touch only the rows that change — a full sweep is ~100k classList ops per keystroke and stalls the scroll animation.
+  carouselEl.querySelectorAll('.carousel-row.current').forEach(row => row.classList.remove('current'));
+  carouselEl.querySelectorAll('.carousel-thumb.active').forEach(t => t.classList.remove('active'));
+  carouselEl.querySelectorAll('.carousel-thumb.selected').forEach(t => t.classList.remove('selected'));
 
-      if (rowIdx === currentTupleIndex) {
-        thumb.classList.add('active');
-      } else {
-        thumb.classList.remove('active');
-      }
-
-      if (rowIdx === currentTupleIndex && thumbIdx === currentModalityIndex) {
-        thumb.classList.add('selected');
-      } else {
-        thumb.classList.remove('selected');
-      }
+  const row = rows[currentTupleIndex] as HTMLElement | undefined;
+  if (row) {
+    row.classList.add('current');
+    row.querySelectorAll('.carousel-thumb').forEach((thumb, thumbIdx) => {
+      thumb.classList.add('active');
+      if (thumbIdx === currentModalityIndex) thumb.classList.add('selected');
     });
-  });
+  }
 
   scrollCarouselToCurrentTuple();
 }
@@ -1425,6 +1456,40 @@ function updateCarouselWinners() {
   });
 }
 
+let carouselScrollAnim = 0;
+let carouselScrollTarget = 0;
+let carouselScrollExpected = -1;
+
+/** Exponential approach toward the target; retargeting mid-flight bends the motion instead of restarting it, unlike native smooth scrollTo. */
+function animateCarouselScroll(target: number) {
+  carouselScrollTarget = Math.max(0, Math.min(target, carouselEl.scrollHeight - carouselEl.clientHeight));
+  if (carouselScrollAnim) return;
+  let last = performance.now();
+  const step = (now: number) => {
+    const dt = Math.min((now - last) / 1000, 0.1);
+    last = now;
+    const diff = carouselScrollTarget - carouselEl.scrollTop;
+    if (Math.abs(diff) < 0.5) {
+      carouselEl.scrollTop = carouselScrollTarget;
+      carouselScrollAnim = 0;
+      return;
+    }
+    carouselEl.scrollTop += diff * (1 - Math.exp(-dt * 12));
+    // Read back post-clamp so the scroll listener can tell our write from a scrollbar drag.
+    carouselScrollExpected = carouselEl.scrollTop;
+    carouselScrollAnim = requestAnimationFrame(step);
+  };
+  carouselScrollAnim = requestAnimationFrame(step);
+}
+
+/** Manual scrolls and resize drags own scrollTop; a live animation would fight them. */
+function cancelCarouselScroll() {
+  if (carouselScrollAnim) {
+    cancelAnimationFrame(carouselScrollAnim);
+    carouselScrollAnim = 0;
+  }
+}
+
 function scrollCarouselToCurrentTuple() {
   if (!isMultiTupleMode) return;
 
@@ -1436,11 +1501,7 @@ function scrollCarouselToCurrentTuple() {
   const rowHeight = currentRow.offsetHeight;
   const rowTop = currentRow.offsetTop;
 
-  const targetScroll = rowTop - (carouselHeight / 2) + (rowHeight / 2);
-  carouselEl.scrollTo({
-    top: Math.max(0, targetScroll),
-    behavior: 'smooth'
-  });
+  animateCarouselScroll(rowTop - (carouselHeight / 2) + (rowHeight / 2));
 }
 
 function goToTupleAndModality(tupleIdx: TupleIndex, modalityIdx: DisplayModalityIndex) {
@@ -1765,6 +1826,13 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
 
+  // Native save no-ops on the readonly custom editor, so the webview owns Ctrl/Cmd+S.
+  if (e.code === 'KeyS' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    vscode.postMessage({ type: 'saveSessionAs' });
+    return;
+  }
+
   // Crop mode intercepts keys
   if (crop.cropMode && crop.handleCropKeyDown(e)) return;
 
@@ -1982,6 +2050,7 @@ function handleCopyEvent(e: ClipboardEvent) {
 function handleCarouselWheel(e: WheelEvent) {
   e.preventDefault();
   e.stopPropagation();
+  cancelCarouselScroll();
   carouselEl.scrollTop += e.deltaY;
 }
 
@@ -2000,30 +2069,33 @@ function setupCarouselResize() {
     document.body.style.cursor = 'ew-resize';
   });
 
+  let resizeRaf = 0;
   document.addEventListener('mousemove', (e) => {
     if (!isResizing) return;
 
     const delta = e.clientX - resizeStartX;
-    const newWidth = Math.max(100, Math.min(500, resizeStartWidth + delta));
-    CAROUSEL_WIDTH = newWidth;
-    carouselEl.style.width = CAROUSEL_WIDTH + 'px';
-    carouselResizeEl.style.left = (CAROUSEL_WIDTH - 4) + 'px';
-    viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
+    // Drag up to every column at natural 50px (min 500 preserves old behavior), bounded by 60% of the window.
+    const maxWidth = Math.min(Math.max(500, carouselFitWidth(50)), Math.floor(window.innerWidth * 0.6));
+    CAROUSEL_WIDTH = Math.max(100, Math.min(maxWidth, resizeStartWidth + delta));
 
-    updateCarouselThumbSize();
-
-    const containers = carouselEl.querySelectorAll('.carousel-thumb-container') as NodeListOf<HTMLElement>;
-    containers.forEach(container => {
-      container.style.width = CAROUSEL_THUMB_SIZE + 'px';
-      container.style.height = CAROUSEL_THUMB_SIZE + 'px';
-    });
-    const thumbs = carouselEl.querySelectorAll('.carousel-thumb') as NodeListOf<HTMLElement>;
-    thumbs.forEach(thumb => {
-      thumb.style.width = CAROUSEL_THUMB_SIZE + 'px';
-      thumb.style.height = CAROUSEL_THUMB_SIZE + 'px';
-    });
-
-    render();
+    // One rAF-coalesced write of the width and the shared --thumb-size variable; per-tile styles would jerk.
+    if (!resizeRaf) {
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        cancelCarouselScroll();
+        carouselEl.style.width = CAROUSEL_WIDTH + 'px';
+        carouselResizeEl.style.left = (CAROUSEL_WIDTH - 4) + 'px';
+        viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
+        updateCarouselThumbSize(false);
+        // Row heights just changed: instantly re-center the current row each frame (smooth would lag the drag); the clamp pins a first row to the top and a last row to the bottom.
+        const row = carouselEl.querySelectorAll('.carousel-row')[currentTupleIndex] as HTMLElement | undefined;
+        if (row) {
+          const target = row.offsetTop - (carouselEl.clientHeight - row.offsetHeight) / 2;
+          carouselEl.scrollTop = Math.max(0, Math.min(target, carouselEl.scrollHeight - carouselEl.clientHeight));
+        }
+        render();
+      });
+    }
   });
 
   document.addEventListener('mouseup', () => {
@@ -2031,6 +2103,14 @@ function setupCarouselResize() {
       isResizing = false;
       carouselResizeEl.classList.remove('dragging');
       document.body.style.cursor = '';
+      // Drag over: snap tiles to the device-pixel grid and re-anchor the current row once.
+      updateCarouselThumbSize();
+      const row = carouselEl.querySelectorAll('.carousel-row')[currentTupleIndex] as HTMLElement | undefined;
+      if (row) {
+        const target = row.offsetTop - (carouselEl.clientHeight - row.offsetHeight) / 2;
+        carouselEl.scrollTop = Math.max(0, Math.min(target, carouselEl.scrollHeight - carouselEl.clientHeight));
+      }
+      render();
     }
   });
 }

@@ -62,8 +62,9 @@ a 1-core box; the 16 is deliberate width — see `pool-width-hides-latency` belo
   on a moved slot, since nobody is waiting on it.
   `THUMBNAIL_BULK` is the open-time sweep, ranked below
   it so a small, freshly-invalidated batch can't queue behind thousands of sweep items. Nothing here is
-  scroll-driven: the carousel is built eagerly for every tuple and the only scroll listener is
-  cosmetic. `requestThumbnails` is posted on tuple add (that row) and on modality add/remove (every
+  scroll-driven: the carousel is built eagerly for every tuple, and its one scroll listener only
+  toggles scrollbar styling and yields the centering animation to a manual scroll — it never
+  requests loading work. `requestThumbnails` is posted on tuple add (that row) and on modality add/remove (every
   row) — not on visibility, and not on tuple delete, where the webview re-indexes its own thumbnail
   map instead and the extension re-sends nothing.
 - **FIFO within a priority** — load-bearing: the sweep is submitted in scanline order (tuple-major,
@@ -140,7 +141,9 @@ outrank anything.
   sends the shown modality first, which only breaks ties within `VISIBLE`.
 - `sendImage` replies exactly once (`image`/`imageError`) unless the panel is gone or another file
   now occupies the enqueued slot (see `reply-exactly-once`) — at the file's live slot, or at the
-  enqueued slot when that slot has been vacated — and the
+  enqueued slot when that slot has been vacated. Delivery *timing* is the one liberty taken: while
+  the user is scrubbing tuples, payloads for off-screen tuples wait for a quiet moment
+  (`held-payloads-always-flush` below) — the reply is deferred, never dropped — and the
   post is *not* gated on `currentTupleIndex`: the request is authoritative (the webview only asks for
   what it shows) and the extension mutates its own `currentTupleIndex` on watcher events, so gating
   there stranded the very request the user awaited. A reply for a tuple the user has left is harmless
@@ -327,6 +330,22 @@ Opening a panel is asynchronous, and step order is load-bearing:
   dropped one clears only when something re-enters `loadTuple(currentTupleIndex)` — navigating away
   and back, deleting some *other* tuple, or a modality add/remove — or when a watcher-driven
   `fileRestored` re-requests that slot. Clicking the current carousel row does not.
+- **`held-payloads-always-flush`** — during a scrub burst (last `setCurrentTuple` younger than
+  150ms), `image` payloads for *off-screen* tuples are parked instead of posted — a multi-MB
+  message deserializing on the webview main thread measured 10-22ms, right in the scroll
+  animation's frame budget. Two halves, both load-bearing: the current tuple's payloads are
+  **never** held (holding one is a stuck spinner), and every parked payload is eventually
+  delivered — landing on its tuple flushes it immediately, the burst-end timer re-arms until the
+  scrub quiets and then drains one payload per ~32ms tick (a bulk flush just moved the spike to
+  scrub-end), and only panel dispose discards. The queue cap drops oldest payloads, which is
+  safe only because the webview shows spinners solely for the current tuple and re-requests
+  uncached slots on visit — a drop is a deferred re-read, never a hole.
+- **`image-payload-normalized`** — the bytes handed to `postMessage` are a tight, plain
+  `Uint8Array` (`normalizeImageBytes`, pinned by `wireFormat.test.ts`). A `Buffer` subclass risks
+  the serializer JSON-mangling it into `{type:"Buffer",data:[…]}` — which decodes to nothing and
+  reads as "Image not available" — and note `Uint8Array.prototype.slice` on a Buffer returns
+  another Buffer (species constructor), so a slice is not an escape. An offset view ships its whole
+  backing allocation.
 - **`visible-never-starved`** — the visible image is never starved by thumbnails, prefetch, or
   polling. Every image read/decode goes through the pool — crop and PPTX export included, at
   `EXPORT` — so nothing outranks the visible image, and `VISIBLE` is exempt from the courtesy rule

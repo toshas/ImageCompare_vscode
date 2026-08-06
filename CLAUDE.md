@@ -60,6 +60,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`pngText.ts`** - Pure (no vscode dependency): PNG tEXt chunk reader/writer, CRC-32, and the crop-metadata wire format → `docs/crop-and-pptx.md`
 - **`modalityNames.ts`** - Pure (no vscode dependency): shortest-unique-tail naming of modality columns from directory paths → `docs/session-files.md`
 - **`thumbPack.ts`** - Pure (no vscode dependency): the thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
+- **`wireFormat.ts`** - Pure (no vscode dependency): image payload normalization for extension→webview transfer → `docs/loading-architecture.md`
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
@@ -103,7 +104,7 @@ npm run compile      # One-off build
 
 ## Testing
 
-Eight `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
+Nine `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
 script in `package.json` is the list CI executes, and `docs/testing.md` repeats it only to show the
 per-suite invocation. What each suite pins, what nothing covers, the manual checks worth walking
 before a release, and `imageCompare.debug` logging: `docs/testing.md`.

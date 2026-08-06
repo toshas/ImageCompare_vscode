@@ -6,7 +6,7 @@
  */
 
 import * as path from 'path';
-import { parseSessionFile, applyLabels, suggestSessionFileName } from '../sessionFile';
+import { parseSessionFile, applyLabels, suggestSessionFileName, serializeSessionFile, CURRENT_SESSION_VERSION } from '../sessionFile';
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -152,6 +152,54 @@ console.log('Test 12: duplicate paths are rejected');
   // Distinct paths still parse.
   const ok = parseSessionFile(JSON.stringify({ paths: ['/a/x.png', '/a/y.png'] }), '/base');
   assert(ok.paths.length === 2, `expected 2 paths, got ${ok.paths.length}`);
+}
+
+console.log('\nTest: version gate — missing and current pass, future is rejected');
+{
+  const noVersion = parseSessionFile(JSON.stringify({ paths: ['/a'] }), '/base');
+  assert(noVersion.paths.length === 1, 'a file without "version" must parse (pre-versioning files)');
+
+  const current = parseSessionFile(JSON.stringify({ version: CURRENT_SESSION_VERSION, paths: ['/a'] }), '/base');
+  assert(current.paths.length === 1, 'the current version must parse');
+
+  assertThrows(
+    () => parseSessionFile(JSON.stringify({ version: CURRENT_SESSION_VERSION + 1, paths: ['/a'] }), '/base'),
+    'Update the extension',
+    'a future version must be rejected, not half-opened'
+  );
+  assertThrows(
+    () => parseSessionFile(JSON.stringify({ version: 0, paths: ['/a'] }), '/base'),
+    'positive integer',
+    'version 0 must be rejected'
+  );
+  assertThrows(
+    () => parseSessionFile(JSON.stringify({ version: 1.5, paths: ['/a'] }), '/base'),
+    'positive integer',
+    'a fractional version must be rejected'
+  );
+}
+
+console.log('\nTest: serializeSessionFile — relative only when every path is inside destDir');
+{
+  // All inside: relativized, and the destDir itself becomes ".".
+  const inside = JSON.parse(serializeSessionFile(['/data/run', '/data/run/gt'], '/data/run'));
+  assert(inside.version === CURRENT_SESSION_VERSION, 'saved file must carry the current version');
+  assert(inside.paths[0] === '.', `destDir itself must serialize as ".", got ${inside.paths[0]}`);
+  assert(inside.paths[1] === 'gt', `child must be relative, got ${inside.paths[1]}`);
+
+  // Round-trip: parsing the saved body from destDir must land on the original absolute paths.
+  const rt = parseSessionFile(serializeSessionFile(['/data/run/a', '/data/run/b'], '/data/run'), '/data/run');
+  assert(rt.paths[0] === path.resolve('/data/run/a') && rt.paths[1] === path.resolve('/data/run/b'),
+    `round-trip must restore absolute paths, got ${rt.paths}`);
+
+  // One escapee keeps ALL paths absolute — a lone ".." would break the file the moment it moves.
+  const escape = JSON.parse(serializeSessionFile(['/data/run/a', '/elsewhere/b'], '/data/run'));
+  assert(escape.paths[0] === '/data/run/a' && escape.paths[1] === '/elsewhere/b',
+    `an escaping path must force all-absolute, got ${escape.paths}`);
+
+  // Labels and colors ride through untouched.
+  const full = JSON.parse(serializeSessionFile(['/d/a', '/d/b'], '/d', ['GT', 'pred'], ['#f00', '#0f0']));
+  assert(full.labels?.[1] === 'pred' && full.colors?.[0] === '#f00', 'labels and colors must be preserved');
 }
 
 printResults();

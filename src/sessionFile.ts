@@ -8,14 +8,28 @@ export interface SessionSpec {
   colors?: string[];
 }
 
+/** Highest format version this build understands; bump only on semantic changes (docs/session-files.md: version-gate-forward). */
+export const CURRENT_SESSION_VERSION = 1;
+
 const COLOR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 export function parseSessionFile(text: string, baseDir: string): SessionSpec {
-  let parsed: { paths?: unknown; labels?: unknown; colors?: unknown };
+  let parsed: { version?: unknown; paths?: unknown; labels?: unknown; colors?: unknown };
   try {
     parsed = JSON.parse(text);
   } catch {
     throw new Error('Not valid JSON. Expected {"paths": ["/abs/dir_or_image", ...], "labels"?: [...], "colors"?: [...]}');
+  }
+
+  // A half-understood file must be rejected, not half-opened (docs/session-files.md: version-gate-forward).
+  const version = parsed?.version;
+  if (version !== undefined) {
+    if (!Number.isInteger(version) || (version as number) < 1) {
+      throw new Error('"version" must be a positive integer');
+    }
+    if ((version as number) > CURRENT_SESSION_VERSION) {
+      throw new Error(`This session file is version ${version}; this build of ImageCompare supports up to ${CURRENT_SESSION_VERSION}. Update the extension.`);
+    }
   }
 
   const rawPaths = parsed?.paths;
@@ -62,6 +76,30 @@ export function parseSessionFile(text: string, baseDir: string): SessionSpec {
   }
 
   return spec;
+}
+
+/**
+ * Serialize a session for saving at destDir. Paths are relativized only when every compared root
+ * lies inside destDir; one escapee keeps all absolute (docs/session-files.md: saveas-relative-only-inside).
+ */
+export function serializeSessionFile(
+  absPaths: string[],
+  destDir: string,
+  labels?: string[],
+  colors?: string[]
+): string {
+  const rels = absPaths.map((p) => {
+    const rel = path.relative(destDir, p);
+    return rel === '' ? '.' : rel;
+  });
+  const escapes = rels.some((r) => r.startsWith('..') || path.isAbsolute(r));
+  const out: { version: number; paths: string[]; labels?: string[]; colors?: string[] } = {
+    version: CURRENT_SESSION_VERSION,
+    paths: escapes ? absPaths : rels
+  };
+  if (labels) out.labels = labels;
+  if (colors) out.colors = colors;
+  return JSON.stringify(out, null, 2) + '\n';
 }
 
 // Generic names that make poor session file names
