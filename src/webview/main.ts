@@ -32,6 +32,7 @@ interface TupleInfo {
 interface WebViewConfig {
   thumbnailSize: number;
   prefetchCount: number;
+  keepZoomOnTupleChange: boolean;
 }
 
 interface LoadedImage {
@@ -124,7 +125,7 @@ let tuples: TupleInfo[] = [];
 let modalities: string[] = [];
 let modalityPaths: string[] = [];
 let modalityColors: string[] = [];
-let config: WebViewConfig = { thumbnailSize: 100, prefetchCount: 3 };
+let config: WebViewConfig = { thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false };
 
 let currentTupleIndex: TupleIndex = asTuple(0);
 let currentModalityIndex: DisplayModalityIndex = asDisplay(0);
@@ -213,21 +214,20 @@ function setupEventListeners() {
   document.addEventListener('mouseup', handleMouseUp);
   document.addEventListener('copy', handleCopyEvent);
 
-  // Carousel scroll + autohide scrollbar
+  // Carousel wheel; the wall is not a native scroll container, so there is no scroll event to hook.
   carouselEl.addEventListener('wheel', handleCarouselWheel, { passive: false });
-  let carouselScrollTimer: ReturnType<typeof setTimeout> | null = null;
-  carouselEl.addEventListener('scroll', () => {
-    // A scroll that isn't the animation's own write is the user on the scrollbar thumb — yield to them.
-    if (carouselScrollAnim && Math.abs(carouselEl.scrollTop - carouselScrollExpected) > 1) {
-      cancelCarouselScroll();
-    }
-    carouselEl.classList.add('scrolling');
-    if (carouselScrollTimer) clearTimeout(carouselScrollTimer);
-    carouselScrollTimer = setTimeout(() => carouselEl.classList.remove('scrolling'), 800);
-  });
 
   // Carousel resize
   setupCarouselResize();
+
+  // The visible-row window is computed from clientHeight, which is 0 until the viewer unhides — and changes on vertical panel resizes. Height-only guard: width drags must not re-center (the resize anchor owns those).
+  let lastCarouselViewH = 0;
+  new ResizeObserver(() => {
+    const h = carouselEl.clientHeight;
+    if (h === lastCarouselViewH) return;
+    lastCarouselViewH = h;
+    if (isMultiTupleMode && carouselWallEl) scrollCarouselToCurrentTuple();
+  }).observe(carouselEl);
 
   // Window resize
   window.addEventListener('resize', () => {
@@ -712,9 +712,9 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
     tupleImages[message.modalityIndex] = { missing: true } as any;
   }
 
-  // Clear thumbnail data URL (message.modalityIndex is already the global/original index)
+  // The missing sentinel must live in the map: recycled rows repaint from it (message.modalityIndex is already the global/original index).
   const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
-  thumbnailDataUrls.delete(thumbKey);
+  thumbnailDataUrls.set(thumbKey, PLACEHOLDER_THUMB);
 
   // Update carousel to show placeholder for missing file
   const thumb = carouselEl.querySelector(
@@ -1142,6 +1142,13 @@ function scheduleRender() {
 function loadTuple(index: TupleIndex) {
   if (index < 0 || index >= tuples.length) return;
 
+  // Only an actual tuple change resets the view — re-index paths reload the same tuple and must not.
+  if (index !== currentTupleIndex && !config.keepZoomOnTupleChange) {
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+  }
+
   currentTupleIndex = index;
   evictDistantWebviewTuples();
   // Reset to the target tuple's cache so no stale frame from the previous tuple can show.
@@ -1273,15 +1280,18 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
   imageLoaderEl.classList.add('active');
 }
 
-/** Carousel width that fits every modality column at perTile px (6px row padding each side, 2px gaps). */
+// Reserved for the scrollbar thumb (6px + edge gaps) so it never overlaps the last tile column.
+const SCROLLBAR_GUTTER = 10;
+
+/** Carousel width that fits every modality column at perTile px (6px row padding each side, scrollbar gutter, 2px gaps). */
 function carouselFitWidth(perTile: number): number {
-  return 12 + modalities.length * perTile + (modalities.length - 1) * 2;
+  return 12 + SCROLLBAR_GUTTER + modalities.length * perTile + (modalities.length - 1) * 2;
 }
 
 function updateCarouselThumbSize(snapToDevicePixels = true) {
   const numModalities = modalities.length;
-  // Row padding: 6px left + 6px right = 12px; gaps: 2px each
-  const availableWidth = CAROUSEL_WIDTH - 12 - (numModalities - 1) * 2;
+  // Row padding: 6px left + 6px right = 12px; scrollbar gutter; gaps: 2px each
+  const availableWidth = CAROUSEL_WIDTH - 12 - SCROLLBAR_GUTTER - (numModalities - 1) * 2;
   // Fractional, not floored: integer steps made every tile snap visibly during a resize drag.
   CAROUSEL_THUMB_SIZE = availableWidth / numModalities;
   // Tiles scale down to fit the width — a floor here reintroduces clipped columns.
@@ -1294,9 +1304,16 @@ function updateCarouselThumbSize(snapToDevicePixels = true) {
   carouselEl.style.setProperty('--thumb-size', CAROUSEL_THUMB_SIZE + 'px');
 }
 
+let carouselDelegatesInstalled = false;
+
 function buildCarousel() {
   carouselEl.innerHTML = '';
   carouselEl.style.width = CAROUSEL_WIDTH + 'px';
+  carouselRowPool = [];
+  carouselRowBound = [];
+  carouselRowTopAt = [];
+  carouselWallEl = null;
+  carouselThumbEl = null;
 
   if (!isMultiTupleMode || tuples.length <= 1) {
     carouselEl.classList.remove('active');
@@ -1311,103 +1328,31 @@ function buildCarousel() {
   viewerEl.classList.add('has-carousel');
   viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
 
-  for (let tupleIdx = 0; tupleIdx < tuples.length; tupleIdx++) {
-    const tuple = tuples[tupleIdx];
-    const row = document.createElement('div');
-    row.className = 'carousel-row';
-    row.dataset.tupleIndex = String(tupleIdx);
-
-    // Use modalityOrder to display thumbnails in the current order
-    for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
-      const originalModIdx = modalityOrder[displayIdx];
-
-      // Create a container for thumbnail + winner circle; size comes from the --thumb-size CSS variable.
-      const thumbContainer = document.createElement('div');
-      thumbContainer.className = 'carousel-thumb-container';
-
-      const thumb = document.createElement('img');
-      thumb.className = 'carousel-thumb placeholder';
-      thumb.dataset.tuple = String(tupleIdx);
-      thumb.dataset.modality = String(originalModIdx);
-      thumb.dataset.displayIndex = String(displayIdx);
-
-      // Check if we have thumbnail already (use original index for lookup)
-      const key = `${tupleIdx}-${originalModIdx}`;
-      if (thumbnailDataUrls.has(key)) {
-        const thumbUrl = thumbnailDataUrls.get(key)!;
-        thumb.src = thumbUrl;
-        thumb.classList.remove('placeholder');
-        // Add 'missing' class if this is the placeholder thumbnail
-        if (thumbUrl === PLACEHOLDER_THUMB) {
-          thumb.classList.add('missing');
-        }
-      }
-
-      thumb.addEventListener('click', (e) => {
-        e.stopPropagation();
-        // Navigate to the display index, not the original index
-        goToTupleAndModality(asTuple(tupleIdx), asDisplay(displayIdx));
-      });
-
-      thumbContainer.appendChild(thumb);
-
-      // Add winner circle if voting is enabled
-      if (votingEnabled) {
-        const winnerCircle = document.createElement('div');
-        winnerCircle.className = 'winner-circle';
-        winnerCircle.dataset.tuple = String(tupleIdx);
-        winnerCircle.dataset.displayIndex = String(displayIdx);
-
-        // Check if this modality is the winner for this tuple
-        const winnerModalityIdx = winners.get(asTuple(tupleIdx));
-        if (winnerModalityIdx === displayIdx) {
-          winnerCircle.classList.add('winner');
-        }
-
-        winnerCircle.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleWinner(asTuple(tupleIdx), asDisplay(displayIdx));
-        });
-
-        thumbContainer.appendChild(winnerCircle);
-      }
-
-      row.appendChild(thumbContainer);
-    }
-
-    row.addEventListener('click', () => {
-      if (tupleIdx !== currentTupleIndex) {
-        loadTuple(asTuple(tupleIdx));
-      }
-    });
-
-    carouselEl.appendChild(row);
+  // Virtual shell: an arithmetically sized wall plus the custom scrollbar; rows materialize in ensureVisibleCarouselRows.
+  carouselWallEl = document.createElement('div');
+  carouselWallEl.id = 'carousel-wall';
+  carouselThumbEl = document.createElement('div');
+  carouselThumbEl.id = 'carousel-thumb';
+  carouselEl.appendChild(carouselWallEl);
+  carouselEl.appendChild(carouselThumbEl);
+  setupCarouselThumbDrag(carouselThumbEl);
+  if (!carouselDelegatesInstalled) {
+    carouselDelegatesInstalled = true;
+    // One delegated listener on the container: pooled rows are rebound constantly, per-element listeners would churn.
+    carouselEl.addEventListener('click', handleCarouselClick);
   }
 
-  updateCarouselSelection();
+  // A rebuild resets the pool; this restores the offset (clamped) and materializes the visible rows.
+  applyCarouselOffset(carouselOffset);
 }
 
-function updateCarouselSelection() {
+function updateCarouselSelection(centerOnCurrent = true) {
   if (!isMultiTupleMode) return;
-
-  const rows = carouselEl.querySelectorAll('.carousel-row');
-  if (rows.length === 0) return;
-
-  // Touch only the rows that change — a full sweep is ~100k classList ops per keystroke and stalls the scroll animation.
-  carouselEl.querySelectorAll('.carousel-row.current').forEach(row => row.classList.remove('current'));
-  carouselEl.querySelectorAll('.carousel-thumb.active').forEach(t => t.classList.remove('active'));
-  carouselEl.querySelectorAll('.carousel-thumb.selected').forEach(t => t.classList.remove('selected'));
-
-  const row = rows[currentTupleIndex] as HTMLElement | undefined;
-  if (row) {
-    row.classList.add('current');
-    row.querySelectorAll('.carousel-thumb').forEach((thumb, thumbIdx) => {
-      thumb.classList.add('active');
-      if (thumbIdx === currentModalityIndex) thumb.classList.add('selected');
-    });
+  // Rebinding the pool repaints selection state everywhere it can be visible (~35 rows).
+  for (let s = 0; s < carouselRowPool.length; s++) {
+    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s]);
   }
-
-  scrollCarouselToCurrentTuple();
+  if (centerOnCurrent) scrollCarouselToCurrentTuple();
 }
 
 function toggleWinner(tupleIndex: TupleIndex, displayModalityIndex: DisplayModalityIndex) {
@@ -1441,67 +1386,173 @@ function toggleWinner(tupleIndex: TupleIndex, displayModalityIndex: DisplayModal
 
 function updateCarouselWinners() {
   if (!isMultiTupleMode || !votingEnabled) return;
-
-  const circles = carouselEl.querySelectorAll('.winner-circle');
-  circles.forEach((circle) => {
-    const tupleIdx = asTuple(parseInt((circle as HTMLElement).dataset.tuple || '0', 10));
-    const displayIdx = parseInt((circle as HTMLElement).dataset.displayIndex || '0', 10);
-
-    const winnerModalityIdx = winners.get(tupleIdx);
-    if (winnerModalityIdx === displayIdx) {
-      circle.classList.add('winner');
-    } else {
-      circle.classList.remove('winner');
-    }
-  });
-}
-
-let carouselScrollAnim = 0;
-let carouselScrollTarget = 0;
-let carouselScrollExpected = -1;
-
-/** Exponential approach toward the target; retargeting mid-flight bends the motion instead of restarting it, unlike native smooth scrollTo. */
-function animateCarouselScroll(target: number) {
-  carouselScrollTarget = Math.max(0, Math.min(target, carouselEl.scrollHeight - carouselEl.clientHeight));
-  if (carouselScrollAnim) return;
-  let last = performance.now();
-  const step = (now: number) => {
-    const dt = Math.min((now - last) / 1000, 0.1);
-    last = now;
-    const diff = carouselScrollTarget - carouselEl.scrollTop;
-    if (Math.abs(diff) < 0.5) {
-      carouselEl.scrollTop = carouselScrollTarget;
-      carouselScrollAnim = 0;
-      return;
-    }
-    carouselEl.scrollTop += diff * (1 - Math.exp(-dt * 12));
-    // Read back post-clamp so the scroll listener can tell our write from a scrollbar drag.
-    carouselScrollExpected = carouselEl.scrollTop;
-    carouselScrollAnim = requestAnimationFrame(step);
-  };
-  carouselScrollAnim = requestAnimationFrame(step);
-}
-
-/** Manual scrolls and resize drags own scrollTop; a live animation would fight them. */
-function cancelCarouselScroll() {
-  if (carouselScrollAnim) {
-    cancelAnimationFrame(carouselScrollAnim);
-    carouselScrollAnim = 0;
+  for (let s = 0; s < carouselRowPool.length; s++) {
+    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s]);
   }
 }
 
+// Virtual carousel: only visible rows (plus overscan) exist in the DOM, recycled ring-buffer style — scroll, stepping and resize touch ~35 rows, never the whole session (docs/loading-architecture.md).
+let carouselOffset = 0;
+let carouselWallEl: HTMLElement | null = null;
+let carouselThumbEl: HTMLElement | null = null;
+let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
+const CAROUSEL_OVERSCAN = 3;
+let carouselRowPool: HTMLElement[] = [];
+let carouselRowBound: number[] = []; // pool slot -> bound tupleIndex (-1 = hidden)
+let carouselRowTopAt: number[] = []; // pool slot -> applied top px, to skip redundant writes
+
+function carouselRowHeight(): number {
+  return CAROUSEL_THUMB_SIZE + 2;
+}
+
+// No phase-lock pad: it showed as a blank strip at the bottom, and its mod-based size sawtoothed during resize, bouncing the bottom clamp.
+function carouselContentHeight(): number {
+  return tuples.length * carouselRowHeight();
+}
+
+function carouselMaxOffset(): number {
+  return Math.max(0, carouselContentHeight() - carouselEl.clientHeight);
+}
+
+function applyCarouselOffset(target: number) {
+  if (!carouselWallEl || !carouselThumbEl) return;
+  carouselOffset = Math.max(0, Math.min(target, carouselMaxOffset()));
+  carouselWallEl.style.transform = `translateY(${-carouselOffset}px)`;
+  ensureVisibleCarouselRows();
+  const viewH = carouselEl.clientHeight;
+  const contentH = carouselContentHeight();
+  if (contentH <= viewH) {
+    carouselThumbEl.style.display = 'none';
+  } else {
+    const thumbH = Math.max(20, (viewH * viewH) / contentH);
+    const maxOff = carouselMaxOffset();
+    const thumbY = maxOff > 0 ? ((viewH - thumbH) * carouselOffset) / maxOff : 0;
+    carouselThumbEl.style.display = 'block';
+    carouselThumbEl.style.height = thumbH + 'px';
+    carouselThumbEl.style.transform = `translateY(${thumbY}px)`;
+  }
+  carouselEl.classList.add('scrolling');
+  if (carouselScrollHideTimer) clearTimeout(carouselScrollHideTimer);
+  carouselScrollHideTimer = setTimeout(() => carouselEl.classList.remove('scrolling'), 800);
+}
+
+function ensureVisibleCarouselRows() {
+  if (!carouselWallEl) return;
+  const rowH = carouselRowHeight();
+  if (rowH <= 0) return;
+  carouselWallEl.style.height = carouselContentHeight() + 'px';
+  const viewH = carouselEl.clientHeight;
+  const first = Math.max(0, Math.floor(carouselOffset / rowH) - CAROUSEL_OVERSCAN);
+  const last = Math.min(tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
+  // Sized for the smallest possible row (12px tile + 2), not the current one: a pool-size change remaps the whole ring (slot = j % pool) and rebinds every row — a visible hitch mid-resize.
+  const needed = Math.min(tuples.length, Math.max(last - first + 1, Math.ceil(viewH / 14) + 2 * CAROUSEL_OVERSCAN + 2));
+  while (carouselRowPool.length < needed) {
+    const el = createCarouselRowShell();
+    carouselRowPool.push(el);
+    carouselRowBound.push(-1);
+    carouselRowTopAt.push(-1);
+    carouselWallEl.appendChild(el);
+  }
+  const pool = carouselRowPool.length;
+  // Ring mapping (tuple j lives in slot j % pool): advancing the window rebinds only the rows that enter it.
+  for (let s = 0; s < pool; s++) {
+    const j = carouselRowBound[s];
+    if (j >= 0 && (j < first || j > last)) {
+      carouselRowPool[s].style.display = 'none';
+      carouselRowBound[s] = -1;
+    }
+  }
+  for (let j = first; j <= last; j++) {
+    const s = j % pool;
+    const el = carouselRowPool[s];
+    const top = j * rowH;
+    if (carouselRowTopAt[s] !== top) {
+      el.style.top = top + 'px';
+      carouselRowTopAt[s] = top;
+    }
+    if (carouselRowBound[s] !== j) {
+      el.style.display = '';
+      bindCarouselRow(el, j);
+      carouselRowBound[s] = j;
+    }
+  }
+}
+
+function createCarouselRowShell(): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'carousel-row';
+  // Born hidden: with the pool oversized for the smallest row height, some shells stay unbound — visible unbound shells would stack at top 0.
+  row.style.display = 'none';
+  for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
+    const container = document.createElement('div');
+    container.className = 'carousel-thumb-container';
+    const img = document.createElement('img');
+    img.className = 'carousel-thumb placeholder';
+    img.dataset.displayIndex = String(displayIdx);
+    container.appendChild(img);
+    if (votingEnabled) {
+      const circle = document.createElement('div');
+      circle.className = 'winner-circle';
+      container.appendChild(circle);
+    }
+    row.appendChild(container);
+  }
+  return row;
+}
+
+/** Everything a row shows derives from the state maps, so recycling a slot fully repaints it. */
+function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
+  el.dataset.tupleIndex = String(tupleIdx);
+  el.classList.toggle('current', tupleIdx === currentTupleIndex);
+  const winnerIdx = winners.get(asTuple(tupleIdx));
+  const imgs = el.querySelectorAll('.carousel-thumb') as NodeListOf<HTMLImageElement>;
+  imgs.forEach((img, displayIdx) => {
+    const originalIdx = modalityOrder[displayIdx];
+    img.dataset.tuple = String(tupleIdx);
+    img.dataset.modality = String(originalIdx);
+    const url = thumbnailDataUrls.get(`${tupleIdx}-${originalIdx}`);
+    if (url) {
+      if (img.getAttribute('src') !== url) img.src = url;
+      img.classList.remove('placeholder');
+      img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
+    } else {
+      img.removeAttribute('src');
+      img.classList.add('placeholder');
+      img.classList.remove('missing');
+    }
+    img.classList.toggle('active', tupleIdx === currentTupleIndex);
+    img.classList.toggle('selected', tupleIdx === currentTupleIndex && displayIdx === currentModalityIndex);
+    const circle = img.parentElement?.querySelector('.winner-circle');
+    if (circle) circle.classList.toggle('winner', winnerIdx === displayIdx);
+  });
+}
+
+function handleCarouselClick(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  const row = target.closest('.carousel-row') as HTMLElement | null;
+  if (!row?.dataset.tupleIndex) return;
+  const tupleIdx = asTuple(parseInt(row.dataset.tupleIndex, 10));
+  const circle = target.closest('.winner-circle');
+  if (circle) {
+    const cImg = circle.parentElement?.querySelector('.carousel-thumb') as HTMLElement | null;
+    toggleWinner(tupleIdx, asDisplay(parseInt(cImg?.dataset.displayIndex ?? '0', 10)));
+    return;
+  }
+  const img = target.closest('.carousel-thumb') as HTMLElement | null;
+  if (img) {
+    goToTupleAndModality(tupleIdx, asDisplay(parseInt(img.dataset.displayIndex ?? '0', 10)));
+    return;
+  }
+  if (tupleIdx !== currentTupleIndex) loadTuple(tupleIdx);
+}
+
 function scrollCarouselToCurrentTuple() {
-  if (!isMultiTupleMode) return;
-
-  const rows = carouselEl.querySelectorAll('.carousel-row');
-  if (rows.length === 0 || currentTupleIndex >= rows.length) return;
-
-  const currentRow = rows[currentTupleIndex] as HTMLElement;
-  const carouselHeight = carouselEl.clientHeight;
-  const rowHeight = currentRow.offsetHeight;
-  const rowTop = currentRow.offsetTop;
-
-  animateCarouselScroll(rowTop - (carouselHeight / 2) + (rowHeight / 2));
+  if (!isMultiTupleMode || !carouselWallEl) return;
+  const rowH = carouselRowHeight();
+  if (rowH <= 0) return;
+  // Virtual rows make the row top pure arithmetic; quantized to whole rows so a step moves the grid exactly one row or not at all (the sole exception: one partial jump where the bottom clamp lands off-grid).
+  const target = currentTupleIndex * rowH - (carouselEl.clientHeight - rowH) / 2;
+  applyCarouselOffset(Math.round(target / rowH) * rowH);
 }
 
 function goToTupleAndModality(tupleIdx: TupleIndex, modalityIdx: DisplayModalityIndex) {
@@ -1719,10 +1770,10 @@ function render() {
     preventDefaultContextMenuItems: true
   }));
 
-  // Updated even when showing a preview.
+  // Updated even when showing a preview. No centering: render() runs on image arrivals and every resize frame, and a re-center here overrides the resize anchor.
   updateModalitySelector();
   if (isMultiTupleMode) {
-    updateCarouselSelection();
+    updateCarouselSelection(false);
   }
 
   const isMissing = currentImage && (currentImage as any).missing;
@@ -2050,14 +2101,47 @@ function handleCopyEvent(e: ClipboardEvent) {
 function handleCarouselWheel(e: WheelEvent) {
   e.preventDefault();
   e.stopPropagation();
-  cancelCarouselScroll();
-  carouselEl.scrollTop += e.deltaY;
+  applyCarouselOffset(carouselOffset + e.deltaY);
+}
+
+function setupCarouselThumbDrag(thumb: HTMLElement) {
+  thumb.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startOffset = carouselOffset;
+    const viewH = carouselEl.clientHeight;
+    const contentH = carouselWallEl?.offsetHeight ?? 0;
+    if (contentH <= viewH) return;
+    const thumbH = Math.max(20, (viewH * viewH) / contentH);
+    const scale = carouselMaxOffset() / Math.max(1, viewH - thumbH);
+    const onMove = (ev: MouseEvent) => applyCarouselOffset(startOffset + (ev.clientY - startY) * scale);
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 function setupCarouselResize() {
   let isResizing = false;
   let resizeStartX = 0;
   let resizeStartWidth = 0;
+  let resizeRaf = 0;
+
+  // Virtualized, a full refit touches ~35 rows — cheap enough to run every frame of the drag.
+  const refit = (snap: boolean) => {
+    carouselEl.style.width = CAROUSEL_WIDTH + 'px';
+    carouselResizeEl.style.left = (CAROUSEL_WIDTH - 4) + 'px';
+    viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
+    // Anchor the current row's viewport Y across the row-height change — re-centering per frame made it bob; only the bounds clamp may move it. Rounded: a fractional anchor lands the focused row on shifting subpixel boundaries.
+    const anchorY = Math.round(currentTupleIndex * carouselRowHeight() - carouselOffset);
+    updateCarouselThumbSize(snap);
+    applyCarouselOffset(currentTupleIndex * carouselRowHeight() - anchorY);
+    render();
+  };
 
   carouselResizeEl.addEventListener('mousedown', (e) => {
     e.preventDefault();
@@ -2069,31 +2153,16 @@ function setupCarouselResize() {
     document.body.style.cursor = 'ew-resize';
   });
 
-  let resizeRaf = 0;
   document.addEventListener('mousemove', (e) => {
     if (!isResizing) return;
-
     const delta = e.clientX - resizeStartX;
     // Drag up to every column at natural 50px (min 500 preserves old behavior), bounded by 60% of the window.
     const maxWidth = Math.min(Math.max(500, carouselFitWidth(50)), Math.floor(window.innerWidth * 0.6));
     CAROUSEL_WIDTH = Math.max(100, Math.min(maxWidth, resizeStartWidth + delta));
-
-    // One rAF-coalesced write of the width and the shared --thumb-size variable; per-tile styles would jerk.
     if (!resizeRaf) {
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
-        cancelCarouselScroll();
-        carouselEl.style.width = CAROUSEL_WIDTH + 'px';
-        carouselResizeEl.style.left = (CAROUSEL_WIDTH - 4) + 'px';
-        viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
-        updateCarouselThumbSize(false);
-        // Row heights just changed: instantly re-center the current row each frame (smooth would lag the drag); the clamp pins a first row to the top and a last row to the bottom.
-        const row = carouselEl.querySelectorAll('.carousel-row')[currentTupleIndex] as HTMLElement | undefined;
-        if (row) {
-          const target = row.offsetTop - (carouselEl.clientHeight - row.offsetHeight) / 2;
-          carouselEl.scrollTop = Math.max(0, Math.min(target, carouselEl.scrollHeight - carouselEl.clientHeight));
-        }
-        render();
+        refit(false);
       });
     }
   });
@@ -2103,14 +2172,8 @@ function setupCarouselResize() {
       isResizing = false;
       carouselResizeEl.classList.remove('dragging');
       document.body.style.cursor = '';
-      // Drag over: snap tiles to the device-pixel grid and re-anchor the current row once.
-      updateCarouselThumbSize();
-      const row = carouselEl.querySelectorAll('.carousel-row')[currentTupleIndex] as HTMLElement | undefined;
-      if (row) {
-        const target = row.offsetTop - (carouselEl.clientHeight - row.offsetHeight) / 2;
-        carouselEl.scrollTop = Math.max(0, Math.min(target, carouselEl.scrollHeight - carouselEl.clientHeight));
-      }
-      render();
+      // Drag over: one final refit with the device-pixel snap.
+      refit(true);
     }
   });
 }

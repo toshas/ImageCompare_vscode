@@ -1097,6 +1097,7 @@ ${lead}
     const config = vscode.workspace.getConfiguration('imageCompare');
     const thumbnailSize = config.get<number>('thumbnailSize', 100);
     const prefetchCount = config.get<number>('prefetchCount', 3);
+    const keepZoomOnTupleChange = config.get<boolean>('keepZoomOnTupleChange', false);
 
     const allModalities = state.scanResult.modalities;
 
@@ -1150,7 +1151,7 @@ ${lead}
       modalities: allModalities,
       modalityPaths,
       modalityColors,
-      config: { thumbnailSize, prefetchCount },
+      config: { thumbnailSize, prefetchCount, keepZoomOnTupleChange },
       winners: winnersRecord,
       votingEnabled: state.votingEnabled,
       labelsExplicit: state.labelsExplicit
@@ -1302,7 +1303,7 @@ ${lead}
     state.panel.webview.postMessage(msg);
   }
 
-  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; only dispose discards held payloads (docs/loading-architecture.md: held-payloads-always-flush). */
+  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; dispose and the cap eviction in postImage are the only discards (docs/loading-architecture.md: held-payloads-always-flush). */
   private scheduleBurstFlush(state: PanelState, delayMs = 180): void {
     if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
     state.burstFlushTimer = setTimeout(() => {
@@ -1951,6 +1952,7 @@ body {
 }
 
 /* Carousel styles */
+/* Not a native scroll container: the wall is transform-positioned and steps land whole row heights, keeping the grid pixel-stationary (docs/loading-architecture.md). */
 #carousel {
   display: none;
   position: absolute;
@@ -1959,33 +1961,36 @@ body {
   bottom: 0;
   background: var(--vscode-sideBar-background, rgba(0, 0, 0, 0.85));
   border-right: 1px solid var(--vscode-panel-border, #333);
-  overflow-y: overlay;
-  overflow-x: hidden;
+  overflow: hidden;
   z-index: 10;
 }
 #carousel.active { display: block; }
-#carousel::-webkit-scrollbar { width: 6px; }
-#carousel::-webkit-scrollbar-track { background: transparent; }
-#carousel::-webkit-scrollbar-thumb {
-  background: transparent;
+#carousel-wall { position: relative; will-change: transform; }
+#carousel-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 6px;
   border-radius: 3px;
-  transition: background 0.3s;
-}
-#carousel:hover::-webkit-scrollbar-thumb,
-#carousel.scrolling::-webkit-scrollbar-thumb {
   background: var(--vscode-scrollbarSlider-activeBackground, #444);
+  opacity: 0;
+  transition: opacity 0.3s;
+  z-index: 2;
 }
+#carousel:hover #carousel-thumb,
+#carousel.scrolling #carousel-thumb { opacity: 1; }
 
 /* 1px top+bottom on adjacent rows = 2px vertical space, matching the 2px column gap — an equidistant wall, no separator lines. */
-/* content-visibility skips layout/paint for offscreen rows; the intrinsic height must equal the real row height (tile + 2px padding) or centering math drifts. */
+/* No transitions on selection styling: the wall jumps instantly, so a fading highlight pulses the center on every step. */
+/* Absolutely positioned: rows are a recycled pool placed at tupleIndex * rowHeight inside the virtual wall. */
 .carousel-row {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
   gap: 2px;
   padding: 1px 6px;
   cursor: pointer;
-  transition: background 0.15s;
-  content-visibility: auto;
-  contain-intrinsic-height: calc(var(--thumb-size, 50px) + 2px);
 }
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
@@ -1995,7 +2000,6 @@ body {
   background: #111;
   border-radius: 3px;
   border: 2px solid transparent;
-  transition: border-color 0.15s, opacity 0.15s;
   opacity: 0.6;
   flex-shrink: 0;
 }

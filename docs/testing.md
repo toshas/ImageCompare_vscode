@@ -96,11 +96,13 @@ Failures here are invisible to CI, so they are worth walking before a release:
    appear without reopening. The base glob is non-recursive, so no event fires for the images inside
    it — the directory entry itself is the only event, and where neither watcher reports it the
    existence sweep is what picks it up, so allow a sweep interval before calling it a failure.
-6. Carousel feel with a many-modality session (10+): it opens with every column visible, the resize
-   handle drags smoothly up to all-columns-at-50px with tiles scaling continuously (no snapping or
-   clipped columns), the current row stays centered during the drag (first row pinned top, last
-   pinned bottom), arrow-key stepping glides rather than jumping, and a wheel or scrollbar drag
-   immediately wins over the centering animation.
+6. Carousel feel with a many-modality session (10+): it opens with every column visible; the resize
+   handle tracks continuously — each drag frame runs a real refit of the virtualized row pool, so
+   tiles stay crisp throughout the drag (no scale-preview softness) and the focused row holds its
+   viewport position, moving only where the top/bottom bounds clamp forces it; arrow-key stepping
+   keeps the tile grid pixel-stationary at the ends too — only tile content and the highlight
+   change, with the last column always clear of the scrollbar thumb — and wheel or thumb drag
+   scroll freely.
 
 ## Debug logging
 

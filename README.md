@@ -6,7 +6,7 @@
 [![Website](https://img.shields.io/badge/%E2%99%A5%20Author%20-Website-blue)](https://www.obukhov.ai)
 [![Subscribe for updates!](https://img.shields.io/twitter/follow/antonobukhov1?label=Subscribe%20for%20updates!)](https://x.com/antonobukhov1)
 
-**Flip between image variants instantly** — perfect for reviewing ML model outputs, A/B testing designs, or comparing renders across different settings. View one image at a time and switch between modalities with a keypress. Zoom and pan stay locked when switching, so you can compare fine details at any magnification.
+**Flip between image variants instantly** — perfect for reviewing ML model outputs, A/B testing designs, or comparing renders across different settings. View one image at a time and switch between modalities with a keypress. Zoom and pan stay locked when switching modalities, so you can compare fine details at any magnification.
 
 ![ImageCompare Demo](https://raw.githubusercontent.com/toshas/ImageCompare_vscode/main/demo.gif)
 
@@ -183,6 +183,7 @@ PNG, JPG, JPEG, GIF, BMP, WebP, TIFF (`.tiff`, `.tif`), PPMX
 |---------|---------|-------------|
 | `imageCompare.thumbnailSize` | 100 | Resolution carousel thumbnails are decoded and cached at (longest side, 2x this value) — not their on-screen size, which follows the carousel width divided by the modality count |
 | `imageCompare.prefetchCount` | 3 | Tuples to preload ahead/behind (each preloads every modality) |
+| `imageCompare.keepZoomOnTupleChange` | false | Keep zoom/pan when switching tuples; off means a new tuple resets the view. Zoom always persists across modality switches |
 | `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime |
 | `imageCompare.debug` | false | Enable debug logging (webview console + Extension Host output) |
 

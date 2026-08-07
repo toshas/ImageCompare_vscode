@@ -165,6 +165,11 @@
           "maximum": 10,
           "description": "Number of tuples to prefetch ahead and behind current position"
         },
+        "imageCompare.keepZoomOnTupleChange": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the current zoom and pan when switching to another image tuple. When disabled, changing tuples resets the view. Zoom always persists across modality switches within a tuple."
+        },
         "imageCompare.cacheMaxAgeDays": {
           "type": "number",
           "default": 7,

@@ -109,6 +109,7 @@ export type ExtensionMessage =
 export interface WebViewConfig {
   thumbnailSize: number;
   prefetchCount: number;
+  keepZoomOnTupleChange: boolean;
 }
 
 // Loaded image data (cached in extension)
