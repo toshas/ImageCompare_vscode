@@ -4,7 +4,7 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
-## [0.3.0] - 2026
+## [0.3.0] - 2026-08-07
 
 ### Added
 - **Session files (CLI entry point)**: Two listed paths may not resolve to the same location (compared case-insensitively on Windows and macOS) — two modality columns on one directory would make every URI-keyed lookup ambiguous. Opening a `*.imagecompare` file (JSON `{"paths": [...], "labels"?: [...]}`) starts a comparison via a custom editor — enables scripted invocation (`code session.imagecompare`) and reopenable comparison artifacts. Relative paths resolve against the file's directory. A file that is missing, renamed or malformed renders an explanatory page in the tab rather than leaving an unresolved editor, as does one whose paths hold no comparable images; closing the tab while its directory is still being scanned tears down cleanly
