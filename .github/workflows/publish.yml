@@ -47,8 +47,12 @@ jobs:
       - name: Mutation check
         run: node scripts/mutation-check.mjs
 
+  # The full 3-OS three-layer matrix must also be green before any release build (workflow_call into test.yml).
+  test-full:
+    uses: ./.github/workflows/test.yml
+
   build:
-    needs: test
+    needs: [test, test-full]
     strategy:
       matrix:
         include:

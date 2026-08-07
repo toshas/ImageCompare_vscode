@@ -9,6 +9,7 @@ on:
     branches: [main, 'test/**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 # Cancel superseded runs on the same ref to avoid burning minutes.
 concurrency:
@@ -16,6 +17,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The repo's own gate battery (nine ts-node suites, mutation check, invariant+comment checkers)
+  # runs on every push/PR too, so no event sees less than the full union of both test systems.
+  gates:
+    name: gates (ts-node suites + mutation + checkers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: node scripts/check-invariants.mjs
+      - run: node scripts/comment-lint.mjs
+      - run: npm test
+      - run: node scripts/mutation-check.mjs
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
