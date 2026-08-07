@@ -1,12 +1,4 @@
-/**
- * Parser for PPMX format (custom float32 grayscale format)
- *
- * Format:
- * - Line 1: "P7" (magic header)
- * - Line 2: "width height" (dimensions)
- * - Line 3: flags (e.g., "00000000000")
- * - Binary data: width*height float32 values (little-endian)
- */
+/** PPMX: magic "PPMX" or "P7", "width height", an optional flags line, then width*height LE float32. See docs/image-backends.md. */
 
 export interface PpmxData {
   width: number;
@@ -14,28 +6,26 @@ export interface PpmxData {
   rgbBuffer: Buffer;
 }
 
-/**
- * Parse a PPMX file and return grayscale image data as RGB buffer
- */
+/** Parse a PPMX file into a headerless RGB buffer, min/max normalized to 0-255. */
 export function parsePpmx(buffer: Buffer): PpmxData {
   let pos = 0;
-  const lines: string[] = [];
-
-  for (let i = 0; i < 3; i++) {
+  const readLine = (): string => {
     let lineEnd = pos;
     while (lineEnd < buffer.length && buffer[lineEnd] !== 10) {
       lineEnd++;
     }
-    lines.push(buffer.slice(pos, lineEnd).toString('utf8').trim());
+    const line = buffer.slice(pos, lineEnd).toString('utf8').trim();
     pos = lineEnd + 1;
+    return line;
+  };
+
+  const header = readLine();
+
+  if (header !== 'PPMX' && header !== 'P7') {
+    throw new Error(`Unexpected PPMX header: "${header}", expected "PPMX" or "P7"`);
   }
 
-  const [header, dims, flags] = lines;
-
-  if (header !== 'P7') {
-    throw new Error(`Unexpected PPMX header: "${header}", expected "P7"`);
-  }
-
+  const dims = readLine();
   const dimParts = dims.split(/\s+/);
   const width = parseInt(dimParts[0], 10);
   const height = parseInt(dimParts[1], 10);
@@ -44,13 +34,24 @@ export function parsePpmx(buffer: Buffer): PpmxData {
     throw new Error(`Invalid PPMX dimensions: "${dims}"`);
   }
 
-  const KNOWN_FLAGS = new Set(['00000000000']);
-  if (!KNOWN_FLAGS.has(flags)) {
-    console.warn(`Unknown PPMX flags: "${flags}"`);
+  const expectedBytes = width * height * 4;
+
+  // The flags line is optional under either magic, so detect it by size rather than by variant.
+  if (buffer.length - pos !== expectedBytes) {
+    const afterDims = pos;
+    const flags = readLine();
+    // Size alone would accept an empty "line" that is really a 0x0A pixel byte (docs/image-backends.md).
+    const looksLikeFlags = flags.length > 0 && /^[\x20-\x7e]+$/.test(flags);
+    if (looksLikeFlags && buffer.length - pos === expectedBytes) {
+      if (flags !== '00000000000') {
+        console.warn(`Unknown PPMX flags: "${flags}"`);
+      }
+    } else {
+      pos = afterDims;
+    }
   }
 
   const dataBuffer = buffer.slice(pos);
-  const expectedBytes = width * height * 4;
 
   if (dataBuffer.length < expectedBytes) {
     throw new Error(`PPMX data size mismatch: expected ${expectedBytes} bytes, got ${dataBuffer.length}`);

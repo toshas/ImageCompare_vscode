@@ -22,6 +22,25 @@ test.describe('webview init / shell', () => {
     await expect(page.locator('#modality-selector .modality-btn')).toHaveCount(2);
   });
 
+  test('virtualized carousel binds a pool row to each visible tuple', async ({ page }) => {
+    await loadInited(page);
+    // The carousel is a recycled pool of absolutely-positioned rows inside
+    // #carousel-wall (not one row per tuple); with 3 tuples all fit on screen,
+    // so exactly tuples 0..2 must be bound and visible.
+    await expect(page.locator('#carousel-wall')).toBeAttached();
+    const bound = await page.$$eval('.carousel-row', (rows) =>
+      rows
+        .filter((r) => (r as HTMLElement).style.display !== 'none')
+        .map((r) => (r as HTMLElement).dataset.tupleIndex)
+        .sort(),
+    );
+    expect(bound).toEqual(['0', '1', '2']);
+    // Each bound row shows one thumbnail per modality.
+    await expect(
+      page.locator('.carousel-row[data-tuple-index="0"] .carousel-thumb'),
+    ).toHaveCount(2);
+  });
+
   test('shows the floating panel tools', async ({ page }) => {
     await loadInited(page);
     await expect(page.locator('#crop-btn')).toBeVisible();

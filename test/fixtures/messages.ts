@@ -51,13 +51,18 @@ export function initMessage(spec: FixtureSpec = DEFAULT_SPEC) {
     tuples,
     modalities: spec.modalities,
     modalityPaths: spec.modalities.map((m) => `/fixtures/${m}`),
-    config: { thumbnailSize: 100, prefetchCount: 3 },
+    config: { thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false },
     winners: {} as Record<number, number>,
     votingEnabled: spec.votingEnabled,
+    labelsExplicit: false,
   };
 }
 
-/** Full-resolution image messages for every tuple/modality. */
+/**
+ * Full-resolution image messages for every tuple/modality. Emitted with a
+ * dataUrl for serializability; the harness's __ic_send converts each to the
+ * real binary bytes+mime wire shape before dispatching to the bundle.
+ */
 export function imageMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   const msgs: Array<Record<string, unknown>> = [];
   spec.tupleNames.forEach((_n, tupleIndex) => {

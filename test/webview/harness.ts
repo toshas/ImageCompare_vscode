@@ -37,8 +37,20 @@ ${WEBVIEW_STYLES}
       setState: function (s) { window.__ic_state = s; }
     };
   };
-  // Inject an inbound extension->webview message.
+  // Inject an inbound extension->webview message. Image payloads may be given
+  // as a data: URL for convenience; they are converted here to the binary
+  // bytes+mime wire shape (see ExtensionMessage in src/types.ts) BEFORE
+  // dispatch, so the bundle sees exactly what the extension host sends.
   window.__ic_send = function (msg) {
+    if (msg && msg.type === 'image' && typeof msg.dataUrl === 'string' && !msg.bytes) {
+      var m = /^data:([^;,]+);base64,(.*)$/.exec(msg.dataUrl);
+      if (!m) throw new Error('__ic_send: image dataUrl must be base64');
+      var bin = atob(m[2]);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      msg = Object.assign({}, msg, { bytes: bytes, mime: m[1] });
+      delete msg.dataUrl;
+    }
     window.dispatchEvent(new MessageEvent('message', { data: msg }));
   };
   // Convenience: latest outbound message of a given type.

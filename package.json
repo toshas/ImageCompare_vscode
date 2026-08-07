@@ -2,7 +2,7 @@
   "name": "image-compare",
   "displayName": "ImageCompare",
   "description": "Compare multiple images (tuples) with multiple modalities",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "obukhovai",
   "license": "MIT",
   "icon": "icon.png",
@@ -35,9 +35,53 @@
       {
         "command": "imageCompare.openInCompare",
         "title": "Open in ImageCompare"
+      },
+      {
+        "command": "imageCompare.copyImage",
+        "title": "Copy Image"
+      },
+      {
+        "command": "imageCompare.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "imageCompare.revealInExplorer",
+        "title": "Reveal in Explorer"
+      },
+      {
+        "command": "imageCompare.hideModality",
+        "title": "Hide Modality"
+      },
+      {
+        "command": "imageCompare.showModality",
+        "title": "Show Modality"
+      },
+      {
+        "command": "imageCompare.saveSessionAs",
+        "title": "Save Session As…",
+        "icon": "$(save-as)"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "imageCompare.sessionFile",
+        "displayName": "ImageCompare",
+        "selector": [
+          {
+            "filenamePattern": "*.imagecompare"
+          }
+        ],
+        "priority": "default"
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "imageCompare.saveSessionAs",
+          "when": "activeCustomEditorId == 'imageCompare.sessionFile'",
+          "group": "navigation@1"
+        }
+      ],
       "explorer/context": [
         {
           "command": "imageCompare.openInCompare",
@@ -49,6 +93,59 @@
           "when": "!explorerResourceIsFolder && resourceExtname =~ /^\\.(png|jpg|jpeg|gif|bmp|webp|tiff|tif|ppmx)$/i",
           "group": "navigation@10"
         }
+      ],
+      "webview/context": [
+        {
+          "command": "imageCompare.copyImage",
+          "when": "webviewSection == 'imageCompareImage'",
+          "group": "1_imagecompare@1"
+        },
+        {
+          "command": "imageCompare.copyPath",
+          "when": "webviewSection == 'imageCompareImage' || webviewSection == 'imageComparePill'",
+          "group": "1_imagecompare@2"
+        },
+        {
+          "command": "imageCompare.revealInExplorer",
+          "when": "webviewSection == 'imageCompareImage' || webviewSection == 'imageComparePill'",
+          "group": "1_imagecompare@3"
+        },
+        {
+          "command": "imageCompare.hideModality",
+          "when": "webviewSection == 'imageComparePill' && !imageCompareHidden",
+          "group": "2_imagecompare@1"
+        },
+        {
+          "command": "imageCompare.showModality",
+          "when": "webviewSection == 'imageComparePill' && imageCompareHidden",
+          "group": "2_imagecompare@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "imageCompare.copyImage",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.revealInExplorer",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.hideModality",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.showModality",
+          "when": "false"
+        },
+        {
+          "command": "imageCompare.saveSessionAs",
+          "when": "activeCustomEditorId == 'imageCompare.sessionFile'"
+        }
       ]
     },
     "configuration": {
@@ -59,7 +156,7 @@
           "default": 100,
           "minimum": 50,
           "maximum": 200,
-          "description": "Size of thumbnails in the carousel (pixels)"
+          "description": "Resolution carousel thumbnails are decoded and cached at, in pixels (longest side, 2x this value). Not the on-screen size: that is derived from the carousel width divided by the number of modalities."
         },
         "imageCompare.prefetchCount": {
           "type": "number",
@@ -67,6 +164,11 @@
           "minimum": 0,
           "maximum": 10,
           "description": "Number of tuples to prefetch ahead and behind current position"
+        },
+        "imageCompare.keepZoomOnTupleChange": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the current zoom and pan when switching to another image tuple. When disabled, changing tuples resets the view. Zoom always persists across modality switches within a tuple."
         },
         "imageCompare.cacheMaxAgeDays": {
           "type": "number",
@@ -78,7 +180,7 @@
         "imageCompare.debug": {
           "type": "boolean",
           "default": false,
-          "description": "Enable debug logging (file watcher events, polling, etc.) in the webview developer console"
+          "description": "Enable debug logging. Watcher and sweep events ([IC-EXT]) go to the webview developer console (Help > Toggle Developer Tools); tuple-matching traces ([IC-MATCH]) go to the Extension Host output."
         }
       }
     }
@@ -89,7 +191,7 @@
     "watch": "webpack --watch",
     "package": "webpack --mode production --devtool hidden-source-map",
     "lint": "eslint src --ext ts",
-    "test": "npm run test:unit",
+    "test": "ts-node src/test/tupleMatching.test.ts && ts-node src/test/pngTextChunk.test.ts && ts-node src/test/sessionFile.test.ts && ts-node src/test/watcherLogic.test.ts && ts-node src/test/workPool.test.ts && ts-node src/test/ppmxParser.test.ts && ts-node src/test/modalityVisibility.test.ts && ts-node src/test/thumbPack.test.ts && ts-node src/test/wireFormat.test.ts",
     "test:unit": "vitest run --config test/vitest.config.ts",
     "test:unit:watch": "vitest --config test/vitest.config.ts",
     "test:webview": "playwright test --config test/webview/playwright.config.ts",
@@ -111,6 +213,7 @@
     "eslint": "^8.54.0",
     "mocha": "^10.8.2",
     "ts-loader": "^9.5.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.2",
     "vitest": "^2.1.8",
     "webpack": "^5.89.0",

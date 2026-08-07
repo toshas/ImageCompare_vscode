@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pngInjectText, pngReadText } from '../../src/thumbnailService';
+import { pngInjectText, pngReadText } from '../../src/pngText';
 import { makeSolidPng } from '../fixtures/synthetic';
 
 const KW = 'ImageCompare:CropRect';

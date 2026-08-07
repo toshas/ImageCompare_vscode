@@ -17,6 +17,8 @@ export interface IcState {
   tupleCount: number;
   modalityCount: number;
   modalityOrder: number[];
+  modalityPaths: string[];
+  hiddenModalities: number[];
   zoom: number;
   panX: number;
   panY: number;

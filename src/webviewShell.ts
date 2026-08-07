@@ -1,13 +1,7 @@
 /**
- * Single source of truth for the ImageCompare webview shell (styles + body).
- *
- * The two string constants below are injected verbatim from
- * imageCompareProvider.getHtmlContent so that BOTH the production panel and the
- * Playwright test harness (test/webview/harness) render an identical DOM.
- * Change the markup here and both consumers stay in sync.
- *
- * The \uXXXX escapes (arrows in the help modal / reorder buttons) are resolved
- * by these normal template literals, exactly as in the original inline HTML.
+ * Single source of truth for the ImageCompare webview shell (styles + body),
+ * rendered identically by the production panel (imageCompareProvider.getHtmlContent)
+ * and the Playwright test harness (test/webview/harness.ts).
  */
 
 export const WEBVIEW_STYLES = `* { margin: 0; padding: 0; box-sizing: border-box; }
@@ -257,10 +251,13 @@ body {
   white-space: nowrap;
   min-width: 0;
 }
+/* Direct #info child so flex reserves its width — nested under #status it got squeezed under the help button. */
 #status-info {
   flex-shrink: 0;
   white-space: nowrap;
+  color: var(--vscode-descriptionForeground, #888);
 }
+#status-info:empty { display: none; }
 
 .modality-btn {
   display: inline-block;
@@ -278,11 +275,52 @@ body {
   white-space: nowrap;
 }
 .modality-btn:hover { transform: scale(1.05); }
+
+/* Native title= tooltips drop on re-render and never reappear without leaving the pill, so pills use this instead. */
+#pill-tooltip {
+  position: fixed;
+  z-index: 200;
+  display: none;
+  max-width: min(70vw, 700px);
+  padding: 6px 9px;
+  border-radius: 5px;
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  color: var(--vscode-editorHoverWidget-foreground, #ccc);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+#pill-tooltip.visible { display: block; }
+#copy-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 201;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: var(--vscode-notifications-background, #2a2a2a);
+  color: var(--vscode-notifications-foreground, #ccc);
+  border: 1px solid var(--vscode-panel-border, #444);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+#copy-toast.visible { opacity: 1; }
 .modality-btn.active {
   opacity: 1;
   box-shadow: 0 0 0 2px var(--vscode-focusBorder, #fff);
 }
 .modality-btn.inactive { opacity: 0.4; }
+/* Hidden modality: grayed but clickable; keyboard cycling skips it (docs/session-files.md: hidden-is-presentation-only). */
+.modality-btn.hidden-modality { opacity: 0.25; filter: grayscale(1); }
+.modality-btn.hidden-modality.active { opacity: 0.55; }
 
 #reorder-buttons {
   display: flex;
@@ -361,6 +399,7 @@ body {
 }
 
 /* Carousel styles */
+/* Not a native scroll container: the wall is transform-positioned and steps land whole row heights, keeping the grid pixel-stationary (docs/loading-architecture.md). */
 #carousel {
   display: none;
   position: absolute;
@@ -369,30 +408,36 @@ body {
   bottom: 0;
   background: var(--vscode-sideBar-background, rgba(0, 0, 0, 0.85));
   border-right: 1px solid var(--vscode-panel-border, #333);
-  overflow-y: overlay;
-  overflow-x: hidden;
+  overflow: hidden;
   z-index: 10;
 }
 #carousel.active { display: block; }
-#carousel::-webkit-scrollbar { width: 6px; }
-#carousel::-webkit-scrollbar-track { background: transparent; }
-#carousel::-webkit-scrollbar-thumb {
-  background: transparent;
+#carousel-wall { position: relative; will-change: transform; }
+#carousel-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 6px;
   border-radius: 3px;
-  transition: background 0.3s;
-}
-#carousel:hover::-webkit-scrollbar-thumb,
-#carousel.scrolling::-webkit-scrollbar-thumb {
   background: var(--vscode-scrollbarSlider-activeBackground, #444);
+  opacity: 0;
+  transition: opacity 0.3s;
+  z-index: 2;
 }
+#carousel:hover #carousel-thumb,
+#carousel.scrolling #carousel-thumb { opacity: 1; }
 
+/* 1px top+bottom on adjacent rows = 2px vertical space, matching the 2px column gap — an equidistant wall, no separator lines. */
+/* No transitions on selection styling: the wall jumps instantly, so a fading highlight pulses the center on every step. */
+/* Absolutely positioned: rows are a recycled pool placed at tupleIndex * rowHeight inside the virtual wall. */
 .carousel-row {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
   gap: 2px;
-  padding: 4px 6px;
+  padding: 1px 6px;
   cursor: pointer;
-  border-bottom: 1px solid var(--vscode-panel-border, #222);
-  transition: background 0.15s;
 }
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
@@ -402,7 +447,6 @@ body {
   background: #111;
   border-radius: 3px;
   border: 2px solid transparent;
-  transition: border-color 0.15s, opacity 0.15s;
   opacity: 0.6;
   flex-shrink: 0;
 }
@@ -431,8 +475,16 @@ body {
 }
 
 /* Winner voting indicators */
+/* Sized by one CSS variable so a resize drag writes one style, not one per tile. */
 .carousel-thumb-container {
   position: relative;
+  width: var(--thumb-size, 50px);
+  height: var(--thumb-size, 50px);
+  flex-shrink: 0;
+}
+.carousel-thumb-container .carousel-thumb {
+  width: 100%;
+  height: 100%;
 }
 .winner-circle {
   position: absolute;
@@ -562,15 +614,18 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
       <button id="reorder-right" class="reorder-btn" title="Move modality right (])">\u2192</button>
     </div>
     <div id="modality-selector"></div>
-    <span id="status"><span id="status-name">Loading...</span><span id="status-info"></span></span>
+    <span id="status"><span id="status-name">Loading...</span></span>
+    <span id="status-info"></span>
     <button id="help-btn" title="Keyboard shortcuts">?</button>
   </div>
+  <div id="pill-tooltip"></div>
+  <div id="copy-toast"></div>
 
   <div id="help-modal">
     <div class="modal-content">
       <h3>Keyboard Shortcuts</h3>
       <table>
-        <tr><td>\u2190 \u2192</td><td>Switch modality</td></tr>
+        <tr><td>\u2190 \u2192</td><td>Switch modality (skips hidden)</td></tr>
         <tr><td>\u2191 \u2193</td><td>Previous/next tuple</td></tr>
         <tr><td>Space</td><td>Flip to previous modality (hold)</td></tr>
         <tr><td>1-9</td><td>Jump to modality N</td></tr>
@@ -578,8 +633,12 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Enter</td><td>Toggle winner for current modality</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
+        <tr><td>Right-click</td><td>Copy path / reveal / copy image; hide or show a modality (on its pill)</td></tr>
+        <tr><td>Ctrl+C</td><td>Copy current image (when no text is selected)</td></tr>
+        <tr><td>Ctrl+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
-        <tr><td>Esc</td><td>Reset zoom / cancel crop</td></tr>
+        <tr><td>Del / Backspace</td><td>Delete current tuple files (permanent!)</td></tr>
+        <tr><td>Esc</td><td>Reset zoom / cancel crop / close this help</td></tr>
       </table>
       <div style="margin-top: 20px;">
         <button class="btn btn-primary" id="close-help-btn">Close</button>
@@ -587,6 +646,7 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
     </div>
   </div>
 `;
+
 
 export interface WebviewHtmlOptions {
   /** CSP source for images (webview.cspSource in production). */
@@ -597,17 +657,14 @@ export interface WebviewHtmlOptions {
   scriptUri: string;
 }
 
-/**
- * Render the full webview HTML document. Production calls this; the test
- * harness builds its own head/stub and reuses WEBVIEW_STYLES + WEBVIEW_BODY.
- */
+/** Render the full webview HTML document; the test harness builds its own head/stub and reuses WEBVIEW_STYLES + WEBVIEW_BODY. */
 export function renderWebviewHtml(opts: WebviewHtmlOptions): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${opts.cspSource} data:; script-src 'nonce-${opts.nonce}'; style-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${opts.cspSource} data: blob:; script-src 'nonce-${opts.nonce}'; style-src 'unsafe-inline';">
   <title>ImageCompare</title>
   <style>
 ${WEBVIEW_STYLES}

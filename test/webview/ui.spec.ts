@@ -38,14 +38,15 @@ test.describe('pointer interactions', () => {
   test('clicking a carousel thumbnail navigates to that tuple', async ({ page }) => {
     await loadInited(page);
     expect((await getState(page)).currentTupleIndex).toBe(0);
-    // Row 2 = scene_002; click its first thumbnail.
-    await page.locator('.carousel-row').nth(2).locator('.carousel-thumb').first().click();
+    // The carousel is a recycled pool of absolutely-positioned rows; DOM order
+    // is pool order, so address rows by their bound tuple via data-tuple-index.
+    await page.locator('.carousel-row[data-tuple-index="2"]').locator('.carousel-thumb').first().click();
     await expect.poll(async () => (await getState(page)).currentTupleIndex).toBe(2);
   });
 
   test('clicking a carousel winner circle posts setWinner', async ({ page }) => {
     await loadInited(page);
-    await page.locator('.carousel-row').nth(0).locator('.winner-circle').nth(1).click();
+    await page.locator('.carousel-row[data-tuple-index="0"]').locator('.winner-circle').nth(1).click();
     const msg = await lastOutbound(page, 'setWinner');
     expect(msg).not.toBeNull();
     expect(msg.tupleIndex).toBe(0);

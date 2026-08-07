@@ -11,6 +11,23 @@ export function isImageFile(filename: string): boolean {
   return IMAGE_EXTENSIONS.includes(ext);
 }
 
+// Branded modality index spaces — compile-time only, erased at runtime (docs/tuple-matching.md trap 2).
+export type OriginalModalityIndex = number & { readonly __brand: 'OriginalModalityIndex' };
+export type DisplayModalityIndex = number & { readonly __brand: 'DisplayModalityIndex' };
+// Tuple index is a single space (no display/original split); the brand guards it against modality indices.
+export type TupleIndex = number & { readonly __brand: 'TupleIndex' };
+// Mint a brand at a real boundary (a scan position, or a wire value known to be original/display/a tuple).
+export const asOriginal = (n: number): OriginalModalityIndex => n as OriginalModalityIndex;
+export const asDisplay = (n: number): DisplayModalityIndex => n as DisplayModalityIndex;
+export const asTuple = (n: number): TupleIndex => n as TupleIndex;
+// The only sanctioned conversions: modalityOrder is the one bridge (order[display] = original).
+export function toOriginal(display: DisplayModalityIndex, order: readonly OriginalModalityIndex[]): OriginalModalityIndex {
+  return order[display];
+}
+export function toDisplay(original: OriginalModalityIndex, order: readonly OriginalModalityIndex[]): DisplayModalityIndex {
+  return asDisplay(order.indexOf(original));
+}
+
 // Represents a single image file
 export interface ImageFile {
   uri: vscode.Uri;
@@ -28,6 +45,11 @@ export interface ImageTuple {
 export interface ScanResult {
   modalities: string[];
   tuples: ImageTuple[];
+  /** Selection shape. Ask this, never `isMultiTupleMode`, for mode (docs/session-files.md: mode-is-explicit). */
+  mode: 1 | 2 | 3;
+  /** What the scan actually used: the base dir (1), the modality dirs (2), or the files (3). Never the raw input — paths that fail to stat are dropped. */
+  roots: vscode.Uri[];
+  /** Purely "more than one row" — drives carousel layout, never a mode decision. */
   isMultiTupleMode: boolean;
 }
 
@@ -35,8 +57,8 @@ export interface ScanResult {
 export interface ImageInfo {
   name: string;
   modality: string;
-  tupleIndex: number;
-  modalityIndex: number;
+  tupleIndex: TupleIndex;
+  modalityIndex: OriginalModalityIndex;
 }
 
 // Tuple info sent to webview
@@ -45,43 +67,41 @@ export interface TupleInfo {
   images: ImageInfo[];
 }
 
-// Winner results data (for persistence)
-export interface WinnerResults {
-  winners: Map<string, string>; // tupleKey -> modality name
-}
-
 // Messages from WebView to Extension
 export type WebViewMessage =
   | { type: 'ready' }
-  | { type: 'requestThumbnails'; tupleIndices: number[] }
-  | { type: 'requestImage'; tupleIndex: number; modalityIndex: number }
-  | { type: 'navigateTo'; tupleIndex: number }
-  | { type: 'setCurrentTuple'; tupleIndex: number }
-  | { type: 'tupleFullyLoaded'; tupleIndex: number }
-  | { type: 'setWinner'; tupleIndex: number; modalityIndex: number | null } // null = clear winner
-  | { type: 'cropImages'; tupleIndex: number; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
-  | { type: 'deleteTuple'; tupleIndex: number }
-  | { type: 'exportPptx'; tupleIndices: number[]; winnerModalityIndices: (number | null)[]; modalityOrder: number[] }
+  | { type: 'requestThumbnails'; tupleIndices: TupleIndex[] }
+  // sibling: off-screen modality (lower priority). forceReload: bypass cached bytes so a failed decode can retry.
+  | { type: 'requestImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; sibling?: boolean; forceReload?: boolean }
+  | { type: 'setCurrentTuple'; tupleIndex: TupleIndex }
+  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex }
+  | { type: 'setWinner'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null } // null = clear winner
+  | { type: 'cropImages'; tupleIndex: TupleIndex; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
+  | { type: 'deleteTuple'; tupleIndex: TupleIndex }
+  | { type: 'exportPptx'; tupleIndices: TupleIndex[]; winnerModalityIndices: (OriginalModalityIndex | null)[]; modalityOrder: OriginalModalityIndex[] }
+  | { type: 'saveSessionAs' } // Ctrl/Cmd+S in the webview; the title-bar button routes through the command instead
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
 export type ExtensionMessage =
-  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; config: WebViewConfig; winners: Record<number, number>; votingEnabled: boolean }
-  | { type: 'thumbnail'; tupleIndex: number; modalityIndex: number; dataUrl: string }
-  | { type: 'thumbnailError'; tupleIndex: number; modalityIndex: number; error: string }
-  | { type: 'image'; tupleIndex: number; modalityIndex: number; dataUrl: string; width: number; height: number }
-  | { type: 'imageError'; tupleIndex: number; modalityIndex: number; error: string }
+  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean }
+  | { type: 'thumbnail'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; dataUrl: string }
+  | { type: 'thumbnailError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
+  | { type: 'image'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string; width: number; height: number } // binary, not base64: string payloads cost ×1.33 and GC pauses
+  | { type: 'imageError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
   | { type: 'thumbnailProgress'; current: number; total: number }
-  | { type: 'fileDeleted'; tupleIndex: number; modalityIndex: number }
-  | { type: 'fileRestored'; tupleIndex: number; modalityIndex: number; imageInfo?: ImageInfo }
-  | { type: 'tupleDeleted'; tupleIndex: number }
-  | { type: 'tupleAdded'; tuple: TupleInfo; tupleIndex: number }
-  | { type: 'modalityAdded'; modality: string; modalityIndex: number }
-  | { type: 'modalityRemoved'; modalityIndex: number }
-  | { type: 'winnerUpdated'; tupleIndex: number; modalityIndex: number | null }
-  | { type: 'winnersReset'; winners: Record<number, number> } // For when results.txt is regenerated
-  | { type: 'cropComplete'; tupleIndex: number; count: number; paths: string[] }
-  | { type: 'cropError'; tupleIndex: number; error: string }
+  | { type: 'copyImage' } // context-menu Copy Image: the webview owns the only image-capable clipboard
+  | { type: 'toggleModalityHidden'; modalityIndex: OriginalModalityIndex } // context-menu Hide/Show Modality; state lives in the webview
+  | { type: 'fileDeleted'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex }
+  | { type: 'fileRestored'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; imageInfo?: ImageInfo }
+  | { type: 'tupleDeleted'; tupleIndex: TupleIndex }
+  | { type: 'tupleAdded'; tuple: TupleInfo; tupleIndex: TupleIndex }
+  | { type: 'modalityAdded'; modality: string; modalityPath: string; modalityColors: string[]; modalityIndex: OriginalModalityIndex }
+  | { type: 'modalityRemoved'; modalityIndex: OriginalModalityIndex }
+  | { type: 'winnerUpdated'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null }
+  | { type: 'winnersReset'; winners: Record<number, OriginalModalityIndex> } // For when results.txt is regenerated
+  | { type: 'cropComplete'; tupleIndex: TupleIndex; count: number; paths: string[] }
+  | { type: 'cropError'; tupleIndex: TupleIndex; error: string }
   | { type: 'pptxComplete'; path: string }
   | { type: 'pptxError'; error: string };
 
@@ -89,11 +109,14 @@ export type ExtensionMessage =
 export interface WebViewConfig {
   thumbnailSize: number;
   prefetchCount: number;
+  keepZoomOnTupleChange: boolean;
 }
 
 // Loaded image data (cached in extension)
+/** Extension-side full-image cache entry: raw encoded bytes, not base64 — see docs/loading-architecture.md. */
 export interface LoadedImage {
-  dataUrl: string;
+  bytes: Uint8Array;
+  mime: string;
   width: number;
   height: number;
 }

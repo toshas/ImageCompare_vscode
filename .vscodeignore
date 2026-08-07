@@ -5,19 +5,14 @@
 src/**
 out/**
 demo.gif
-# Exclude most node_modules but keep sharp (native module)
+# Un-ignores below are what ship Sharp; dropping any, incl. transitive deps, fails in the VSIX only (docs/image-backends.md: vsix-modules-hand-assembled).
+# sharp@0.34 needs @img/colour (covered by @img/**), detect-libc, semver; @emnapi is the wasm32 target's runtime.
 node_modules/**
 !node_modules/sharp/**
 !node_modules/@img/**
 !node_modules/@emnapi/**
 !node_modules/detect-libc/**
 !node_modules/semver/**
-!node_modules/color/**
-!node_modules/color-convert/**
-!node_modules/color-name/**
-!node_modules/color-string/**
-!node_modules/simple-swizzle/**
-!node_modules/is-arrayish/**
 
 # Config files
 .gitignore
@@ -29,13 +24,18 @@ package-lock.json
 *.map
 **/*.map
 
-# Development docs
+# Development docs and tooling (must not ship to users in the VSIX).
+# skills/imagecompare/ is deliberately NOT excluded: it ships so a user's agent can drive the extension.
+skills/README.md
+skills/verify-docs/**
 CLAUDE.md
+docs/**
+scripts/**
+.github/**
 TESTING.md
 
 # Testing bed and dev tooling (not shipped)
 test/**
-.github/**
 .dashboard-data/**
 .vscode-test.mjs
 
