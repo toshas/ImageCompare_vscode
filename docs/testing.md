@@ -88,11 +88,13 @@ Every other suite imports the real source and is real coverage.
 
 ## Manual checks
 
-Failures here are invisible to CI, so they are worth walking before a release:
+Failures here are invisible to CI, so they are worth walking before a release. Two former entries
+are automated now and dropped from the walk: three-mode scanning/commands run in the headless
+integration layer (`npm run test:integration`), and placeholder rendering plus the webview
+interactions run in the Playwright layer (`npm run test:webview`) — both on every push via
+`.github/workflows/test.yml`. What remains manual:
 
-1. All three modes (base dir / dir-per-modality / file list) with add, delete and modify.
 2. Rename detection — a quick delete+create must move the image, not drop the row.
-3. Partial tuples (a modality missing an image) render a placeholder, not a hole.
 4. A remote filesystem (SSH, WSL) or a FUSE/network mount, where the watchers do not fire and the
    existence sweep is the only detector.
 5. In base-dir mode, add a modality directory while the comparison is open — both by `mkdir` then
