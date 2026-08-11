@@ -35,7 +35,9 @@ export class Uri {
   }
 
   get fsPath(): string {
-    return this.path;
+    // Mirror real vscode: a drive-letter path '/C:/x' maps to a filesystem path 'C:/x'
+    // (node's fs accepts forward slashes on Windows); POSIX paths pass through unchanged.
+    return /^\/[a-zA-Z]:/.test(this.path) ? this.path.slice(1) : this.path;
   }
 
   toString(): string {
@@ -59,7 +61,7 @@ export const workspace = {
   }),
   fs: {
     stat: async (uri: Uri): Promise<{ type: FileType; ctime: number; mtime: number; size: number }> => {
-      const s = await nodeFs.promises.stat(uri.path);
+      const s = await nodeFs.promises.stat(uri.fsPath);
       return {
         type: s.isDirectory() ? FileType.Directory : FileType.File,
         ctime: s.ctimeMs,
@@ -68,7 +70,7 @@ export const workspace = {
       };
     },
     readDirectory: async (uri: Uri): Promise<Array<[string, FileType]>> => {
-      const entries = await nodeFs.promises.readdir(uri.path, { withFileTypes: true });
+      const entries = await nodeFs.promises.readdir(uri.fsPath, { withFileTypes: true });
       return entries.map((e): [string, FileType] => [
         e.name,
         e.isDirectory() ? FileType.Directory : FileType.File,
