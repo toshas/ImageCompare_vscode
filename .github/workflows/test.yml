@@ -81,9 +81,17 @@ jobs:
         run: |
           node -e "require('@vscode/test-electron').downloadAndUnzipVSCode()"
           xattr -dr com.apple.quarantine .vscode-test || true
-          BIN=$(find .vscode-test -type f -path "*Contents/MacOS/Electron" | head -1)
-          if [ -z "$BIN" ]; then echo "Electron binary missing after download:"; find .vscode-test -maxdepth 4 | head -50; exit 1; fi
-          chmod +x "$BIN"
+          APP=$(find .vscode-test -maxdepth 2 -name "*.app" -type d | head -1)
+          echo "App: $APP"; ls -la "$APP/Contents/MacOS/" || true
+          # vscode-test spawns Contents/MacOS/Electron; if the bundle names its executable differently, bridge it.
+          EXE=$(defaults read "$PWD/$APP/Contents/Info" CFBundleExecutable 2>/dev/null || echo Electron)
+          echo "CFBundleExecutable: $EXE"
+          if [ ! -e "$APP/Contents/MacOS/Electron" ] && [ -f "$APP/Contents/MacOS/$EXE" ]; then
+            ln -s "$EXE" "$APP/Contents/MacOS/Electron" && echo "bridged Electron -> $EXE"
+          fi
+          BIN=$(find .vscode-test -path "*Contents/MacOS/Electron" | head -1)
+          if [ -z "$BIN" ]; then echo "Electron binary missing after download (full MacOS/ and Frameworks/ listing above)"; exit 1; fi
+          chmod +x "$APP/Contents/MacOS/$EXE" "$BIN" 2>/dev/null || true
           echo "Electron OK: $BIN"
 
       - name: Integration tests (macOS / Windows)
