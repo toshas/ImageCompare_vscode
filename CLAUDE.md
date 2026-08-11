@@ -154,13 +154,12 @@ npm run compile                     # both webpack targets
 ```
 
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the two
-checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs both
-`tsc --noEmit` configs on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
+checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs all three
+`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
 step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
-`npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. And Vitest
-transpiles with esbuild, type-checking nothing: `test/unit/` is excluded from both tsconfigs, so a
-type error in a test file is caught by no gate anywhere — it surfaces only if it changes runtime
-behaviour. Adding a test means also adding its mutation to `scripts/mutation-check.mjs` — a test
+`npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
+transpiles with esbuild and type-checks nothing; `tsconfig.test.json` in the gates job is what
+catches test-file type errors. Adding a test means also adding its mutation to `scripts/mutation-check.mjs` — a test
 nothing can break is decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
 skill.
 

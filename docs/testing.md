@@ -11,9 +11,10 @@ runner now.
 Every suite imports the real shipped module. Suites for `vscode`-free code (`sessionFile`,
 `watcherLogic`, `workPool`, `ppmxParser`, `modalityVisibility`, `thumbPack`, `wireFormat`) need
 nothing but Node; the rest (`tupleMatching`, `pngTextChunk`, …) reach `vscode`-importing code
-through the `vscode` mock alias in `test/vitest.config.ts`. One caveat Vitest brings: suites are
-transpiled by esbuild, **not type-checked** — no `tsc` config includes `test/`, so a type error in a
-test file surfaces only if it changes runtime behaviour.
+through the `vscode` mock alias in `test/vitest.config.ts`. Vitest transpiles with esbuild and
+type-checks nothing itself; `tsconfig.test.json` closes that gap — `npx tsc --noEmit -p
+tsconfig.test.json` runs in the CI gates job and covers all of `test/` except `test/integration/`,
+which `test:integration` type-checks through its own tsconfig.
 
 ```bash
 npm test                                                          # the whole unit layer
