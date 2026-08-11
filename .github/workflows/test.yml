@@ -72,9 +72,20 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:integration
 
-      # macOS ARM runners: @vscode/test download reports success but the Electron binary is not
-      # spawnable (ENOENT) — a known runner/extraction issue. Unit+webview still run on macOS;
-      # integration coverage there is deliberately skipped until the upstream issue is fixed.
-      - name: Integration tests (Windows)
-        if: runner.os == 'Windows'
+      # macOS ARM runners: the download can report success while the Electron binary is not
+      # spawnable (ENOENT). Harness robustness, not a hack: pre-download, then verify/repair the
+      # app bundle (quarantine xattr, exec bit) and fail HERE with diagnostics if the binary is
+      # absent — so the actual test step only ever runs against a spawnable VS Code.
+      - name: Pre-download and repair VS Code (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          node -e "require('@vscode/test-electron').downloadAndUnzipVSCode()"
+          xattr -dr com.apple.quarantine .vscode-test || true
+          BIN=$(find .vscode-test -type f -path "*Contents/MacOS/Electron" | head -1)
+          if [ -z "$BIN" ]; then echo "Electron binary missing after download:"; find .vscode-test -maxdepth 4 | head -50; exit 1; fi
+          chmod +x "$BIN"
+          echo "Electron OK: $BIN"
+
+      - name: Integration tests (macOS / Windows)
+        if: runner.os != 'Linux'
         run: npm run test:integration
