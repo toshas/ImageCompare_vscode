@@ -36,7 +36,7 @@ a red test blocks publishing to both marketplaces.
 | `pngTextChunk` | real source (`pngText.ts`) | tEXt round-trip, the `x,y,w,h,srcW,srcH` crop format, PNG structure survival, CRC-32 against a full-table probe |
 | `workPool` | real source | Concurrency cap (incl. the reject path), priority + FIFO/seq order, cancellation, re-entrancy, error propagation |
 | `ppmxParser` | real source | All four magic x flags combinations, size-based flags detection, normalization, malformed input |
-| `modalityVisibility` | real source | Hidden-pill keyboard cycling: skip, run-skip, non-wrapping edges, all-hidden stay |
+| `modalityVisibility` | real source | Hidden-pill keyboard cycling: skip, run-skip, non-wrapping edges, all-hidden stay; the tiny-tile mouse-vote guard threshold |
 | `thumbPack` | real source | Packfile round-trip, uuid pairing rejection, truncation/overflow/duplicate rejection |
 | `wireFormat` | real source | Image payload normalization: Buffer→plain Uint8Array (species-safe), offset views copied tight, structuredClone survival |
 
@@ -102,6 +102,9 @@ interactions run in the Playwright layer (`npm run test:webview`) — both on ev
    appear without reopening. The base glob is non-recursive, so no event fires for the images inside
    it — the directory entry itself is the only event, and where neither watcher reports it the
    existence sweep is what picks it up, so allow a sweep interval before calling it a failure.
+   Do this once with a custom pill order ([ ] rearrangement) and a non-first modality focused: the
+   arrangement must survive, focus must stay put, and the new column must land beside its
+   original-order neighbour (docs/tuple-matching.md: rearrangement-survives-insert applies).
 6. Carousel feel with a many-modality session (10+): it opens with every column visible; the resize
    handle tracks continuously — each drag frame runs a real refit of the virtualized row pool, so
    tiles stay crisp throughout the drag (no scale-preview softness) and the focused row holds its

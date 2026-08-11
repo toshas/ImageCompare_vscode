@@ -125,7 +125,7 @@ image_002 = ground_truth
 image_003 = model_v1
 ```
 
-Win counts appear in the status bar next to each modality name.
+Win counts appear in the status bar next to each modality name. When carousel tiles are very small (many modalities), the tile's vote dot stops responding to clicks so a navigation click can never mis-vote — use `Enter`.
 
 ### Crop Tool
 

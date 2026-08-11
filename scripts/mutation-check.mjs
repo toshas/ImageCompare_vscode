@@ -212,6 +212,22 @@ const mutations = [
     killedBy: 'Test 5/6 (overflowing and header-pointing entries rejected)'
   },
   {
+    name: 'modalityVisibility: insert anchor broken (new modality always lands first)',
+    file: 'src/webview/modalityVisibility.ts',
+    suite: 'src/test/modalityVisibility.test.ts',
+    find: 'const anchor = w > 0 ? shifted.indexOf(w - 1) + 1 : Math.max(0, shifted.indexOf(w + 1));',
+    replace: 'const anchor = 0;',
+    killedBy: 'rearrangement test (new column lands beside its original predecessor)'
+  },
+  {
+    name: 'modalityVisibility: tiny-tile vote guard inverted (12px tiles vote again)',
+    file: 'src/webview/modalityVisibility.ts',
+    suite: 'src/test/modalityVisibility.test.ts',
+    find: 'return tileSize >= 3 * WINNER_CIRCLE_PX;',
+    replace: 'return true;',
+    killedBy: 'mouse-vote guard test (below 3x must not be votable)'
+  },
+  {
     name: 'modalityVisibility: hidden pills no longer skipped by cycling',
     file: 'src/webview/modalityVisibility.ts',
     suite: 'src/test/modalityVisibility.test.ts',
