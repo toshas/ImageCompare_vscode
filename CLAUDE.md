@@ -37,10 +37,10 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
   code beside it, and it is invisible to anyone reading the design. Put the explanation in the
   relevant `docs/` file and leave a one-line comment — ideally naming the doc. Applies to JSDoc too:
   state the contract, don't narrate the rationale. `node scripts/comment-lint.mjs` enforces it (a run
-  of 2+ consecutive `//` lines fails) and runs in CI. It reads only `src/**/*.ts`: `src/test/` is
-  exempt, since a comment explaining why a fixture triggers an edge case is correctly co-located with
-  the fixture, and `scripts/`, `webpack.config.js` and `.github/` are outside its scope entirely — the
-  rule there is convention, not a gate. Banner (`// ----`) and directive (`// eslint-`, `// @ts-`)
+  of 2+ consecutive `//` lines fails) and runs in CI. It reads only `src/**/*.ts`; tests live under
+  `test/`, outside that scope, which is the exemption they need — a comment explaining why a fixture
+  triggers an edge case is correctly co-located with the fixture. `scripts/`, `webpack.config.js` and
+  `.github/` are outside its scope entirely — the rule there is convention, not a gate. Banner (`// ----`) and directive (`// eslint-`, `// @ts-`)
   runs are exempt too.
 
 ## Architecture Overview
@@ -51,7 +51,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
 - **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
-- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `src/test/watcherLogic.test.ts`
+- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
 - **`workPool.ts`** - Pure: the bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
 - **`webviewShell.ts`** - The webview's static HTML shell (styles + body), single source of truth for the production panel and the Playwright test harness (`test/webview/harness.ts`)
@@ -105,12 +105,12 @@ npm run compile      # One-off build
 
 ## Testing
 
-Seven `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
-script in `package.json` is the list CI executes, and `docs/testing.md` repeats it only to show the
-per-suite invocation. What each suite pins, what nothing covers, the manual checks worth walking
-before a release, and `imageCompare.debug` logging: `docs/testing.md`.
+One runner: Vitest. `npm test` runs the whole unit layer (`test/unit/`, via
+`test/vitest.config.ts`), and CI gates the build on it; `test:unit` is an alias of the same run.
+What each suite pins, what nothing covers, the manual checks worth walking before a release, and
+`imageCompare.debug` logging: `docs/testing.md`.
 
-On top of the ts-node suites sits the multi-layer testing bed described in
+The unit layer is Layer 1 of the multi-layer testing bed described in
 **[TESTING.md](TESTING.md)** (runs in its own CI workflow, `.github/workflows/test.yml`):
 
 ```bash
@@ -125,11 +125,10 @@ npm run test:all          # everything
 1. Webview DOM/interaction behavior → a Playwright spec in `test/webview/` (drive via
    `loadInited`/`__ic_send`, assert via `window.__ic_test` and locators).
 2. Real VS Code API behavior (fs scanning, commands, activation) → `test/integration/`.
-3. Pure logic → Vitest in `test/unit/` importing the real module — **except** an invariant-grade
-   rule whose silent breakage corrupts data or violates a documented contract: those go in the
-   ts-node suites WITH a mutation entry in `scripts/mutation-check.mjs`, because only that harness
-   proves the test bites. Matcher tests go in `test/unit/`, importing the real
-   `matchTuplesWithTrie` — full stop.
+3. Pure logic → Vitest in `test/unit/` importing the real module. An invariant-grade rule whose
+   silent breakage corrupts data or violates a documented contract additionally gets a mutation
+   entry in `scripts/mutation-check.mjs`, because only that harness proves the test bites. Matcher
+   tests go in `test/unit/`, importing the real `matchTuplesWithTrie` — full stop.
 Demos (`test/demos/`) are not tests: add one only when a new user-visible flow is worth a gallery
 clip; bug fixes need a test, never a demo.
 
@@ -147,7 +146,7 @@ clip; bug fixes need a test, never a demo.
 
 ```bash
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
-npm test                            # the suites listed in package.json
+npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
 node scripts/comment-lint.mjs       # no multi-line // blocks in production code
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
@@ -155,12 +154,14 @@ npm run compile                     # both webpack targets
 ```
 
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the two
-checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs both `tsc --noEmit` configs on every push/PR; the publish-path `test` job still has **no `tsc --noEmit` step** of its own. Type errors
-still turn CI red today — ts-loader type-checks both tsconfigs during `npm run compile`, `ts-node`
-type-checks each suite, and between them every `src/` file is covered — but that is a side effect of
-two other steps, so a file neither bundles nor a suite imports would go unchecked in CI. Adding a
-test means also adding its mutation to `scripts/mutation-check.mjs` — a test nothing can break is
-decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
+checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs both
+`tsc --noEmit` configs on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
+step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
+`npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. And Vitest
+transpiles with esbuild, type-checking nothing: `test/unit/` is excluded from both tsconfigs, so a
+type error in a test file is caught by no gate anywhere — it surfaces only if it changes runtime
+behaviour. Adding a test means also adding its mutation to `scripts/mutation-check.mjs` — a test
+nothing can break is decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
 skill.
 
 **The copy era is over.** `tupleMatching` and `pngTextChunk` were once ts-node suites testing
@@ -175,9 +176,9 @@ this suite has passed with a tie-break inverted and with the row sort reversed. 
 from outside the implementation; comparing the code to itself proves nothing. See `docs/testing.md`.
 
 > The **Layer 1** Vitest tests in `test/unit/` (`tupleMatching.test.ts`,
-> `pngTextChunk.test.ts`) are now the *only* pinning for the matcher and the PNG
+> `pngTextChunk.test.ts`) are the *only* pinning for the matcher and the PNG
 > tEXt writer — the old ts-node copies are deleted, and the mutation gate kills
-> through `vitest run` for these suites. Run with `npm run test:unit`.
+> every suite through `vitest run`. Run with `npm test`.
 
 ### Feature Coverage Dashboard
 

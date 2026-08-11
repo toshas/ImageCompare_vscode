@@ -5,7 +5,7 @@ How ImageCompare turns bytes into pixels, and the traps in the fallback chain.
 Code: `sharpLoader.ts` (`getSharp`, the CPU workaround), `thumbnailService.ts` (`getJimp`,
 `createSharpInstance`, `createJimpImage`), `ppmxParser.ts`, plus two packaging inputs —
 `webpack.config.js`/`.vscodeignore` and `.github/workflows/publish.yml`. Pinned by
-`src/test/ppmxParser.test.ts` (the decode half only) and `src/test/thumbPack.test.ts` (the packfile
+`test/unit/ppmxParser.test.ts` (the decode half only) and `test/unit/thumbPack.test.ts` (the packfile
 wire format); see [Testing](#testing).
 
 ## The intended chain
@@ -163,9 +163,9 @@ and either falls through to the per-entry path.
 
 ## Testing
 
-Of the ts-node suites `publish.yml` gates on (`docs/testing.md`), only `ppmxParser.test.ts` (the pure
-decode half) and `thumbPack.test.ts` (the packfile wire format, importing the real `thumbPack.ts`)
-touch this subsystem. The Vitest suite `test/unit/pngTextChunk.test.ts` uses Sharp to mint a fixture
+Of the unit suites `publish.yml` gates on (`docs/testing.md`), only `test/unit/ppmxParser.test.ts`
+(the pure decode half) and `test/unit/thumbPack.test.ts` (the packfile wire format, importing the
+real `thumbPack.ts`) touch this subsystem. `test/unit/pngTextChunk.test.ts` uses Sharp to mint a fixture
 PNG and re-read it, so a native Sharp must load for that one test to run — but that exercises Sharp
 incidentally, not the loader or the tiers. Nothing tests Jimp or `sharpLoader.ts`, so the fallback chain is
 verified by hand or not at all. `sharpLoader.ts` is ordinary bundled source — of the npm packages only `sharp`

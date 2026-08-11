@@ -40,7 +40,7 @@ jobs:
       - name: Check comment length
         run: node scripts/comment-lint.mjs
 
-      # One list of suites, in package.json — a second copy here would silently go stale.
+      # The test command is defined once, in package.json — a copy here would silently go stale.
       - name: Run tests
         run: npm test
 

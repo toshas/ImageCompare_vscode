@@ -19,9 +19,9 @@ const repoRoot = join(scriptDir, '..');
 
 /**
  * Each mutation names the file it edits and the suite that must kill it. Every
- * suite — ts-node and Vitest alike — imports the real source, so every mutation
- * hits src/*. Suites under test/unit/ are run through Vitest (the tuple-matching
- * and pngText mutations are killed there; the old in-test copies are gone).
+ * suite imports the real source, so every mutation hits src/*. All suites live
+ * under test/unit/ and are run through Vitest (the tuple-matching and pngText
+ * mutations are killed there; the old in-test copies are gone).
  */
 const mutations = [
   // ── Tuple matching: the Vitest suite imports the real fileService.ts ──
@@ -70,7 +70,7 @@ const mutations = [
   {
     name: 'ppmx: size-based flags guard weakened (empty line accepted)',
     file: 'src/ppmxParser.ts',
-    suite: 'src/test/ppmxParser.test.ts',
+    suite: 'test/unit/ppmxParser.test.ts',
     find: 'const looksLikeFlags = flags.length > 0 && /^[\\x20-\\x7e]+$/.test(flags);',
     replace: 'const looksLikeFlags = /^[\\x20-\\x7e]*$/.test(flags);',
     killedBy: 'Test 11 (a 0x0A first pixel must not be eaten as an empty flags line)'
@@ -78,7 +78,7 @@ const mutations = [
   {
     name: 'ppmx: header magic check removed',
     file: 'src/ppmxParser.ts',
-    suite: 'src/test/ppmxParser.test.ts',
+    suite: 'test/unit/ppmxParser.test.ts',
     find: "if (header !== 'PPMX' && header !== 'P7') {",
     replace: 'if (false) {',
     killedBy: 'Test 8 (an unknown magic must be rejected)'
@@ -121,7 +121,7 @@ const mutations = [
   {
     name: 'sessionFile: duplicate paths accepted',
     file: 'src/sessionFile.ts',
-    suite: 'src/test/sessionFile.test.ts',
+    suite: 'test/unit/sessionFile.test.ts',
     find: "  if (new Set(compared).size !== compared.length) {",
     replace: "  if (false) {",
     killedBy: 'Test 12 (duplicate paths rejected)'
@@ -131,7 +131,7 @@ const mutations = [
   {
     name: 'workPool: priority ordering broken (class scan reversed)',
     file: 'src/workPool.ts',
-    suite: 'src/test/workPool.test.ts',
+    suite: 'test/unit/workPool.test.ts',
     find: 'for (let p = Priority.VISIBLE; p < Priority.PREFETCH; p++) {',
     replace: 'for (let p = Priority.PREFETCH - 1; p >= Priority.VISIBLE; p--) {',
     killedBy: 'Test 2/5 (strict priority ordering)'
@@ -139,7 +139,7 @@ const mutations = [
   {
     name: 'workPool: EXPORT demoted below speculation',
     file: 'src/workPool.ts',
-    suite: 'src/test/workPool.test.ts',
+    suite: 'test/unit/workPool.test.ts',
     find: '  EXPORT = 2, // user-initiated crop and PPTX: asked for explicitly, so ahead of speculation',
     replace: '  EXPORT = 3, // user-initiated crop and PPTX: asked for explicitly, so ahead of speculation',
     killedBy: 'Full priority ladder test'
@@ -147,7 +147,7 @@ const mutations = [
   {
     name: 'workPool: concurrency cap ignored',
     file: 'src/workPool.ts',
-    suite: 'src/test/workPool.test.ts',
+    suite: 'test/unit/workPool.test.ts',
     find: 'if (this.active >= this.concurrency) return false;',
     replace: 'if (false) return false;',
     killedBy: 'Test 1 (concurrency is never exceeded)'
@@ -155,7 +155,7 @@ const mutations = [
   {
     name: 'workPool: speculative slot reservation removed',
     file: 'src/workPool.ts',
-    suite: 'src/test/workPool.test.ts',
+    suite: 'test/unit/workPool.test.ts',
     find: 'return spec < this.concurrency - 1;',
     replace: 'return true;',
     killedBy: 'Test 11 (speculation leaves one slot free)'
@@ -163,7 +163,7 @@ const mutations = [
   {
     name: 'workPool: foreground courtesy to queued background removed',
     file: 'src/workPool.ts',
-    suite: 'src/test/workPool.test.ts',
+    suite: 'test/unit/workPool.test.ts',
     find: 'return atOrAbove < this.concurrency - (this.anyQueuedBelow(p) ? 1 : 0);',
     replace: 'return atOrAbove < this.concurrency;',
     killedBy: 'Test 13 (freed slot goes to the queued sweep item)'
@@ -171,7 +171,7 @@ const mutations = [
   {
     name: 'workPool: speculative fair-share removed (class can hog every spec slot)',
     file: 'src/workPool.ts',
-    suite: 'src/test/workPool.test.ts',
+    suite: 'test/unit/workPool.test.ts',
     find: 'if (best === -1 || this.activeByPrio[q] < this.activeByPrio[best]) best = q;',
     replace: 'if (best === -1) best = q;',
     killedBy: 'Test 15 (freed spec slot goes to the waiting class)'
@@ -181,7 +181,7 @@ const mutations = [
   {
     name: 'watcher: ambiguous-multi-delete guard flipped to guess',
     file: 'src/watcherLogic.ts',
-    suite: 'src/test/watcherLogic.test.ts',
+    suite: 'test/unit/watcherLogic.test.ts',
     find: 'if (sameDir.length > 1) return -1;',
     replace: 'if (sameDir.length > 1) return sameDir[0].i;',
     killedBy: 'Test 2 (two same-dir deletes are ambiguous -> no match)'
@@ -189,7 +189,7 @@ const mutations = [
   {
     name: 'watcher: caller-ordered modality insertion comparator flipped',
     file: 'src/watcherLogic.ts',
-    suite: 'src/test/watcherLogic.test.ts',
+    suite: 'test/unit/watcherLogic.test.ts',
     find: 'if (r === -1 || r > rank) return i;',
     replace: 'if (r === -1 || r < rank) return i;',
     killedBy: 'Test 12/13 (mode-2 re-add lands at the caller-ordered position)'
@@ -197,7 +197,7 @@ const mutations = [
   {
     name: 'thumbPack: uuid pairing check removed (torn pack/idx combo served)',
     file: 'src/thumbPack.ts',
-    suite: 'src/test/thumbPack.test.ts',
+    suite: 'test/unit/thumbPack.test.ts',
     find: 'if (pack.length < header.length || !pack.subarray(0, header.length).equals(header)) return null;',
     replace: 'if (pack.length < header.length) return null;',
     killedBy: 'Test 3 (uuid mismatch, same-size packs)'
@@ -205,7 +205,7 @@ const mutations = [
   {
     name: 'thumbPack: offset bounds check weakened',
     file: 'src/thumbPack.ts',
-    suite: 'src/test/thumbPack.test.ts',
+    suite: 'test/unit/thumbPack.test.ts',
     find: 'if (o < header.length || l < 0 || o + l > pack.length || out.has(e.k)) return null;',
     replace: 'if (l < 0 || out.has(e.k)) return null;',
     killedBy: 'Test 5/6 (overflowing and header-pointing entries rejected)'
@@ -213,7 +213,7 @@ const mutations = [
   {
     name: 'modalityVisibility: insert anchor broken (new modality always lands first)',
     file: 'src/webview/modalityVisibility.ts',
-    suite: 'src/test/modalityVisibility.test.ts',
+    suite: 'test/unit/modalityVisibility.test.ts',
     find: 'const anchor = w > 0 ? shifted.indexOf(w - 1) + 1 : Math.max(0, shifted.indexOf(w + 1));',
     replace: 'const anchor = 0;',
     killedBy: 'rearrangement test (new column lands beside its original predecessor)'
@@ -221,7 +221,7 @@ const mutations = [
   {
     name: 'modalityVisibility: tiny-tile vote guard inverted (12px tiles vote again)',
     file: 'src/webview/modalityVisibility.ts',
-    suite: 'src/test/modalityVisibility.test.ts',
+    suite: 'test/unit/modalityVisibility.test.ts',
     find: 'return tileSize >= 3 * WINNER_CIRCLE_PX;',
     replace: 'return true;',
     killedBy: 'mouse-vote guard test (below 3x must not be votable)'
@@ -229,7 +229,7 @@ const mutations = [
   {
     name: 'modalityVisibility: hidden pills no longer skipped by cycling',
     file: 'src/webview/modalityVisibility.ts',
-    suite: 'src/test/modalityVisibility.test.ts',
+    suite: 'test/unit/modalityVisibility.test.ts',
     find: 'if (!hidden[i]) return i;',
     replace: 'return i;',
     killedBy: 'Test 2/3 (hidden neighbours are skipped)'
@@ -237,7 +237,7 @@ const mutations = [
   {
     name: 'watcher: sorted row insertion degraded to append',
     file: 'src/watcherLogic.ts',
-    suite: 'src/test/watcherLogic.test.ts',
+    suite: 'test/unit/watcherLogic.test.ts',
     find: 'if (naturalCompare(name, existingNames[i]) < 0) return i;',
     replace: 'if (false) return i;',
     killedBy: 'Test 18/19 (crop row lands after its parent, natural-ordered)'
@@ -247,7 +247,7 @@ const mutations = [
   {
     name: 'sessionFile: duplicate-label rejection removed',
     file: 'src/sessionFile.ts',
-    suite: 'src/test/sessionFile.test.ts',
+    suite: 'test/unit/sessionFile.test.ts',
     find: 'if (new Set(labels).size !== labels.length) {',
     replace: 'if (false) {',
     killedBy: 'Test 6 (duplicate labels must throw "unique" — a modality name is the downstream join key)'
@@ -255,7 +255,7 @@ const mutations = [
   {
     name: 'sessionFile: relative paths resolved against cwd instead of the session dir',
     file: 'src/sessionFile.ts',
-    suite: 'src/test/sessionFile.test.ts',
+    suite: 'test/unit/sessionFile.test.ts',
     find: 'const paths = rawPaths.map((p) => path.resolve(baseDir, p));',
     replace: 'const paths = rawPaths.map((p) => path.resolve(p));',
     killedBy: 'Test 2 (relative paths resolve against the session file dir, not cwd)'
@@ -263,7 +263,7 @@ const mutations = [
   {
     name: 'sessionFile: future-version gate removed (v2 file half-opened)',
     file: 'src/sessionFile.ts',
-    suite: 'src/test/sessionFile.test.ts',
+    suite: 'test/unit/sessionFile.test.ts',
     find: 'if ((version as number) > CURRENT_SESSION_VERSION) {',
     replace: 'if (false) {',
     killedBy: 'version-gate test (a future version must be rejected, not half-opened)'
@@ -271,7 +271,7 @@ const mutations = [
   {
     name: 'wireFormat: payload normalization removed (Buffer reaches the wire)',
     file: 'src/wireFormat.ts',
-    suite: 'src/test/wireFormat.test.ts',
+    suite: 'test/unit/wireFormat.test.ts',
     find: '  return new Uint8Array(bytes);',
     replace: '  return bytes;',
     killedBy: 'Tests 1-2 (Buffer converted; view copied tight)'
@@ -279,7 +279,7 @@ const mutations = [
   {
     name: 'sessionFile: save-as escape check removed (".." paths written)',
     file: 'src/sessionFile.ts',
-    suite: 'src/test/sessionFile.test.ts',
+    suite: 'test/unit/sessionFile.test.ts',
     find: "const escapes = rels.some((r) => r.startsWith('..') || path.isAbsolute(r));",
     replace: 'const escapes = false;',
     killedBy: 'serializeSessionFile test (an escaping path must force all-absolute)'
@@ -302,10 +302,8 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 function runSuite(suite) {
-  // Vitest suites (test/unit/) are killed through Vitest; ts-node suites through ts-node.
-  const args = suite.startsWith('test/unit/')
-    ? ['vitest', 'run', suite, '--config', 'test/vitest.config.ts']
-    : ['ts-node', suite];
+  // Every suite is a Vitest suite under test/unit/.
+  const args = ['vitest', 'run', suite, '--config', 'test/vitest.config.ts'];
   return spawnSync('npx', args, { cwd: repoRoot, encoding: 'utf8' });
 }
 

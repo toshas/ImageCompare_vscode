@@ -5,7 +5,7 @@ How ImageCompare gets pixels onto the screen, and the rules that keep it respons
 Code: `workPool.ts` (scheduling), `imageCompareProvider.ts` (`sendImage`, `generateAllThumbnails`,
 prefetch, the existence sweep), `thumbnailService.ts` (`loadFullImage`, `getThumbnail` — the actual
 reads and decodes; the provider only schedules them), `webview/main.ts` (`loadedTuples`, `render`).
-Pinned by `src/test/workPool.test.ts`, which imports the real source.
+Pinned by `test/unit/workPool.test.ts` (Vitest), which imports the real source.
 
 ## Why this exists
 

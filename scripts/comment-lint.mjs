@@ -8,9 +8,10 @@ import { execSync } from 'node:child_process';
 
 // Tests are exempt: a comment explaining why a fixture triggers an edge case is correctly co-located
 // with the fixture — a doc about one test's byte layout would be a worse home, not a better one. The
-// rule exists to keep *production* code from carrying design prose that belongs in docs/.
+// rule exists to keep *production* code from carrying design prose that belongs in docs/. Tests live
+// under test/, outside the src/ scope, so the src/ filter alone is the whole exemption.
 const files = execSync('git ls-files --cached --others --exclude-standard', { encoding: 'utf8' })
-  .split('\n').filter(f => /^src\/.*\.ts$/.test(f) && !f.startsWith('src/test/'));
+  .split('\n').filter(f => /^src\/.*\.ts$/.test(f));
 
 const isComment  = l => /^\s*\/\//.test(l);
 const isBanner   = l => /^\s*\/\/\s*[-=]{3,}/.test(l) || /^\s*\/\/\s*[-=]+\s*[\w /()—-]*[-=]+\s*$/.test(l);

@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The repo's own gate battery (nine ts-node suites, mutation check, invariant+comment checkers)
+  # The repo's own gate battery (the Vitest unit suites, mutation check, invariant+comment checkers)
   # runs on every push/PR too, so no event sees less than the full union of both test systems.
   gates:
-    name: gates (ts-node suites + mutation + checkers)
+    name: gates (unit suites + mutation + checkers)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
