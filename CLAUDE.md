@@ -121,6 +121,18 @@ npm run test:integration  # Layer 2 — @vscode/test-cli inside a real VSCode
 npm run test:all          # everything
 ```
 
+**Where a new test goes** (decision rule, in order):
+1. Webview DOM/interaction behavior → a Playwright spec in `test/webview/` (drive via
+   `loadInited`/`__ic_send`, assert via `window.__ic_test` and locators).
+2. Real VS Code API behavior (fs scanning, commands, activation) → `test/integration/`.
+3. Pure logic → Vitest in `test/unit/` importing the real module — **except** an invariant-grade
+   rule whose silent breakage corrupts data or violates a documented contract: those go in the
+   ts-node suites WITH a mutation entry in `scripts/mutation-check.mjs`, because only that harness
+   proves the test bites. Never extend `tupleMatching.test.ts`'s embedded copy with new cases — new
+   matcher tests import the real `matchTuplesWithTrie` in `test/unit/`.
+Demos (`test/demos/`) are not tests: add one only when a new user-visible flow is worth a gallery
+clip; bug fixes need a test, never a demo.
+
 - **Layer 1** (`test/unit/`) imports real production functions via a `vscode` mock
   alias (`test/mocks/vscode.ts`); no hand-copied logic.
 - **Layer 3** (`test/webview/`) loads the real `dist/webview.js` against a harness
