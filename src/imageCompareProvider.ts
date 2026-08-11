@@ -1966,6 +1966,11 @@ body {
 }
 #carousel.active { display: block; }
 #carousel-wall { position: relative; will-change: transform; }
+/* Horizontal scroll kicks in only when even 12px tiles cannot fit the pane width. */
+#carousel-hscroll { position: absolute; inset: 0; overflow-x: auto; overflow-y: hidden; }
+#carousel-hscroll::-webkit-scrollbar { height: 6px; }
+#carousel-hscroll::-webkit-scrollbar-track { background: transparent; }
+#carousel-hscroll::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-activeBackground, #444); border-radius: 3px; }
 #carousel-thumb {
   position: absolute;
   top: 0;
@@ -1979,6 +1984,8 @@ body {
 }
 #carousel:hover #carousel-thumb,
 #carousel.scrolling #carousel-thumb { opacity: 1; }
+/* Below 3x the circle, a tile click is a coin-flip between navigate and vote (docs/session-files.md: tiny-tiles-never-vote). */
+#carousel.tiny-tiles .winner-circle { pointer-events: none; }
 
 /* 1px top+bottom on adjacent rows = 2px vertical space, matching the 2px column gap — an equidistant wall, no separator lines. */
 /* No transitions on selection styling: the wall jumps instantly, so a fading highlight pulses the center on every step. */

@@ -233,6 +233,11 @@ value the pill stamps.
 
 ## Invariants
 
+- **`tiny-tiles-never-vote`** — when carousel tiles are smaller than 3x the winner circle
+  (`isVoteClickable`, pure and suite-pinned), the circle stops taking mouse clicks
+  (`pointer-events: none` via the `tiny-tiles` class): at that size a tile click is a coin-flip
+  between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
+  unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
 - **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label,
   and keyboard cycling; **nothing else reads the set**. Loading, prefetch, voting, PPTX export,
   matching and reordering are oblivious, and the state dies with the panel — it is not persisted to

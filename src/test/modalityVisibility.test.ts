@@ -5,7 +5,7 @@
  * Run: npx ts-node src/test/modalityVisibility.test.ts
  */
 
-import { nextVisibleModality } from '../webview/modalityVisibility';
+import { nextVisibleModality, isVoteClickable, WINNER_CIRCLE_PX, displayOrderAfterInsert } from '../webview/modalityVisibility';
 
 let passed = 0;
 let failed = 0;
@@ -42,6 +42,30 @@ assert(nextVisibleModality(1, 1, [H, H, H]) === 1, 'all hidden: stay put');
 
 console.log('Test 6: a hidden current pill still steps out to a visible one');
 assert(nextVisibleModality(1, 1, [V, H, V]) === 2, 'from hidden 1, right lands on visible 2');
+
+console.log('Test: mouse voting is disabled below 3x the winner-circle size');
+{
+  assert(isVoteClickable(3 * WINNER_CIRCLE_PX) === true, 'exactly 3x the circle must stay votable');
+  assert(isVoteClickable(3 * WINNER_CIRCLE_PX - 0.5) === false, 'just under 3x must not be votable');
+  assert(isVoteClickable(12) === false, 'the 12px tile floor must never vote by mouse');
+  assert(isVoteClickable(50) === true, 'natural-size tiles vote normally');
+}
+
+console.log('Test: a watcher-inserted modality preserves the user rearrangement');
+{
+  // m1c1,m1c2,m2c1,m2c2,gtm1,gtm2 rearranged to m1c1,m1c2,gtm1,gtm2,m2c1,m2c2; m1c3 arrives at original 2.
+  const r = displayOrderAfterInsert([0, 1, 4, 5, 2, 3], 2);
+  assert(JSON.stringify(r.order) === JSON.stringify([0, 1, 2, 5, 6, 3, 4]), `expected [0,1,2,5,6,3,4], got ${JSON.stringify(r.order)}`);
+  assert(r.displayPos === 2, `new column must land after its original predecessor, got ${r.displayPos}`);
+
+  // Inserted first in original order: lands before its original successor.
+  const f = displayOrderAfterInsert([2, 0, 1], 0);
+  assert(JSON.stringify(f.order) === JSON.stringify([3, 0, 1, 2]) && f.displayPos === 1, `expected [3,0,1,2]@1, got ${JSON.stringify(f.order)}@${f.displayPos}`);
+
+  // Identity order stays identity.
+  const i = displayOrderAfterInsert([0, 1, 2], 1);
+  assert(JSON.stringify(i.order) === JSON.stringify([0, 1, 2, 3]) && i.displayPos === 1, 'identity must stay identity');
+}
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
