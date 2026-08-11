@@ -105,7 +105,7 @@ npm run compile      # One-off build
 
 ## Testing
 
-Nine `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
+Seven `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
 script in `package.json` is the list CI executes, and `docs/testing.md` repeats it only to show the
 per-suite invocation. What each suite pins, what nothing covers, the manual checks worth walking
 before a release, and `imageCompare.debug` logging: `docs/testing.md`.
@@ -128,8 +128,8 @@ npm run test:all          # everything
 3. Pure logic → Vitest in `test/unit/` importing the real module — **except** an invariant-grade
    rule whose silent breakage corrupts data or violates a documented contract: those go in the
    ts-node suites WITH a mutation entry in `scripts/mutation-check.mjs`, because only that harness
-   proves the test bites. Never extend `tupleMatching.test.ts`'s embedded copy with new cases — new
-   matcher tests import the real `matchTuplesWithTrie` in `test/unit/`.
+   proves the test bites. Matcher tests go in `test/unit/`, importing the real
+   `matchTuplesWithTrie` — full stop.
 Demos (`test/demos/`) are not tests: add one only when a new user-visible flow is worth a gallery
 clip; bug fixes need a test, never a demo.
 
@@ -163,22 +163,21 @@ test means also adding its mutation to `scripts/mutation-check.mjs` — a test n
 decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
 skill.
 
-**`tupleMatching` tests a *copy* of the matching functions, not the functions** — `modalityNames.ts`
-is the exception, imported from the shipped source. Change the matcher in `fileService.ts` and update
-the copy in the same edit, or the suite passes while pinning code that no longer exists.
-`pngTextChunk` used to be a copy too — that is exactly how a crop-breaking bug shipped green. Prefer
-extracting pure logic (`pngText.ts`, `watcherLogic.ts`, `workPool.ts`, `modalityNames.ts`) over
-copying it.
+**The copy era is over.** `tupleMatching` and `pngTextChunk` were once ts-node suites testing
+hand-copies of the shipped functions — that is exactly how a crop-breaking bug shipped green. Both
+are now Vitest suites in `test/unit/` importing the real code (`matchTuplesWithTrie`/`scanForImages`
+from `fileService.ts`, `modalityNames.ts`, `pngText.ts`) via the `vscode` mock alias, so they cannot
+drift. For `vscode`-free logic, prefer extracting a pure module (`pngText.ts`, `watcherLogic.ts`,
+`workPool.ts`, `modalityNames.ts`) over ever copying it.
 
 **A green suite is not evidence.** When you add a test, break the code it covers and watch it fail —
 this suite has passed with a tie-break inverted and with the row sort reversed. Pin values that come
 from outside the implementation; comparing the code to itself proves nothing. See `docs/testing.md`.
 
 > The **Layer 1** Vitest tests in `test/unit/` (`tupleMatching.test.ts`,
-> `pngTextChunk.test.ts`) are a second, independent cover for the same logic:
-> they import the **real** exported functions (`matchTuplesWithTrie` from
-> `fileService.ts`, `pngInjectText`/`pngReadText` from `pngText.ts`) via the
-> `vscode` mock alias, so they cannot drift. Run with `npm run test:unit`.
+> `pngTextChunk.test.ts`) are now the *only* pinning for the matcher and the PNG
+> tEXt writer — the old ts-node copies are deleted, and the mutation gate kills
+> through `vitest run` for these suites. Run with `npm run test:unit`.
 
 ### Feature Coverage Dashboard
 

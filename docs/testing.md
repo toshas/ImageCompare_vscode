@@ -2,20 +2,20 @@
 
 What is pinned, what is not, and the one trap that makes a green run mean less than it looks.
 
-This doc covers the nine `ts-node` suites that gate publishing. A second, independent test system —
+This doc covers the seven `ts-node` suites that gate publishing. A second, independent test system —
 Vitest unit layer, `@vscode/test-cli` integration layer, Playwright webview layer, running in
-`.github/workflows/test.yml` on three OSes — is documented in the repo-root `TESTING.md`.
+`.github/workflows/test.yml` on three OSes — is documented in the repo-root `TESTING.md`. Two former
+ts-node suites, `tupleMatching` and `pngTextChunk`, now live in that Vitest layer
+(`test/unit/tupleMatching.test.ts`, `test/unit/pngTextChunk.test.ts`); the mutation gate still covers
+them (below).
 
 Every suite is a plain `ts-node` script with no test framework: a bare `assert` counter that exits
 non-zero on failure. That is why they run without a VSCode host — and why they can only cover code
-that has no `vscode` import. (`pngTextChunk` does need a working native Sharp, to mint its fixture
-PNG; every other suite needs nothing but Node.)
+that has no `vscode` import. Every suite needs nothing but Node.
 
 ```bash
-npx ts-node src/test/tupleMatching.test.ts
 npx ts-node src/test/sessionFile.test.ts
 npx ts-node src/test/watcherLogic.test.ts
-npx ts-node src/test/pngTextChunk.test.ts
 npx ts-node src/test/workPool.test.ts
 npx ts-node src/test/ppmxParser.test.ts
 npx ts-node src/test/modalityVisibility.test.ts
@@ -23,59 +23,62 @@ npx ts-node src/test/thumbPack.test.ts
 npx ts-node src/test/wireFormat.test.ts
 ```
 
-`.github/workflows/publish.yml` runs all nine in its `test` job, which gates the whole build matrix —
+`.github/workflows/publish.yml` runs all seven in its `test` job, which gates the whole build matrix —
 a red test blocks publishing to both marketplaces.
 
 ## The suites
 
 | Suite | Imports | Pins |
 |---|---|---|
-| `tupleMatching` | **a copy**, plus real `modalityNames.ts` | Trie matching end to end: crop deprioritization (rule 1), each of the two remaining tie-breaks in isolation, nested crops, row sort order, colliding tuple names de-duplicated, and — against the real source — unique modality naming including the collided-tail fallback |
 | `sessionFile` | real source | Path resolution, duplicate-path rejection, `labels`/`colors` validation, malformed JSON, `applyLabels()`, `suggestSessionFileName()` |
 | `watcherLogic` | real source | `matchDeletedFile()` rename disambiguation (incl. the ambiguous-multi-delete no-hijack rule), `shiftIndexAfterRemoval()`, `modalityInsertIndex()` (caller order beats alphabetical on re-add) and `tupleInsertIndex()` (crop lands after its parent; natural row order) |
-| `pngTextChunk` | real source (`pngText.ts`) | tEXt round-trip, the `x,y,w,h,srcW,srcH` crop format, PNG structure survival, CRC-32 against a full-table probe |
 | `workPool` | real source | Concurrency cap (incl. the reject path), priority + FIFO/seq order, cancellation, re-entrancy, error propagation |
 | `ppmxParser` | real source | All four magic x flags combinations, size-based flags detection, normalization, malformed input |
 | `modalityVisibility` | real source | Hidden-pill keyboard cycling: skip, run-skip, non-wrapping edges, all-hidden stay; the tiny-tile mouse-vote guard threshold |
 | `thumbPack` | real source | Packfile round-trip, uuid pairing rejection, truncation/overflow/duplicate rejection |
 | `wireFormat` | real source | Image payload normalization: Buffer→plain Uint8Array (species-safe), offset views copied tight, structuredClone survival |
 
-## The trap: one suite still tests a copy
+Two suites moved out of this list into the Vitest layer, where they import the real shipped code via
+the `vscode` mock alias: `test/unit/tupleMatching.test.ts` pins trie matching end to end (crop
+deprioritization, each tie-break in isolation, nested crops, matcher key order, the final row order
+by tuple *name*, colliding tuple names de-duplicated, and unique modality naming including the
+collided-tail fallback — the pipeline cases run the real `scanForImages` over temp directories), and
+`test/unit/pngTextChunk.test.ts` pins the tEXt round-trip, the `x,y,w,h,srcW,srcH` crop format, PNG
+structure survival, CRC-32 against the IEEE check value and a full-table probe, and a Sharp re-read
+of an injected PNG (the one unit test that needs a working native Sharp).
 
-`tupleMatching.test.ts` contains **pure TypeScript copies** of the trie-matching functions it exercises, because the
-originals live in `fileService.ts`, which imports `vscode`. Nothing keeps the copy in step with the
-original. A green run proves the *algorithm as transcribed* behaves — not that the shipped function
-does. When you change trie matching, the test passing is not evidence; update the copy in the same
-change, or the suite silently starts pinning code that no longer exists.
+## The copy trap (historical)
 
-This is not theoretical: `pngTextChunk` used to be a copy too, and that is exactly how a
-crop-breaking bug shipped. The real `pngInjectText` called `zlib.crc32` (Node 20.15+) while
-`engines.vscode` allowed Node 18, so every crop threw on older VSCode — while the suite stayed green,
-because its copy had its own `zlib.crc32`. The fix was structural: the logic moved to `pngText.ts`, a
-pure `vscode`-free module the test now imports. **That is the pattern** — `watcherLogic.ts`,
-`workPool.ts`, `sessionFile.ts`, `ppmxParser.ts`, `pngText.ts`, `thumbPack.ts`, `wireFormat.ts` and
-`webview/modalityVisibility.ts` all exist because extracting a decision into a pure module is what
-makes it testable at all. Prefer that over a copy.
+`tupleMatching.test.ts` used to contain **pure TypeScript copies** of the trie-matching functions,
+because the originals live in `fileService.ts`, which imports `vscode` — and nothing kept the copy in
+step with the original, so a green run proved only that the *algorithm as transcribed* behaved.
+`pngTextChunk` was a copy once too, and that is exactly how a crop-breaking bug shipped: the real
+`pngInjectText` called `zlib.crc32` (Node 20.15+) while `engines.vscode` allowed Node 18, so every
+crop threw on older VSCode — while the suite stayed green, because its copy had its own `zlib.crc32`.
+The copy era is over: both suites now live in `test/unit/` and import the real
+`matchTuplesWithTrie`/`scanForImages` and `pngText.ts` through the Vitest `vscode` mock alias, so they
+cannot drift. For code that has no `vscode` import, the extraction pattern still holds —
+`watcherLogic.ts`, `workPool.ts`, `sessionFile.ts`, `ppmxParser.ts`, `pngText.ts`, `thumbPack.ts`,
+`wireFormat.ts` and `webview/modalityVisibility.ts` all exist because extracting a decision into a
+pure module is what makes it testable at all. Never test a copy.
 
 ## A green suite is not evidence
 
-`scripts/mutation-check.mjs` (a CI gate) flips a known rule in the file the suite actually exercises —
-the real source for every suite, `tupleMatching` included through `modalityNames.ts`, plus
-`tupleMatching.test.ts`'s own copy for the trie mutations, since mutating `fileService.ts` would not
-reach them — reruns that suite, and fails if it stays green. **Run it to see what it covers** — it prints one
+`scripts/mutation-check.mjs` (a CI gate) flips a known rule in the real source file the suite
+exercises — for the ts-node suites via `ts-node`, and for the two Vitest suites via `vitest run`
+(the trie mutations hit `fileService.ts` and are killed by `test/unit/tupleMatching.test.ts`) —
+reruns that suite, and fails if it stays green. **Run it to see what it covers** — it prints one
 line per mutation, and that output *is* the list. Nothing here enumerates them: two attempts to do so
 went stale within a day, the second while correcting the first. It exists because the tuple-matching suite once passed
 with several of its rules deliberately broken. When you add a test, pin a value
 from *outside* the implementation (a spec constant, a hand-computed expectation); code compared to
 itself proves nothing.
 
-Every other suite imports the real source and is real coverage.
-
 ## What nothing covers
 
 - **The image backends.** Nothing tests Jimp or `sharpLoader.ts`, and nothing tests the fallback
-  chain. `pngTextChunk` uses Sharp only to mint a fixture PNG and re-read it — that exercises Sharp
-  incidentally, not the loader or the tiers. See the Testing section of `docs/image-backends.md` for
+  chain. `test/unit/pngTextChunk.test.ts` uses Sharp only to mint a fixture PNG and re-read it — that
+  exercises Sharp incidentally, not the loader or the tiers. See the Testing section of `docs/image-backends.md` for
   why a real test is awkward: the `Unsupported CPU` path needs a CPU no CI runner has, so it would
   have to be simulated, and the wasm32 tier it falls back to is absent from any normal install.
 - **Anything importing `vscode`** — `imageCompareProvider.ts` (the largest file), `extension.ts`, the

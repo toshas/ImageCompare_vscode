@@ -14,10 +14,9 @@ matches by generic substring containment (`baseFilename.includes(tuple.name)`) a
 ordinary name. The other `_crop\d+` readers are `getNextCropNumber`, `findCropTuples` and
 `findParentTuple` in `imageCompareProvider.ts`, all bound to the writer in `handleCropImages`.
 
-Pinned by `src/test/tupleMatching.test.ts`, which holds *pure copies* of the matching functions
-rather than importing them, so it can silently drift from `fileService.ts` — change trie matching and
-you must change the copy in the same commit (`docs/testing.md`, "The trap: one suite still tests a
-copy").
+Pinned by `test/unit/tupleMatching.test.ts` (Vitest), which imports the real `matchTuplesWithTrie`
+and `scanForImages` from `fileService.ts` through the `vscode` mock alias — the suite once held pure
+copies that could silently drift; the copy is gone (`docs/testing.md`, "The copy trap (historical)").
 
 ## The problem
 
@@ -53,7 +52,7 @@ orphaned (`docs/session-files.md: durable-vote-key`; this section is why it is f
 The collision suffix is a second, quieter version of the same hazard. `takenTupleNames` fills in tuple
 order, so which colliding row gets the bare name and which gets ` (2)` depends on position: a change
 that alters an *earlier* tuple's common substring can move the suffix onto a different row, and a
-saved vote then re-targets silently — it still resolves, just to the wrong tuple. Test 9 pins that
+saved vote then re-targets silently — it still resolves, just to the wrong tuple. The suite pins that
 colliding names are made unique, not which row keeps the bare one.
 
 The reference is the modality with the most files — maximal coverage, since a non-reference file with

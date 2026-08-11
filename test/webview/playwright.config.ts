@@ -16,7 +16,12 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: [['list']],
+  // HTML report lands under the repo-root test-results/ (gitignored); CI uploads
+  // it as an artifact only when the suite fails.
+  reporter: [
+    ['list'],
+    ['html', { outputFolder: '../../test-results/webview-html-report', open: 'never' }],
+  ],
   use: {
     viewport: { width: 1100, height: 720 },
     trace: 'retain-on-failure',

@@ -86,6 +86,19 @@ jobs:
       - name: Webview tests (Playwright)
         run: npm run test:webview
 
+      # On failure, ship the HTML report plus the traces (trace: retain-on-failure
+      # writes them into test/webview/test-results) so the run is debuggable offline.
+      - name: Upload webview report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webview-report-${{ matrix.os }}
+          path: |
+            test-results/webview-html-report
+            test/webview/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
       # Integration tests launch a real headless VSCode. Linux needs a virtual
       # display; macOS/Windows run it directly.
       - name: Integration tests (Linux, xvfb)
@@ -117,3 +130,39 @@ jobs:
       - name: Integration tests (macOS / Windows)
         if: runner.os != 'Linux'
         run: npm run test:integration
+
+  # Feature demo gallery. The videos are generated artifacts, never committed —
+  # download them from the run page (artifact 'demo-gallery': the built gallery
+  # plus the raw Playwright recordings).
+  demos:
+    name: demo gallery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run compile
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Install ffmpeg (gallery MP4 conversion)
+        run: sudo apt-get install -y ffmpeg
+
+      # Records the videos AND builds the gallery (playwright + build-gallery.mjs).
+      - run: npm run test:demos
+
+      - name: Upload demo gallery
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-gallery
+          path: |
+            test/demos/gallery
+            test/demos/raw
+          retention-days: 14

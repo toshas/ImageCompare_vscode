@@ -7,10 +7,13 @@ The extension is two programs with different testability:
 
 The canvas is opaque to DOM selectors, so the webview is tested through a **state hook** (`window.__ic_test`) that exposes the UI's logic — zoom, pan, selected tuple/modality, crop rect, winners — letting specs assert behavior without reading pixels. Every assertion is deterministic, so the suite runs identically on any OS.
 
-These layers sit **on top of** the nine `ts-node` suites in `src/test/` (run by `npm test`,
+These layers sit **on top of** the seven `ts-node` suites in `src/test/` (run by `npm test`,
 gated by `scripts/mutation-check.mjs`, documented in `docs/testing.md`). The two systems are
 independent: the ts-node suites gate the publish workflow; the layers below run in their own
-3-OS workflow (`.github/workflows/test.yml`).
+3-OS workflow (`.github/workflows/test.yml`). Two former ts-node suites now live in Layer 1
+(`test/unit/tupleMatching.test.ts`, `test/unit/pngTextChunk.test.ts`), importing the real shipped
+code; the mutation gate kills through `vitest run` for them. `pngTextChunk`'s Sharp-validation test
+needs a working native Sharp (installed by `npm ci`).
 
 ## Three layers
 

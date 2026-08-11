@@ -18,53 +18,52 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, '..');
 
 /**
- * Each mutation names the file it edits, the suite that must kill it, and why
- * that file is the one under test. tupleMatching.test.ts embeds its own copy of
- * the matching functions (docs/tuple-matching.md), so those mutations target the
- * test file itself — mutating src/fileService.ts would not affect the suite. The
- * other suites import the real source, so those mutations hit src/*.
+ * Each mutation names the file it edits and the suite that must kill it. Every
+ * suite — ts-node and Vitest alike — imports the real source, so every mutation
+ * hits src/*. Suites under test/unit/ are run through Vitest (the tuple-matching
+ * and pngText mutations are killed there; the old in-test copies are gone).
  */
 const mutations = [
-  // ── Tuple matching: the suite exercises an in-test copy, so mutate the test file ──
+  // ── Tuple matching: the Vitest suite imports the real fileService.ts ──
   {
     name: 'tuple: crop-deprioritization removed',
-    file: 'src/test/tupleMatching.test.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: 'const isBetter = (!isCrop && bestIsCrop) ||',
     replace: 'const isBetter = (false && bestIsCrop) ||',
-    killedBy: 'Test 4/5 (non-crop ref must win over a closer-length crop ref)'
+    killedBy: 'crop-rule tests (non-crop ref must win over a closer-length crop ref)'
   },
   {
     name: 'tuple: length tie-break comparator inverted',
-    file: 'src/test/tupleMatching.test.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: '(isCrop === bestIsCrop && lenDiff < bestLenDiff) ||',
     replace: '(isCrop === bestIsCrop && lenDiff > bestLenDiff) ||',
-    killedBy: 'Test 6 (closer-length ref must win)'
+    killedBy: 'length tie-break test (closer-length ref must win)'
   },
   {
     name: 'tuple: LCS tie-break disabled',
-    file: 'src/test/tupleMatching.test.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: '(isCrop === bestIsCrop && lenDiff === bestLenDiff && lcs > bestLcs);',
     replace: '(isCrop === bestIsCrop && lenDiff === bestLenDiff && false);',
-    killedBy: 'Test 7 (higher-LCS ref must win)'
+    killedBy: 'LCS tie-break test (higher-LCS ref must win)'
   },
   {
     name: 'tuple: final name-sort removed (display order falls back to key order)',
-    file: 'src/test/tupleMatching.test.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: '  tuples.sort((a, b) => naturalSort(a.name, b.name));',
     replace: '  /* mutated: no final name sort */',
-    killedBy: 'Test 8 (parent row precedes its crop despite reversed key order)'
+    killedBy: 'pipeline name-order test (parent row precedes its crop despite reversed key order)'
   },
   {
     name: 'tuple: row sort reversed',
-    file: 'src/test/tupleMatching.test.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: 'result.sort((a, b) => naturalSort(a.key, b.key));',
     replace: 'result.sort((a, b) => naturalSort(b.key, a.key));',
-    killedBy: 'Test 8 (rows sorted by ref basename, asserted by index)'
+    killedBy: 'matcher key-order test (rows sorted by ref basename, asserted by index)'
   },
 
   // ── PPMX parser: the suite imports the real source ──
@@ -85,39 +84,39 @@ const mutations = [
     killedBy: 'Test 8 (an unknown magic must be rejected)'
   },
 
-  // ── PNG tEXt: the suite imports the real source ──
+  // ── PNG tEXt: the Vitest suite imports the real source ──
   {
     name: 'pngText: one CRC table entry corrupted',
     file: 'src/pngText.ts',
-    suite: 'src/test/pngTextChunk.test.ts',
+    suite: 'test/unit/pngTextChunk.test.ts',
     find: '  return table;\n})();',
     replace: '  table[42] ^= 1; return table;\n})();',
-    killedBy: 'Test 9 (the full-table CRC probe touches all 256 entries)'
+    killedBy: 'full-table CRC probe (touches all 256 entries)'
   },
   {
     name: 'pngText: off-by-one in the tEXt chunk length',
     file: 'src/pngText.ts',
-    suite: 'src/test/pngTextChunk.test.ts',
+    suite: 'test/unit/pngTextChunk.test.ts',
     find: 'chunk.writeUInt32BE(data.length, 0);',
     replace: 'chunk.writeUInt32BE(data.length + 1, 0);',
-    killedBy: 'Test 1 (inject+read round-trip)'
+    killedBy: 'inject+read round-trip'
   },
 
   {
     name: 'modalityNames: fallback stops de-duplicating collided names',
     file: 'src/modalityNames.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: "  while (taken.has(`${name} (${n})`)) n++;",
     replace: "  while (false) n++;",
-    killedBy: 'Test 10 (unique modality names)'
+    killedBy: 'disambiguateDirectoryNames/uniquify tests (unique modality names)'
   },
   {
     name: 'modalityNames: uniquify stops registering the name it hands out',
     file: 'src/modalityNames.ts',
-    suite: 'src/test/tupleMatching.test.ts',
+    suite: 'test/unit/tupleMatching.test.ts',
     find: "  taken.add(unique);",
     replace: "  /* mutated */",
-    killedBy: 'Test 10 (unique modality names)'
+    killedBy: 'disambiguateDirectoryNames/uniquify tests (unique modality names)'
   },
   {
     name: 'sessionFile: duplicate paths accepted',
@@ -303,7 +302,11 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 function runSuite(suite) {
-  return spawnSync('npx', ['ts-node', suite], { cwd: repoRoot, encoding: 'utf8' });
+  // Vitest suites (test/unit/) are killed through Vitest; ts-node suites through ts-node.
+  const args = suite.startsWith('test/unit/')
+    ? ['vitest', 'run', suite, '--config', 'test/vitest.config.ts']
+    : ['ts-node', suite];
+  return spawnSync('npx', args, { cwd: repoRoot, encoding: 'utf8' });
 }
 
 function fail(msg, res) {

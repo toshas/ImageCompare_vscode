@@ -163,11 +163,11 @@ and either falls through to the per-entry path.
 
 ## Testing
 
-Of the suites `publish.yml` gates on (`docs/testing.md`), only `ppmxParser.test.ts` (the pure decode
-half) and `thumbPack.test.ts` (the packfile wire format, importing the real `thumbPack.ts`) touch
-this subsystem. `pngTextChunk.test.ts` uses Sharp to mint a fixture PNG and
-re-read it, so a native Sharp must load for it to run at all — but that exercises Sharp incidentally,
-not the loader or the tiers. Nothing tests Jimp or `sharpLoader.ts`, so the fallback chain is
+Of the ts-node suites `publish.yml` gates on (`docs/testing.md`), only `ppmxParser.test.ts` (the pure
+decode half) and `thumbPack.test.ts` (the packfile wire format, importing the real `thumbPack.ts`)
+touch this subsystem. The Vitest suite `test/unit/pngTextChunk.test.ts` uses Sharp to mint a fixture
+PNG and re-read it, so a native Sharp must load for that one test to run — but that exercises Sharp
+incidentally, not the loader or the tiers. Nothing tests Jimp or `sharpLoader.ts`, so the fallback chain is
 verified by hand or not at all. `sharpLoader.ts` is ordinary bundled source — of the npm packages only `sharp`
 is external (`vscode` aside, which the host provides) — so the shipped bundle is precisely what exercises the loader, against a real installed
 `node_modules/sharp`. That is what makes a test awkward: there is no seam to stub, so a test would have

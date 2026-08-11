@@ -9,6 +9,8 @@
  * wasn't pure and belongs in Layer 2 (integration), not Layer 1.
  */
 
+import * as nodeFs from 'node:fs';
+
 export class Uri {
   private constructor(
     public readonly scheme: string,
@@ -49,10 +51,30 @@ export enum FileType {
 }
 
 // Config is read in a couple of pure-ish helpers; return defaults.
+// `workspace.fs` delegates to the real node fs so scan pipelines (scanForImages)
+// can run end-to-end against deterministic temp-dir fixtures.
 export const workspace = {
   getConfiguration: (_section?: string) => ({
     get: <T>(_key: string, defaultValue?: T): T | undefined => defaultValue,
   }),
+  fs: {
+    stat: async (uri: Uri): Promise<{ type: FileType; ctime: number; mtime: number; size: number }> => {
+      const s = await nodeFs.promises.stat(uri.path);
+      return {
+        type: s.isDirectory() ? FileType.Directory : FileType.File,
+        ctime: s.ctimeMs,
+        mtime: s.mtimeMs,
+        size: s.size,
+      };
+    },
+    readDirectory: async (uri: Uri): Promise<Array<[string, FileType]>> => {
+      const entries = await nodeFs.promises.readdir(uri.path, { withFileTypes: true });
+      return entries.map((e): [string, FileType] => [
+        e.name,
+        e.isDirectory() ? FileType.Directory : FileType.File,
+      ]);
+    },
+  },
 };
 
 export const window = {

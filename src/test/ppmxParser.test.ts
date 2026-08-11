@@ -1,6 +1,6 @@
 /**
  * Tests for the PPMX parser. Imports the real implementation (ppmxParser.ts has
- * no vscode dependency), unlike the copy-based tupleMatching suite.
+ * no vscode dependency).
  *
  * Headers here are byte-for-byte what real producers emit — the parser once
  * required the "P7" magic and a flags line, and rejected every real file.
