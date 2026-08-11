@@ -143,7 +143,7 @@ npm run compile                     # both webpack targets
 ```
 
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the two
-checker scripts, the suites, the mutation check. There is **no `tsc --noEmit` step**. Type errors
+checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs both `tsc --noEmit` configs on every push/PR; the publish-path `test` job still has **no `tsc --noEmit` step** of its own. Type errors
 still turn CI red today — ts-loader type-checks both tsconfigs during `npm run compile`, `ts-node`
 type-checks each suite, and between them every `src/` file is covered — but that is a side effect of
 two other steps, so a file neither bundles nor a suite imports would go unchecked in CI. Adding a

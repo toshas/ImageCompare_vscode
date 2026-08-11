@@ -12,6 +12,8 @@ const jsonOut = process.env.IC_JSON_OUT;
 
 export default defineConfig({
   files: 'out-integration/test/integration/**/*.test.js',
+  // CI's engines-floor job pins this to the oldest supported VS Code; forks (Cursor/VSCodium) trail stable, so the floor is what they actually run.
+  version: process.env.VSCODE_TEST_VERSION || 'stable',
   mocha: {
     ui: 'tdd',
     timeout: 60000,
