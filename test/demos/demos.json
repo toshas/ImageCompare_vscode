@@ -2,7 +2,7 @@
   "_comment": "Metadata for the feature demo gallery. id matches the test title in demos.spec.ts (and the raw/demos-<id>-chromium/ folder). build-gallery.mjs converts each recorded video to a small H.264 MP4 and renders test/demos/gallery/index.html.",
   "demos": [
     { "id": "navigate-tuples", "title": "Navigate tuples", "keys": "↑ / ↓", "description": "Move between image tuples; the carousel highlight and main image follow." },
-    { "id": "switch-modality", "title": "Switch modality", "keys": "← / →", "description": "Flip between modalities (e.g. GT vs PRED) for the current tuple; the active pill updates." },
+    { "id": "switch-modality", "title": "Switch modality", "keys": "← / →", "description": "Flip between modalities (e.g. original vs desaturated) for the current tuple; the active pill updates." },
     { "id": "zoom", "title": "Zoom", "keys": "scroll / Esc", "description": "Scroll to zoom into the image; press Esc to reset to fit." },
     { "id": "pan", "title": "Pan", "keys": "drag", "description": "When zoomed in, drag to move around the image." },
     { "id": "crop", "title": "Crop", "keys": "C, drag, Enter", "description": "Enter crop mode, draw a rectangle, and confirm to crop all modalities at once." },

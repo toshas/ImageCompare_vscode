@@ -1,21 +1,23 @@
 import { test, Page, expect } from '@playwright/test';
 import { HARNESS_URL } from '../webview/harness';
-import { initMessage, thumbnailMessages, FixtureSpec } from '../fixtures/messages';
+import { initMessage, FixtureSpec } from '../fixtures/messages';
+import { photoFixtures, PHOTO_TUPLES, PHOTO_MODALITIES } from './photoFixtures';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Each test records a short, captioned video of ONE feature on legible
- * generated fixtures (gradient + grid + big modality/tuple labels), so what's
- * happening is obvious. Playwright auto-saves each video to
- * raw/demos-<id>-chromium/video.webm; build-gallery.mjs maps it back by id.
+ * Each test records a short, captioned video of ONE feature on real
+ * photographs (test/fixtures/images/) processed into fake CV modalities via
+ * Sharp (see photoFixtures.ts), so what's happening is obvious. Playwright
+ * auto-saves each video to raw/demos-<id>-chromium/video.webm;
+ * build-gallery.mjs maps it back by id.
  */
 
 const SPEC: FixtureSpec = {
-  tupleNames: ['scene_000', 'scene_001', 'scene_002'],
-  modalities: ['GT', 'PRED'],
+  tupleNames: PHOTO_TUPLES,
+  modalities: PHOTO_MODALITIES,
   width: 480,
-  height: 320,
+  height: 480,
   votingEnabled: true,
 };
 
@@ -51,73 +53,39 @@ async function caption(page: Page, text: string): Promise<void> {
   }, text);
 }
 
-/** Init the webview with legible, content-rich images drawn in-browser. */
+/** Init the webview with real photos processed into fake CV modalities. */
 async function loadDemo(page: Page): Promise<void> {
+  const fixtures = await photoFixtures();
   await page.goto(HARNESS_URL);
   await page.waitForFunction(() =>
     (window as any).__ic_outbound.some((m: any) => m && m.type === 'ready'),
   );
   await page.evaluate((msg) => (window as any).__ic_send(msg), initMessage(SPEC) as any);
-  for (const m of thumbnailMessages(SPEC)) {
-    await page.evaluate((x) => (window as any).__ic_send(x), m as any);
+  for (const f of fixtures) {
+    await page.evaluate((x) => (window as any).__ic_send(x), {
+      type: 'thumbnail',
+      tupleIndex: f.tupleIndex,
+      modalityIndex: f.modalityIndex,
+      dataUrl: f.thumbUrl,
+    } as any);
   }
-  // Rich images: gradient + grid + big modality/tuple label, so zoom/pan/crop
-  // and modality switching are visually obvious (not flat color blocks).
-  await page.evaluate((spec) => {
-    const draw = (w: number, h: number, label: string, sub: string, hue: number) => {
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const x = c.getContext('2d')!;
-      // Flat background (compresses well; large unchanged regions while panning).
-      x.fillStyle = `hsl(${hue},52%,40%)`;
-      x.fillRect(0, 0, w, h);
-      // A bright marker so zoom/pan have a feature to track.
-      x.fillStyle = `hsl(${(hue + 45) % 360},75%,62%)`;
-      x.beginPath();
-      x.arc(w * 0.72, h * 0.34, Math.min(w, h) * 0.15, 0, Math.PI * 2);
-      x.fill();
-      // Sparse grid so motion is visible.
-      x.strokeStyle = 'rgba(255,255,255,0.3)';
-      x.lineWidth = 2;
-      for (let i = 48; i < w; i += 48) {
-        x.beginPath();
-        x.moveTo(i, 0);
-        x.lineTo(i, h);
-        x.stroke();
-      }
-      for (let j = 48; j < h; j += 48) {
-        x.beginPath();
-        x.moveTo(0, j);
-        x.lineTo(w, j);
-        x.stroke();
-      }
-      // Big label band.
-      x.fillStyle = 'rgba(0,0,0,0.45)';
-      x.fillRect(0, h / 2 - 46, w, 92);
-      x.fillStyle = '#fff';
-      x.textAlign = 'center';
-      x.font = 'bold 58px -apple-system, Segoe UI, sans-serif';
-      x.fillText(label, w / 2, h / 2 + 6);
-      x.font = '22px -apple-system, Segoe UI, sans-serif';
-      x.fillText(sub, w / 2, h / 2 + 38);
-      return c.toDataURL('image/png');
-    };
-    spec.tupleNames.forEach((name: string, ti: number) => {
-      spec.modalities.forEach((m: string, mi: number) => {
-        const hue = (ti * 75 + mi * 185) % 360;
-        const url = draw(spec.width, spec.height, m, name, hue);
-        (window as any).__ic_send({
-          type: 'image',
-          tupleIndex: ti,
-          modalityIndex: mi,
-          dataUrl: url,
-          width: spec.width,
-          height: spec.height,
-        });
-      });
-    });
-  }, SPEC);
+  // Completion signal, as the extension host sends it — hides the progress toast.
+  await page.evaluate(
+    (n) => (window as any).__ic_send({ type: 'thumbnailProgress', current: n, total: n }),
+    fixtures.length,
+  );
+  // Full-size images as dataUrl; the harness's __ic_send converts each to the
+  // real binary bytes+mime wire shape before dispatching to the bundle.
+  for (const f of fixtures) {
+    await page.evaluate((x) => (window as any).__ic_send(x), {
+      type: 'image',
+      tupleIndex: f.tupleIndex,
+      modalityIndex: f.modalityIndex,
+      dataUrl: f.dataUrl,
+      width: f.width,
+      height: f.height,
+    } as any);
+  }
   await expect(page.locator('#viewer')).toHaveClass(/active/);
   await page.waitForFunction(() => {
     const c = document.getElementById('canvas') as HTMLCanvasElement | null;
@@ -137,7 +105,7 @@ async function center(page: Page) {
 test('navigate-tuples', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, '↑ / ↓  — move between tuples (scene_000 → 001 → 002)');
+  await caption(page, '↑ / ↓  — move between tuples (airplane → baboon → peppers)');
   await beat(page, 900);
   for (const k of ['ArrowDown', 'ArrowDown', 'ArrowUp']) {
     await page.keyboard.press(k);
@@ -148,7 +116,7 @@ test('navigate-tuples', async ({ page }) => {
 test('switch-modality', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, '← / →  — switch modality (GT ⇄ PRED), zoom/pan stay locked');
+  await caption(page, '← / →  — switch modality (original ⇄ desaturated ⇄ …), zoom/pan stay locked');
   await beat(page, 900);
   for (const k of ['ArrowRight', 'ArrowLeft', 'ArrowRight']) {
     await page.keyboard.press(k);

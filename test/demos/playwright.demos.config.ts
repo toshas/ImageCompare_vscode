@@ -3,9 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Feature demo recorder (separate from the test suite).
  *
- * Records a short video of each feature being exercised on the deterministic
- * synthetic fixtures, then build-gallery.mjs converts each to a tiny H.264 MP4.
- * Flat fixture colors compress to a few KB. Run via `npm run test:demos`.
+ * Records a short video of each feature being exercised on real photo
+ * fixtures (test/demos/photoFixtures.ts), then build-gallery.mjs converts
+ * each to a small H.264 MP4. Run via `npm run test:demos`.
  */
 export default defineConfig({
   testDir: '.',
