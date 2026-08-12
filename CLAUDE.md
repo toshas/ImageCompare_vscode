@@ -105,6 +105,7 @@ verification steps.
 
 | Procedure | Where |
 |---|---|
+| Classify a finished change and audit its obligations | CLAUDE.md → Change close-out |
 | Verify after any change (the gate battery) | CLAUDE.md → Verification |
 | Where a new test goes | CLAUDE.md → Testing (decision rule) |
 | Growing the coverage dashboard | CLAUDE.md → Feature Coverage Dashboard |
@@ -114,6 +115,34 @@ verification steps.
 | Audit docs against code | `/verify-docs` skill |
 | Fix a reported bug or feature request end-to-end | `/fix-issue` skill |
 | Open image comparisons programmatically | `/imagecompare` skill |
+
+## Change close-out (mandatory)
+
+The loops above describe the path; the close-out proves the path was walked. Before a unit of work
+is committed or reported done, **classify it and audit the diff against the obligations of its
+class**. The CI gates catch what *broke*; this step catches what was *omitted* — the missing
+dashboard row, mutation entry, or doc update that no script can detect.
+
+1. **Classify** the change — one or more of: **feature** (new user-visible behavior), **fix**
+   (existing behavior corrected), **refactor** (behavior identical), **test-only**, **docs**,
+   **infra** (CI/scripts/packaging). A mixed change takes the union of its classes' obligations.
+2. **Obligations by class**:
+   - *feature*: update the docs it invalidates (+ invariants, cited from code) · tests per the
+     decision rule · mutation entry if invariant-grade · `features.json` row (gray if tests come
+     later) · demo clip only if a new visible flow is worth showing.
+   - *fix*: failing test first (`/fix-issue`) · test joins the feature's existing `features.json`
+     row (new row only if the bug exposed an untracked feature) · docs only if the design changed.
+   - *refactor*: no new obligations — but invariant citations must still resolve (checker enforces).
+   - *test-only*: mutation entry (a test nothing can break is decoration) · dashboard mapping.
+   - *docs*: every claim verifiable in code (else fix the code or delete the claim).
+   - *infra*: nothing beyond the battery — but check whether a CLAUDE.md/docs claim about CI is now stale.
+3. **Audit** — for any change touching `src/` or `test/`, dispatch a **subagent that did not write
+   the change**, giving it the diff, the classification, and the obligation list. It must return a
+   verdict per obligation: **done** / **n/a because <reason>** / **MISSING**. Fix every MISSING
+   before committing. For docs/infra-only changes an explicit inline walk of the list (stated in
+   the final report) suffices — no subagent.
+4. Run the **Verification** battery. State the classification and the audit verdicts in the report
+   or commit message, so omissions are visible rather than silent.
 
 ## Agent Skills
 
