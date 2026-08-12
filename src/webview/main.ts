@@ -4,7 +4,7 @@
  */
 
 import * as crop from './crop';
-import { nextVisibleModality } from './modalityVisibility';
+import { nextVisibleModality, isVoteClickable, displayOrderAfterInsert } from './modalityVisibility';
 import { shiftIndexAfterRemoval } from '../watcherLogic';
 
 // VSCode API
@@ -161,6 +161,29 @@ let votingEnabled = false;
 
 // Session-file labels are user-authored: show them in full, never truncated.
 let labelsExplicit = false;
+
+// Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see docs/testing.md.
+if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
+  (window as unknown as { __ic_test: unknown }).__ic_test = {
+    getState: () => ({
+      currentTupleIndex,
+      currentModalityIndex,
+      currentTupleName: tuples[currentTupleIndex]?.name ?? null,
+      tupleCount: tuples.length,
+      modalityCount: modalities.length,
+      modalityOrder: modalityOrder.slice(),
+      modalityPaths: modalityPaths.slice(),
+      hiddenModalities: Array.from(hiddenModalities),
+      zoom,
+      panX,
+      panY,
+      cropMode: crop.cropMode,
+      cropRect: crop.cropRect ? { ...crop.cropRect } : null,
+      winners: Array.from(winners.entries()),
+      votingEnabled,
+    }),
+  };
+}
 
 // Floating panel drag state
 let fpDragging = false;
@@ -911,39 +934,29 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
 }
 
 function handleModalityAdded(message: { modality: string; modalityPath: string; modalityColors: string[]; modalityIndex: OriginalModalityIndex }) {
-  // Un-permute before splicing a wire index, and carry display-space state before the reset below (docs/tuple-matching.md: unpermute-before-splice).
-  const prevOrder = modalityOrder;
-  modalities = restoreOriginalOrder(modalities, prevOrder);
-  modalityColors = restoreOriginalOrder(modalityColors, prevOrder);
-  modalityPaths = restoreOriginalOrder(modalityPaths, prevOrder);
+  // The user's arrangement survives the insert; the new column lands beside its original-order predecessor (docs/tuple-matching.md: rearrangement-survives-insert).
+  const inserted = displayOrderAfterInsert(modalityOrder, message.modalityIndex);
+  const displayPos = inserted.displayPos;
+  modalities.splice(displayPos, 0, message.modality);
+  modalityPaths.splice(displayPos, 0, message.modalityPath);
+  // message.modalityColors is original-order over the post-insert set; permute into the preserved display order.
+  modalityColors = inserted.order.map(o => message.modalityColors[o]);
 
-  // Insert new modality at the specified index
-  modalities.splice(message.modalityIndex, 0, message.modality);
-
-  // Add color for new modality
-  modalityColors = message.modalityColors.slice();
-
-  modalityPaths.splice(message.modalityIndex, 0, message.modalityPath);
-
-  // winners hold display indices: map through the old order, then shift for the insert (the new space is identity).
+  // winners hold display indices: the arrangement is preserved, so only slots at/after the insertion point shift.
   const shiftedWinners = new Map<TupleIndex, DisplayModalityIndex>();
   for (const [tIdx, displayIdx] of winners) {
-    const originalIdx = prevOrder[displayIdx];
-    if (originalIdx === undefined) continue;
-    // New order is identity, so the shifted original value is also the new display index.
-    shiftedWinners.set(tIdx, asDisplay(originalIdx >= message.modalityIndex ? originalIdx + 1 : originalIdx));
+    shiftedWinners.set(tIdx, asDisplay(displayIdx >= displayPos ? displayIdx + 1 : displayIdx));
   }
   winners = shiftedWinners;
 
   // Original-index-keyed, so it shifts with the splice like everything else (docs/file-watching.md: reindex-in-lockstep).
   hiddenModalities = new Set([...hiddenModalities].map(o => asOriginal(o >= message.modalityIndex ? o + 1 : o)));
 
-  // Reset modalityOrder to default [0, 1, 2, ...] - the arrays above are back in original order
-  modalityOrder = modalities.map((_, i) => asOriginal(i));
+  modalityOrder = inserted.order.map(o => asOriginal(o));
 
-  // Reset current modality to 0 to avoid confusion
-  currentModalityIndex = asDisplay(0);
-  previousModalityIndex = asDisplay(0);
+  // Focus stays where the user is; only its display index may shift.
+  currentModalityIndex = asDisplay(currentModalityIndex >= displayPos ? currentModalityIndex + 1 : currentModalityIndex);
+  previousModalityIndex = asDisplay(previousModalityIndex >= displayPos ? previousModalityIndex + 1 : previousModalityIndex);
   
   // Update ALL tuples to have a placeholder for the new modality
   for (let t = 0; t < tuples.length; t++) {
@@ -1302,6 +1315,8 @@ function updateCarouselThumbSize(snapToDevicePixels = true) {
     CAROUSEL_THUMB_SIZE = Math.max(12, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
   }
   carouselEl.style.setProperty('--thumb-size', CAROUSEL_THUMB_SIZE + 'px');
+  // Tiles too small for a separable vote target: the circle stops taking clicks (docs/session-files.md: tiny-tiles-never-vote).
+  carouselEl.classList.toggle('tiny-tiles', !isVoteClickable(CAROUSEL_THUMB_SIZE));
 }
 
 let carouselDelegatesInstalled = false;
@@ -1333,7 +1348,10 @@ function buildCarousel() {
   carouselWallEl.id = 'carousel-wall';
   carouselThumbEl = document.createElement('div');
   carouselThumbEl.id = 'carousel-thumb';
-  carouselEl.appendChild(carouselWallEl);
+  carouselHScrollEl = document.createElement('div');
+  carouselHScrollEl.id = 'carousel-hscroll';
+  carouselHScrollEl.appendChild(carouselWallEl);
+  carouselEl.appendChild(carouselHScrollEl);
   carouselEl.appendChild(carouselThumbEl);
   setupCarouselThumbDrag(carouselThumbEl);
   if (!carouselDelegatesInstalled) {
@@ -1395,6 +1413,7 @@ function updateCarouselWinners() {
 let carouselOffset = 0;
 let carouselWallEl: HTMLElement | null = null;
 let carouselThumbEl: HTMLElement | null = null;
+let carouselHScrollEl: HTMLElement | null = null;
 let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
 const CAROUSEL_OVERSCAN = 3;
 let carouselRowPool: HTMLElement[] = [];
@@ -1441,6 +1460,9 @@ function ensureVisibleCarouselRows() {
   const rowH = carouselRowHeight();
   if (rowH <= 0) return;
   carouselWallEl.style.height = carouselContentHeight() + 'px';
+  // Wider than the pane only when the 12px tile floor bit: rows overflow into the horizontal scroller.
+  const neededW = carouselFitWidth(CAROUSEL_THUMB_SIZE);
+  carouselWallEl.style.width = neededW > CAROUSEL_WIDTH ? neededW + 'px' : '';
   const viewH = carouselEl.clientHeight;
   const first = Math.max(0, Math.floor(carouselOffset / rowH) - CAROUSEL_OVERSCAN);
   const last = Math.min(tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
@@ -2101,6 +2123,11 @@ function handleCopyEvent(e: ClipboardEvent) {
 function handleCarouselWheel(e: WheelEvent) {
   e.preventDefault();
   e.stopPropagation();
+  // Sideways intent (trackpad deltaX or shift+wheel) pans the overflowing columns; otherwise scroll rows.
+  if (carouselHScrollEl && (e.deltaX !== 0 || e.shiftKey)) {
+    carouselHScrollEl.scrollLeft += e.deltaX !== 0 ? e.deltaX : e.deltaY;
+    return;
+  }
   applyCarouselOffset(carouselOffset + e.deltaY);
 }
 

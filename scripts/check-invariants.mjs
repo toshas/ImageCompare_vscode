@@ -17,7 +17,7 @@ const KEY = /^- \*\*`([a-z][a-z0-9-]*)`\*\*/gm;
 
 const isProse = f => f.endsWith('.md') || f.startsWith('scripts/');
 // A test cannot break an invariant, so a citation there must never satisfy coverage.
-const countsForCoverage = f => !isProse(f) && !f.startsWith('src/test/');
+const countsForCoverage = f => !isProse(f) && !f.startsWith('test/');
 
 const defined = new Map();
 for (const fn of readdirSync(DOCS).filter(f => f.endsWith('.md'))) {

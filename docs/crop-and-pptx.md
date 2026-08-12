@@ -10,7 +10,7 @@ the pure, `vscode`-free wire-format module `thumbnailService.ts` imports (with t
 `CROP_RECT_KEYWORD`,
 `encodeCropMeta`/`parseCropMeta`, `pngInjectText`/`pngReadText`, and `crc32` (test-only).
 
-Pinned by `src/test/pngTextChunk.test.ts` (imports the real `pngText.ts`); see [Testing](#testing).
+Pinned by `test/unit/pngTextChunk.test.ts` (Vitest; imports the real `pngText.ts`); see [Testing](#testing).
 
 ## The crop coordinate contract
 
@@ -171,9 +171,9 @@ notification must be the whole deck.
 
 ## Testing
 
-`src/test/pngTextChunk.test.ts` imports the real `pngText.ts` (the shared module the crop code also
-uses), but only `crc32`, `pngInjectText` and `pngReadText`: it covers the `tEXt` round-trip and the
-CRC. Its crop-format case checks the six-integer value by hand-splitting the string it injected, so
+`test/unit/pngTextChunk.test.ts` (Vitest) imports the real `pngText.ts` (the shared module the crop
+code also uses), but only `crc32`, `pngInjectText` and `pngReadText`: it covers the `tEXt` round-trip
+and the CRC. Its crop-format case checks the six-integer value by hand-splitting the string it injected, so
 `encodeCropMeta`/`parseCropMeta` — the codec that actually produces and consumes that value — are
 untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and all of PPTX export.
 

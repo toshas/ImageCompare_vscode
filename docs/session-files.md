@@ -6,7 +6,7 @@ the entry point is a file at all, and where votes get written.
 Code: `sessionFile.ts` (`parseSessionFile`, `applyLabels`, `suggestSessionFileName`), `extension.ts`
 (`openSelectionAsSession`, `openCustomDocument`/`resolveCustomEditor`, pruning),
 `imageCompareProvider.ts` (`openCompare`, `getResultsTarget`), `fileService.ts` (`writeResultsFile`,
-`readResultsFile`). Pinned by `src/test/sessionFile.test.ts`, which imports the real source.
+`readResultsFile`). Pinned by `test/unit/sessionFile.test.ts` (Vitest), which imports the real source.
 
 Read this before adding an entry point, changing the file format, touching `getResultsTarget()`, or
 "simplifying" the explorer command into a direct panel creation.
@@ -55,8 +55,8 @@ A single directory of only files is rejected: it has no second axis. Each file w
 ```
 
 `parseSessionFile(text, baseDir)` in `sessionFile.ts` is pure (no `vscode` import) so it is
-unit-testable standalone — `src/test/sessionFile.test.ts` runs under plain `ts-node`. Keep it that
-way; that is why `applyLabels()` is structurally typed over `{ toString() }` instead of taking
+unit-testable standalone — `test/unit/sessionFile.test.ts` needs no `vscode` stub at all. Keep it
+that way; that is why `applyLabels()` is structurally typed over `{ toString() }` instead of taking
 `vscode.Uri`.
 
 - `version` — optional, positive integer; absent means 1 (every pre-versioning file). The parser
@@ -233,6 +233,11 @@ value the pill stamps.
 
 ## Invariants
 
+- **`tiny-tiles-never-vote`** — when carousel tiles are smaller than 3x the winner circle
+  (`isVoteClickable`, pure and suite-pinned), the circle stops taking mouse clicks
+  (`pointer-events: none` via the `tiny-tiles` class): at that size a tile click is a coin-flip
+  between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
+  unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
 - **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label,
   and keyboard cycling; **nothing else reads the set**. Loading, prefetch, voting, PPTX export,
   matching and reordering are oblivious, and the state dies with the panel — it is not persisted to
@@ -242,7 +247,7 @@ value the pill stamps.
 - **`custom-editor-entry`** — every comparison opens through a `.imagecompare` custom editor.
   `openCompare()` receives a panel; it must never create one. A new entry point writes a session file.
 - **`sessionfile-vscode-free`** — `sessionFile.ts` stays `vscode`-free; it is the unit-testable core
-  (`src/test/sessionFile.test.ts`).
+  (`test/unit/sessionFile.test.ts`).
 - **`sessions-add-no-mode`** — resolved paths go through `scanForImages()` unchanged; mode detection
   is a function of the paths on disk only.
 - **`relative-to-session-dir`** — relative paths resolve against the session file's directory, never

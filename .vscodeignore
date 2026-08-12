@@ -29,9 +29,16 @@ package-lock.json
 skills/README.md
 skills/verify-docs/**
 CLAUDE.md
+CONTRIBUTING.md
 docs/**
+dev_backlog/**
 scripts/**
 .github/**
+
+# Testing bed and dev tooling (not shipped)
+test/**
+.dashboard-data/**
+.vscode-test.mjs
 
 # Test data
 test_images/**

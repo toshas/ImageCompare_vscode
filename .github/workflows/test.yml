@@ -1,0 +1,218 @@
+name: Tests
+
+# Cross-platform test matrix. Runs ALL three layers — unit, webview, integration —
+# on Windows/Linux/macOS, so nothing has to be run by hand. Every assertion is
+# deterministic and OS-agnostic (no pixel snapshots, no local baselines). Native
+# risks (Sharp per-platform binary, FS watcher) are proven on each real OS.
+on:
+  push:
+    branches: [main, 'test/**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+# Cancel superseded runs on the same ref to avoid burning minutes.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The repo's own gate battery (the Vitest unit suites, mutation check, invariant+comment checkers)
+  # runs on every push/PR too, so no event sees less than the full union of both test systems.
+  gates:
+    name: gates (unit suites + mutation + checkers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npx tsc --noEmit -p tsconfig.json
+      - run: npx tsc --noEmit -p tsconfig.webview.json
+      - run: npx tsc --noEmit -p tsconfig.test.json
+      - run: node scripts/check-invariants.mjs
+      - run: node scripts/comment-lint.mjs
+      - run: npm test
+      - run: node scripts/mutation-check.mjs
+
+  # Forks (Cursor, VSCodium, Windsurf) run VS Code bases months behind stable. Running the
+  # integration suite against the declared engines floor catches use of a newer API before
+  # any fork user does — the main way extensions break on Cursor.
+  engines-floor:
+    name: integration @ engines floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: xvfb-run -a npm run test:integration
+        env:
+          VSCODE_TEST_VERSION: 1.85.0
+
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Builds dist/extension.js + dist/webview.js (needed by integration tests
+      # which activate the real extension) and installs the host-OS Sharp binary.
+      - run: npm run compile
+
+      - name: Unit tests (Vitest)
+        run: npm run test:unit
+
+      # Layer 3 — drives the real webview bundle in headless Chromium.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Webview tests (Playwright)
+        run: npm run test:webview
+
+      # On failure, ship the HTML report plus the traces (trace: retain-on-failure
+      # writes them into test/webview/test-results) so the run is debuggable offline.
+      - name: Upload webview report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: webview-report-${{ matrix.os }}
+          path: |
+            test-results/webview-html-report
+            test/webview/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Integration tests launch a real headless VSCode. Linux needs a virtual
+      # display; macOS/Windows run it directly.
+      - name: Integration tests (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:integration
+
+      # macOS ARM runners: the download can report success while the Electron binary is not
+      # spawnable (ENOENT). Harness robustness, not a hack: pre-download, then verify/repair the
+      # app bundle (quarantine xattr, exec bit) and fail HERE with diagnostics if the binary is
+      # absent — so the actual test step only ever runs against a spawnable VS Code.
+      - name: Pre-download and repair VS Code (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          node -e "require('@vscode/test-electron').downloadAndUnzipVSCode()"
+          xattr -dr com.apple.quarantine .vscode-test || true
+          APP=$(find .vscode-test -maxdepth 2 -name "*.app" -type d | head -1)
+          echo "App: $APP"; ls -la "$APP/Contents/MacOS/" || true
+          # vscode-test spawns Contents/MacOS/Electron; if the bundle names its executable differently, bridge it.
+          EXE=$(defaults read "$PWD/$APP/Contents/Info" CFBundleExecutable 2>/dev/null || echo Electron)
+          echo "CFBundleExecutable: $EXE"
+          if [ ! -e "$APP/Contents/MacOS/Electron" ] && [ -f "$APP/Contents/MacOS/$EXE" ]; then
+            ln -s "$EXE" "$APP/Contents/MacOS/Electron" && echo "bridged Electron -> $EXE"
+          fi
+          BIN=$(find .vscode-test -path "*Contents/MacOS/Electron" | head -1)
+          if [ -z "$BIN" ]; then echo "Electron binary missing after download (full MacOS/ and Frameworks/ listing above)"; exit 1; fi
+          chmod +x "$APP/Contents/MacOS/$EXE" "$BIN" 2>/dev/null || true
+          echo "Electron OK: $BIN"
+
+      - name: Integration tests (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: npm run test:integration
+
+  # Feature demo gallery. The videos are generated artifacts, never committed —
+  # download them from the run page (artifact 'demo-gallery': the built gallery
+  # plus the raw Playwright recordings).
+  demos:
+    name: demo gallery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run compile
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Install ffmpeg (gallery MP4 conversion)
+        run: sudo apt-get install -y ffmpeg
+
+      # Records the videos AND builds the gallery (playwright + build-gallery.mjs).
+      - run: npm run test:demos
+
+      - name: Upload demo gallery
+        uses: actions/upload-artifact@v6
+        with:
+          name: demo-gallery
+          path: |
+            test/demos/gallery
+            test/demos/raw
+            test/dashboard/dashboard.html
+          retention-days: 14
+
+  # Live coverage dashboard + demo gallery at https://toshas.github.io/ImageCompare_vscode/
+  # (Pages must be set to "GitHub Actions" once in Settings -> Pages). Main-branch pushes only:
+  # PR runs keep using the demo-gallery artifact.
+  pages:
+    name: publish dashboard + gallery to Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - run: xvfb-run -a npm run test:dashboard
+      - run: npm run test:demos
+      - name: Assemble site
+        run: |
+          mkdir -p _site/dashboard _site/gallery
+          cp test/dashboard/dashboard.html _site/dashboard/index.html
+          cp -r test/demos/gallery/. _site/gallery/
+          cat > _site/index.html <<'HTML'
+          <!DOCTYPE html><meta charset="utf-8"><title>ImageCompare — test reports</title>
+          <body style="font-family:sans-serif;max-width:40em;margin:4em auto">
+          <h1>ImageCompare</h1>
+          <p><a href="dashboard/">Feature coverage dashboard</a> — which features are pinned by which tests, from real runs.</p>
+          <p><a href="gallery/">Demo gallery</a> — captioned clips of every feature, freshly recorded.</p>
+          </body>
+          HTML
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -14,10 +14,9 @@ matches by generic substring containment (`baseFilename.includes(tuple.name)`) a
 ordinary name. The other `_crop\d+` readers are `getNextCropNumber`, `findCropTuples` and
 `findParentTuple` in `imageCompareProvider.ts`, all bound to the writer in `handleCropImages`.
 
-Pinned by `src/test/tupleMatching.test.ts`, which holds *pure copies* of the matching functions
-rather than importing them, so it can silently drift from `fileService.ts` — change trie matching and
-you must change the copy in the same commit (`docs/testing.md`, "The trap: one suite still tests a
-copy").
+Pinned by `test/unit/tupleMatching.test.ts` (Vitest), which imports the real `matchTuplesWithTrie`
+and `scanForImages` from `fileService.ts` through the `vscode` mock alias — the suite once held pure
+copies that could silently drift; the copy is gone (`docs/testing.md`, "The copy trap (historical)").
 
 ## The problem
 
@@ -53,7 +52,7 @@ orphaned (`docs/session-files.md: durable-vote-key`; this section is why it is f
 The collision suffix is a second, quieter version of the same hazard. `takenTupleNames` fills in tuple
 order, so which colliding row gets the bare name and which gets ` (2)` depends on position: a change
 that alters an *earlier* tuple's common substring can move the suffix onto a different row, and a
-saved vote then re-targets silently — it still resolves, just to the wrong tuple. Test 9 pins that
+saved vote then re-targets silently — it still resolves, just to the wrong tuple. The suite pins that
 colliding names are made unique, not which row keeps the bare one.
 
 The reference is the modality with the most files — maximal coverage, since a non-reference file with
@@ -197,18 +196,20 @@ are not durable across a rescan, names are.
 Trap 2 above is about *lookup*; mutation is where this broke. `modalities`, `modalityColors` and
 `modalityPaths` are **display**-ordered arrays, and TS cannot brand-restrict `T[]` index access — so a
 handler splicing them at a wire (original) index corrupts a permuted array, correct only until the
-first reorder. Both handlers pass all three through the *previous* `modalityOrder`
-(`restoreOriginalOrder`); `handleModalityRemoved` then splices all three, but `handleModalityAdded`
-splices only `modalities` and `modalityPaths` — it replaces `modalityColors` wholesale from the wire
-payload, which the extension builds in original order, so the add handler's un-permute of
-`modalityColors` has no effect. (`images` is display-ordered too
-but needs no un-permute: both handlers reset it to `[]` and reload, never splice it.)
+first reorder. The two handlers resolve this differently. `handleModalityRemoved` un-permutes all
+three through the *previous* `modalityOrder` (`restoreOriginalOrder`), splices at the wire index,
+and resets the order to identity. `handleModalityAdded` never un-permutes: it converts the wire
+index to a *display* position (`displayOrderAfterInsert`) and splices the display arrays there,
+because the user's arrangement must survive the insert (`rearrangement-survives-insert` below);
+`modalityColors` is instead rebuilt by permuting the wire payload (original-order over the
+post-insert set) through the preserved order. (`images` is display-ordered too but needs no
+un-permute: both handlers reset it to `[]` and reload, never splice it.)
 
-The second half is carrying display-space *values* across the `modalityOrder` reset inside each
-handler: they were indices into the old permutation, and the new order is identity. `winners` is
-mapped through `prevOrder` in both handlers (`carryIndex` does this in `handleModalityRemoved`);
-`currentModalityIndex` and `previousModalityIndex` are mapped on remove but reset to 0 on add, which
-is valid in the new identity space. A value carried across that reset *unmapped* is the bug.
+The second half is carrying display-space *values* across each handler's order change: they were
+indices into the old permutation. `winners`, `currentModalityIndex` and `previousModalityIndex` are
+mapped through `prevOrder` on remove (`carryIndex`), and on add merely shift at the insertion's
+display position, since the permutation itself is preserved. A value carried across a space change
+*unmapped* is the bug.
 
 **Neither half is caught by the compiler**, and this is the thing to be clear about before deleting
 anything here. A stale display index and a fresh one are both `DisplayModalityIndex`, so carrying one
@@ -260,6 +261,11 @@ section is about. Nothing but the code comments and this doc keeps the un-permut
   asks for none.
   `watcherLogic.ts` declines a rename it cannot prove unique for the same reason
   (`docs/file-watching.md`: `rename-never-guessed`).
+- **`rearrangement-survives-insert`** — a watcher-inserted modality must not reset the user's pill
+  arrangement, the focused modality, or display-space state: the new column lands beside its
+  original-order predecessor (`displayOrderAfterInsert`, pure and suite-pinned), and existing
+  display indices only shift at the insertion point. Resetting to identity order was the old
+  behavior and reads as data loss to a user who curated an order.
 - **`unpermute-before-splice`** — a handler holding an original (wire) index must un-permute a
   display-ordered array (`modalities[wireIndex]` and friends) before splicing it, and must carry
   display-space values through the *previous* `modalityOrder` before resetting it. **Both halves are

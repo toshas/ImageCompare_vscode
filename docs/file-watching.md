@@ -6,7 +6,7 @@ disappears.
 
 Code: `imageCompareProvider.ts` (`setupFileWatcher`, `handleFileDeleted` / `handleFileCreated` /
 `handleFileChanged`, `removeTuple`, `removeModality`, `handleNewFile`) and `watcherLogic.ts` (the
-pure decision helpers). Pinned by `src/test/watcherLogic.test.ts`, which imports the real source.
+pure decision helpers). Pinned by `test/unit/watcherLogic.test.ts` (Vitest), which imports the real source.
 
 Scheduling of the existence sweep (async, `POLL` priority, 10s, non-overlapping, visibility-gated)
 belongs to the loading architecture — see `docs/loading-architecture.md`, "Filesystem watching".

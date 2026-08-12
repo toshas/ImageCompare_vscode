@@ -1,29 +1,5 @@
-/**
- * Tests for the bounded priority work pool. Imports the real implementation
- * (workPool.ts has no vscode dependency).
- *
- * Run: npx ts-node src/test/workPool.test.ts
- */
-
-import { WorkPool, Priority, TaskCancelled } from '../workPool';
-
-let passed = 0;
-let failed = 0;
-
-function assert(cond: boolean, msg: string) {
-  if (cond) passed++;
-  else {
-    failed++;
-    console.error(`  FAIL: ${msg}`);
-  }
-}
-
-function printResults() {
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`Results: ${passed} passed, ${failed} failed`);
-  if (failed > 0) process.exit(1);
-  else console.log('All tests passed!');
-}
+import { describe, it, expect } from 'vitest';
+import { WorkPool, Priority, TaskCancelled } from '../../src/workPool';
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 5));
 // A controllable task: resolves when release() is called.
@@ -35,9 +11,8 @@ function gate() {
   return { promise, release };
 }
 
-async function run() {
-  // Test 1: concurrency is never exceeded
-  {
+describe('bounded priority work pool (real workPool code)', () => {
+  it('Test 1: concurrency is never exceeded', async () => {
     const pool = new WorkPool(2);
     let peak = 0;
     let cur = 0;
@@ -51,15 +26,14 @@ async function run() {
       }, { priority: Priority.VISIBLE })
     );
     await tick();
-    assert(pool.running === 2, `expected 2 running, got ${pool.running}`);
-    assert(pool.pending === 4, `expected 4 pending, got ${pool.pending}`);
+    expect(pool.running, `expected 2 running, got ${pool.running}`).toBe(2);
+    expect(pool.pending, `expected 4 pending, got ${pool.pending}`).toBe(4);
     gates.forEach((g) => g.release());
     await Promise.all(tasks);
-    assert(peak === 2, `concurrency should cap at 2, peaked at ${peak}`);
-  }
+    expect(peak, `concurrency should cap at 2, peaked at ${peak}`).toBe(2);
+  });
 
-  // Test 2: strict priority ordering + FIFO within a priority
-  {
+  it('Test 2: strict priority ordering + FIFO within a priority', async () => {
     const pool = new WorkPool(1);
     const order: string[] = [];
     const first = gate(); // occupy the single slot
@@ -75,14 +49,11 @@ async function run() {
     first.release();
     await tick();
     await tick();
-    assert(
-      JSON.stringify(order) === JSON.stringify(['visibleA', 'visibleB', 'prefetch', 'thumb']),
-      `priority/FIFO order wrong: ${JSON.stringify(order)}`
-    );
-  }
+    expect(order, `priority/FIFO order wrong: ${JSON.stringify(order)}`)
+      .toEqual(['visibleA', 'visibleB', 'prefetch', 'thumb']);
+  });
 
-  // Test 3: cancel() drops queued tasks and never starts them
-  {
+  it('Test 3: cancel() drops queued tasks and never starts them', async () => {
     const pool = new WorkPool(1);
     const first = gate();
     pool.submit(async () => { await first.promise; }, { priority: Priority.VISIBLE });
@@ -94,12 +65,11 @@ async function run() {
     pool.cancel('wave1');
     first.release();
     await tick();
-    assert(!started, 'cancelled task must not run');
-    assert(rejectedWith instanceof TaskCancelled, 'cancelled task should reject with TaskCancelled');
-  }
+    expect(started, 'cancelled task must not run').toBe(false);
+    expect(rejectedWith instanceof TaskCancelled, 'cancelled task should reject with TaskCancelled').toBe(true);
+  });
 
-  // Test 4: a running task is NOT cancelled
-  {
+  it('Test 4: a running task is NOT cancelled', async () => {
     const pool = new WorkPool(1);
     const g = gate();
     let finished: boolean = false;
@@ -108,11 +78,10 @@ async function run() {
     pool.cancel('k'); // task already running
     g.release();
     await p;
-    assert(finished, 'running task must complete despite cancel');
-  }
+    expect(finished, 'running task must complete despite cancel').toBe(true);
+  });
 
-  // Test 5: pins the (priority, seq) key — better priority wins, equal priority keeps submit order.
-  {
+  it('Test 5: pins the (priority, seq) key — better priority wins, equal priority keeps submit order', async () => {
     const pool = new WorkPool(1);
     const first = gate();
     pool.submit(async () => { await first.promise; }, { priority: Priority.VISIBLE });
@@ -125,14 +94,11 @@ async function run() {
     first.release();
     await tick();
     await tick();
-    assert(
-      JSON.stringify(order) === JSON.stringify(['visible', 'sibling', 'bulk1', 'bulk2']),
-      `priority beats submit order, ties keep it: ${JSON.stringify(order)}`
-    );
-  }
+    expect(order, `priority beats submit order, ties keep it: ${JSON.stringify(order)}`)
+      .toEqual(['visible', 'sibling', 'bulk1', 'bulk2']);
+  });
 
-  // The whole ladder, pinned against a hand-written expectation rather than against the enum itself.
-  {
+  it('Full priority ladder, pinned against a hand-written expectation rather than the enum itself', async () => {
     const pool = new WorkPool(1);
     const first = gate();
     pool.submit(async () => { await first.promise; }, { priority: Priority.VISIBLE });
@@ -148,40 +114,35 @@ async function run() {
     pool.submit(async () => { order.push('visible'); }, { priority: Priority.VISIBLE });
     first.release();
     for (let i = 0; i < 8; i++) await tick();
-    assert(
-      JSON.stringify(order) === JSON.stringify(['visible', 'sibling', 'export', 'prefetch', 'thumb', 'bulk', 'poll']),
-      `full priority ladder: ${JSON.stringify(order)}`
-    );
+    expect(order, `full priority ladder: ${JSON.stringify(order)}`)
+      .toEqual(['visible', 'sibling', 'export', 'prefetch', 'thumb', 'bulk', 'poll']);
     // Export is user-initiated: ahead of speculation, behind the image on screen.
-    assert(Priority.SIBLING < Priority.EXPORT && Priority.EXPORT < Priority.PREFETCH,
-      'EXPORT must rank between SIBLING and PREFETCH');
-  }
+    expect(Priority.SIBLING < Priority.EXPORT && Priority.EXPORT < Priority.PREFETCH,
+      'EXPORT must rank between SIBLING and PREFETCH').toBe(true);
+  });
 
-  // Test 7: concurrency is released on the REJECT path too; a missing `finally` would deadlock.
-  {
+  it('Test 7: concurrency is released on the REJECT path too; a missing `finally` would deadlock', async () => {
     const pool = new WorkPool(1);
     await pool.submit(async () => { throw new Error('x'); }, { priority: Priority.VISIBLE }).catch(() => undefined);
     let ran = false;
     await pool.submit(async () => { ran = true; }, { priority: Priority.VISIBLE });
-    assert(ran, 'pool must keep running tasks after one rejects');
+    expect(ran, 'pool must keep running tasks after one rejects').toBe(true);
     await tick(); // the slot is released in a finally, i.e. after the awaited resolve
-    assert(pool.running === 0 && pool.pending === 0, `pool should be idle, got ${pool.running}/${pool.pending}`);
-  }
+    expect(pool.running === 0 && pool.pending === 0, `pool should be idle, got ${pool.running}/${pool.pending}`).toBe(true);
+  });
 
-  // Test 8: a synchronously-throwing fn is caught like a rejection
-  {
+  it('Test 8: a synchronously-throwing fn is caught like a rejection', async () => {
     const pool = new WorkPool(1);
     let err: unknown;
     await pool.submit((() => { throw new Error('sync'); }) as unknown as () => Promise<void>, {
       priority: Priority.VISIBLE
     }).catch(e => (err = e));
-    assert(err instanceof Error && (err as Error).message === 'sync', 'sync throw should reject, not escape');
+    expect(err instanceof Error && (err as Error).message === 'sync', 'sync throw should reject, not escape').toBe(true);
     const ok = await pool.submit(async () => 1, { priority: Priority.VISIBLE });
-    assert(ok === 1, 'pool still usable after a sync throw');
-  }
+    expect(ok, 'pool still usable after a sync throw').toBe(1);
+  });
 
-  // Test 9: cancel() drops ALL queued tasks under a key and leaves the rest ordered
-  {
+  it('Test 9: cancel() drops ALL queued tasks under a key and leaves the rest ordered', async () => {
     const pool = new WorkPool(1);
     const first = gate();
     pool.submit(async () => { await first.promise; }, { priority: Priority.VISIBLE });
@@ -194,30 +155,25 @@ async function run() {
     pool.submit(async () => { order.push('keep2'); }, { priority: Priority.PREFETCH });
     const before = pool.pending;
     pool.cancel('w');
-    assert(pool.pending === before - 2, `cancel should drop exactly 2, ${before}->${pool.pending}`);
+    expect(pool.pending, `cancel should drop exactly 2, ${before}->${pool.pending}`).toBe(before - 2);
     first.release();
     await tick();
     await tick();
-    assert(
-      JSON.stringify(order) === JSON.stringify(['keep1', 'keep2']),
-      `survivors must run in order: ${JSON.stringify(order)}`
-    );
-  }
+    expect(order, `survivors must run in order: ${JSON.stringify(order)}`).toEqual(['keep1', 'keep2']);
+  });
 
-  // Test 10: re-entrant submit needs a free slot; nesting on the last slot self-deadlocks by design.
-  {
+  it('Test 10: re-entrant submit needs a free slot; nesting on the last slot self-deadlocks by design', async () => {
     const pool = new WorkPool(2);
     let inner = false;
     await pool.submit(async () => {
       await pool.submit(async () => { inner = true; }, { priority: Priority.VISIBLE });
     }, { priority: Priority.VISIBLE });
-    assert(inner, 're-entrant submit must not deadlock when a slot is free');
+    expect(inner, 're-entrant submit must not deadlock when a slot is free').toBe(true);
     await tick();
-    assert(pool.running === 0 && pool.pending === 0, 'pool idle after re-entrant work');
-  }
+    expect(pool.running === 0 && pool.pending === 0, 'pool idle after re-entrant work').toBe(true);
+  });
 
-  // Test 11: speculation leaves one slot free; user-facing work takes it immediately.
-  {
+  it('Test 11: speculation leaves one slot free; user-facing work takes it immediately', async () => {
     const pool = new WorkPool(2);
     const g1 = gate();
     const g2 = gate();
@@ -225,28 +181,26 @@ async function run() {
     const p2 = pool.submit(async () => { await g2.promise; }, { priority: Priority.PREFETCH });
     await tick();
     // Only one of the two speculative tasks may run: the last slot is reserved.
-    assert(pool.running === 1, `speculation must cap at concurrency-1, got ${pool.running} running`);
-    assert(pool.pending === 1, `second speculative task should queue, got ${pool.pending} pending`);
+    expect(pool.running, `speculation must cap at concurrency-1, got ${pool.running} running`).toBe(1);
+    expect(pool.pending, `second speculative task should queue, got ${pool.pending} pending`).toBe(1);
     let visibleRan = false;
     const pv = pool.submit(async () => { visibleRan = true; }, { priority: Priority.VISIBLE });
     await tick();
-    assert(visibleRan, 'VISIBLE must start in the reserved slot while speculation runs');
+    expect(visibleRan, 'VISIBLE must start in the reserved slot while speculation runs').toBe(true);
     g1.release();
     g2.release();
     await Promise.all([p1, p2, pv]);
-    assert(pool.running === 0 && pool.pending === 0, 'queued speculative task must still drain');
-  }
+    expect(pool.running === 0 && pool.pending === 0, 'queued speculative task must still drain').toBe(true);
+  });
 
-  // Test 12: at concurrency 1 the reservation is waived — speculation must not starve forever.
-  {
+  it('Test 12: at concurrency 1 the reservation is waived — speculation must not starve forever', async () => {
     const pool = new WorkPool(1);
     let ran = false;
     await pool.submit(async () => { ran = true; }, { priority: Priority.POLL });
-    assert(ran, 'a speculative task must run at concurrency 1 (no reserved slot to leave)');
-  }
+    expect(ran, 'a speculative task must run at concurrency 1 (no reserved slot to leave)').toBe(true);
+  });
 
-  // Test 13: a freed slot goes to queued background, not a further sibling — foreground at budget-1 defers.
-  {
+  it('Test 13: a freed slot goes to queued background, not a further sibling — foreground at budget-1 defers', async () => {
     const pool = new WorkPool(2);
     const gV = gate();
     const gS1 = gate();
@@ -257,24 +211,23 @@ async function run() {
     const pv = pool.submit(async () => { await gV.promise; }, { priority: Priority.VISIBLE });
     const ps1 = pool.submit(async () => { await gS1.promise; }, { priority: Priority.SIBLING });
     await tick();
-    assert(pool.running === 2, `nothing queued below: V+S fill the pool, got ${pool.running}`);
+    expect(pool.running, `nothing queued below: V+S fill the pool, got ${pool.running}`).toBe(2);
     const ps2 = pool.submit(async () => { s2Started = true; await gS2.promise; }, { priority: Priority.SIBLING });
     const pb = pool.submit(async () => { bStarted = true; await gB.promise; }, { priority: Priority.THUMBNAIL_BULK });
     await tick();
     gV.release();
     await tick();
-    assert(bStarted && !s2Started, 'the freed slot goes to the queued sweep item, not the third sibling');
-    assert(pool.running === 2, `one sibling + one sweep item run: got ${pool.running}`);
+    expect(bStarted && !s2Started, 'the freed slot goes to the queued sweep item, not the third sibling').toBe(true);
+    expect(pool.running, `one sibling + one sweep item run: got ${pool.running}`).toBe(2);
     gS1.release();
     await tick();
-    assert(s2Started, 'the next freed slot goes back to the sibling');
+    expect(s2Started, 'the next freed slot goes back to the sibling').toBe(true);
     gS2.release();
     gB.release();
     await Promise.all([pv, ps1, ps2, pb]);
-  }
+  });
 
-  // Test 14: prefetch leaves one speculative slot to the queued thumbnail sweep.
-  {
+  it('Test 14: prefetch leaves one speculative slot to the queued thumbnail sweep', async () => {
     const pool = new WorkPool(4);
     const gB = gate();
     const gP = [gate(), gate(), gate()];
@@ -286,15 +239,14 @@ async function run() {
       pool.submit(async () => { pStarted++; await g.promise; }, { priority: Priority.PREFETCH })
     );
     await tick();
-    assert(pool.running === 3, `speculation stays at concurrency-1: got ${pool.running}`);
-    assert(bStarted && pStarted === 2, `prefetch shares the speculative budget with the sweep: ${pStarted} prefetch + bulk=${bStarted}`);
+    expect(pool.running, `speculation stays at concurrency-1: got ${pool.running}`).toBe(3);
+    expect(bStarted && pStarted === 2, `prefetch shares the speculative budget with the sweep: ${pStarted} prefetch + bulk=${bStarted}`).toBe(true);
     gB.release();
     gP.forEach((g) => g.release());
     await Promise.all([pb, ...pps]);
-  }
+  });
 
-  // Test 15: within speculation, a freed slot goes to the queued sweep, not a further prefetch.
-  {
+  it('Test 15: within speculation, a freed slot goes to the queued sweep, not a further prefetch', async () => {
     const pool = new WorkPool(4);
     const gB1 = gate();
     const gP = [gate(), gate()];
@@ -305,36 +257,34 @@ async function run() {
     const pb1 = pool.submit(async () => { await gB1.promise; }, { priority: Priority.THUMBNAIL_BULK });
     const pps = gP.map((g) => pool.submit(async () => { await g.promise; }, { priority: Priority.PREFETCH }));
     await tick();
-    assert(pool.running === 3, `speculative budget is 3 of 4: got ${pool.running}`);
+    expect(pool.running, `speculative budget is 3 of 4: got ${pool.running}`).toBe(3);
     const pb2 = pool.submit(async () => { b2Started = true; await gB2.promise; }, { priority: Priority.THUMBNAIL_BULK });
     const pp3 = pool.submit(async () => { p3Started = true; await gP3.promise; }, { priority: Priority.PREFETCH });
     await tick();
     gB1.release();
     await tick();
-    assert(b2Started && !p3Started, 'the freed speculative slot goes to the queued sweep item, not more prefetch');
+    expect(b2Started && !p3Started, 'the freed speculative slot goes to the queued sweep item, not more prefetch').toBe(true);
     gP.forEach((g) => g.release());
     await tick();
     gB2.release();
     gP3.release();
     await Promise.all([pb1, ...pps, pb2, pp3]);
-  }
+  });
 
-  // Test 16: work-conserving — with nothing queued below, foreground uses the whole pool.
-  {
+  it('Test 16: work-conserving — with nothing queued below, foreground uses the whole pool', async () => {
     const pool = new WorkPool(2);
     const gV = gate();
     const gS = gate();
     const pv = pool.submit(async () => { await gV.promise; }, { priority: Priority.VISIBLE });
     const ps = pool.submit(async () => { await gS.promise; }, { priority: Priority.SIBLING });
     await tick();
-    assert(pool.running === 2, `no background queued: both foreground tasks run, got ${pool.running}`);
+    expect(pool.running, `no background queued: both foreground tasks run, got ${pool.running}`).toBe(2);
     gV.release();
     gS.release();
     await Promise.all([pv, ps]);
-  }
+  });
 
-  // Test 17: soak — mixed priorities, keys, throws and cancels; everything settles and the pool drains.
-  {
+  it('Test 17: soak — mixed priorities, keys, throws and cancels; everything settles and the pool drains', async () => {
     let seed = 42;
     const rng = () => {
       // Deterministic (mulberry32): the repo forbids nondeterministic tests.
@@ -363,25 +313,16 @@ async function run() {
     }
     await Promise.all(promises);
     await tick();
-    assert(settled === N, `every submission settles: ${settled}/${N}`);
-    assert(pool.running === 0 && pool.pending === 0, `pool drains: ${pool.running}/${pool.pending}`);
-  }
+    expect(settled, `every submission settles: ${settled}/${N}`).toBe(N);
+    expect(pool.running === 0 && pool.pending === 0, `pool drains: ${pool.running}/${pool.pending}`).toBe(true);
+  });
 
-  // Test 6: result and error propagation
-  {
+  it('Test 6: result and error propagation', async () => {
     const pool = new WorkPool(2);
     const v = await pool.submit(async () => 42, { priority: Priority.VISIBLE });
-    assert(v === 42, `expected 42, got ${v}`);
+    expect(v, `expected 42, got ${v}`).toBe(42);
     let err: unknown;
     await pool.submit(async () => { throw new Error('boom'); }, { priority: Priority.VISIBLE }).catch((e) => (err = e));
-    assert(err instanceof Error && (err as Error).message === 'boom', 'error should propagate');
-  }
-
-  printResults();
-}
-
-// Without this a setup throw would exit 0 and CI would go green on a broken pool.
-run().catch(e => {
-  console.error(e);
-  process.exit(1);
+    expect(err instanceof Error && (err as Error).message === 'boom', 'error should propagate').toBe(true);
+  });
 });

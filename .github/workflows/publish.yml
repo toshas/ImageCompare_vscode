@@ -19,10 +19,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -40,15 +40,19 @@ jobs:
       - name: Check comment length
         run: node scripts/comment-lint.mjs
 
-      # One list of suites, in package.json — a second copy here would silently go stale.
+      # The test command is defined once, in package.json — a copy here would silently go stale.
       - name: Run tests
         run: npm test
 
       - name: Mutation check
         run: node scripts/mutation-check.mjs
 
+  # The full 3-OS three-layer matrix must also be green before any release build (workflow_call into test.yml).
+  test-full:
+    uses: ./.github/workflows/test.yml
+
   build:
-    needs: test
+    needs: [test, test-full]
     strategy:
       matrix:
         include:
@@ -82,10 +86,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -135,25 +139,45 @@ jobs:
           '
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vsix-${{ matrix.target }}
           path: '*.vsix'
 
-  publish:
+  # The artifact must install into the Open VSX-family host (VSCodium = what Cursor et al. build on)
+  # BEFORE anything is published — a packaging defect here is exactly what dev-mode tests can't see.
+  codium-smoke:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: vsix-linux-x64
+      - name: Install the VSIX into VSCodium and verify it registers
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/VSCodium/vscodium/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
+          curl -sL -o codium.tar.gz "https://github.com/VSCodium/vscodium/releases/download/$TAG/VSCodium-linux-x64-$TAG.tar.gz"
+          mkdir codium && tar xzf codium.tar.gz -C codium
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libnss3 libgbm1 libasound2t64 || sudo apt-get install -y -qq xvfb libnss3 libgbm1 libasound2
+          VSIX=$(ls *.vsix | head -1)
+          xvfb-run -a ./codium/bin/codium --install-extension "$VSIX" --user-data-dir .ud --extensions-dir .ext
+          xvfb-run -a ./codium/bin/codium --list-extensions --show-versions --user-data-dir .ud --extensions-dir .ext | tee installed.txt
+          grep -q "obukhovai.image-compare" installed.txt
+
+  publish:
+    needs: [build, codium-smoke]
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: vsix-files
           merge-multiple: true
@@ -178,3 +202,29 @@ jobs:
             echo "Publishing $vsix to VS Code Marketplace..."
             vsce publish --packagePath "$vsix" --pat ${{ secrets.VSCE_TOKEN }}
           done
+
+  # After publishing: prove Open VSX actually serves the new version and that the served VSIX
+  # still carries the WASM tier (the registry copy is what Cursor/VSCodium users install).
+  verify-openvsx:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Poll Open VSX for the released version and scan the served VSIX
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          for i in $(seq 1 40); do
+            LIVE=$(curl -s https://open-vsx.org/api/obukhovai/image-compare | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" || true)
+            [ "$LIVE" = "$VER" ] && break
+            sleep 30
+          done
+          [ "$LIVE" = "$VER" ] || { echo "Open VSX never served $VER (last: $LIVE)"; exit 1; }
+          curl -sL -o served.vsix "https://open-vsx.org/api/obukhovai/image-compare/linux-x64/$VER/file/obukhovai.image-compare-$VER@linux-x64.vsix"
+          python3 - <<'PY'
+          import zipfile
+          names = zipfile.ZipFile('served.vsix').namelist()
+          req = ["extension/node_modules/@img/sharp-wasm32/lib/sharp-wasm32.node.wasm", "extension/node_modules/@emnapi/runtime/"]
+          missing = [r for r in req if not any(n.startswith(r) or n == r for n in names)]
+          assert not missing, f"served VSIX missing: {missing}"
+          print("Open VSX serves a complete VSIX")
+          PY

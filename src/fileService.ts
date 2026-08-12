@@ -56,7 +56,7 @@ interface MatchedTuple {
 }
 
 /** Group each modality's files into tuples keyed by the reference modality's basenames — see docs/tuple-matching.md. */
-function matchTuplesWithTrie(
+export function matchTuplesWithTrie(
   modalityFiles: Map<string, Array<{ name: string; uri: vscode.Uri }>>,
   modalities: string[]
 ): MatchedTuple[] {
@@ -277,7 +277,7 @@ function findCommonSubstring(names: string[]): string {
 }
 
 /** Modality names for mode 3: each filename stripped of the common prefix and suffix. */
-function findDifferingParts(names: string[]): string[] {
+export function findDifferingParts(names: string[]): string[] {
   if (names.length < 2) return names;
 
   const basenames = names.map(n => n.replace(/\.[^.]+$/, ''));

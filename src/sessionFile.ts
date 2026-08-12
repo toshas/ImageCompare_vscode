@@ -1,4 +1,4 @@
-/** Pure, vscode-free core of the .imagecompare format — keep it importable by ts-node tests (docs/session-files.md: sessionfile-vscode-free). */
+/** Pure, vscode-free core of the .imagecompare format — keep it importable by the unit tests (docs/session-files.md: sessionfile-vscode-free). */
 import * as path from 'path';
 
 /** Parsed .imagecompare session file; format and semantics: docs/session-files.md. */

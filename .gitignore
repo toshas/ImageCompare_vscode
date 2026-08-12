@@ -17,3 +17,20 @@ test_images/
 
 # Scratch for an audit round: ledgers and the pre-images a fix-verifier diffs against
 .agent-runs/
+
+# Test artifacts
+out-integration/
+.dashboard-data/
+test-results/
+playwright-report/
+test/webview/harness/
+
+# stray tsc declaration output under test/ (configs + specs)
+test/**/*.d.ts
+test/**/*.d.ts.map
+
+# Generated test outputs — never versioned: rebuild on demand (test:demos / test:dashboard) or download the CI demo-gallery artifact
+test/demos/raw/
+test/demos/gallery/
+test/dashboard/dashboard.html
+test/dashboard/FEATURES.md

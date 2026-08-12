@@ -12,7 +12,9 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
 
 - **Plans are disposable, decisions are durable.** Delete an implementation plan once executed —
   it describes intent, some of which always changes, and a reader can't tell intent from truth.
-  Fold anything durable (the diagnosis, the invariants) into the relevant `docs/` file.
+  Fold anything durable (the diagnosis, the invariants) into the relevant `docs/` file. Plans
+  *awaiting* execution live in `dev_backlog/`, never in `docs/` — `docs/` describes what is,
+  `dev_backlog/` what might be, and a reader must be able to trust the difference.
 - **After a code change, update the docs it invalidates.** Required for: new/removed files,
   changed architecture, changed behaviour of something documented, or a new invariant. Skip for:
   bug fixes with no design change, refactors, typos.
@@ -37,10 +39,10 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
   code beside it, and it is invisible to anyone reading the design. Put the explanation in the
   relevant `docs/` file and leave a one-line comment — ideally naming the doc. Applies to JSDoc too:
   state the contract, don't narrate the rationale. `node scripts/comment-lint.mjs` enforces it (a run
-  of 2+ consecutive `//` lines fails) and runs in CI. It reads only `src/**/*.ts`: `src/test/` is
-  exempt, since a comment explaining why a fixture triggers an edge case is correctly co-located with
-  the fixture, and `scripts/`, `webpack.config.js` and `.github/` are outside its scope entirely — the
-  rule there is convention, not a gate. Banner (`// ----`) and directive (`// eslint-`, `// @ts-`)
+  of 2+ consecutive `//` lines fails) and runs in CI. It reads only `src/**/*.ts`; tests live under
+  `test/`, outside that scope, which is the exemption they need — a comment explaining why a fixture
+  triggers an edge case is correctly co-located with the fixture. `scripts/`, `webpack.config.js` and
+  `.github/` are outside its scope entirely — the rule there is convention, not a gate. Banner (`// ----`) and directive (`// eslint-`, `// @ts-`)
   runs are exempt too.
 
 ## Architecture Overview
@@ -51,9 +53,10 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
 - **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
-- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `src/test/watcherLogic.test.ts`
+- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
 - **`workPool.ts`** - Pure: the bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
+- **`webviewShell.ts`** - The webview's static HTML shell (styles + body), single source of truth for the production panel and the Playwright test harness (`test/webview/harness.ts`)
 - **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities → `docs/tuple-matching.md`
 - **`thumbnailService.ts`** - Image processing (thumbnails, full-image loading, cropping) → `docs/image-backends.md`
 - **`sharpLoader.ts`** - Dynamic Sharp loader with the "Unsupported CPU" workaround → `docs/image-backends.md`
@@ -81,10 +84,67 @@ has none). Read one on demand — don't load them preemptively.
 | `docs/tuple-matching.md` | Touching how files are grouped into tuples/modalities: the trie matcher, tie-breaks, crop deprioritization, modality naming/order, or the sparse-vs-dense and original-vs-display index traps. |
 | `docs/image-backends.md` | Touching Sharp/Jimp/PPMX, `loadFullImage`, webpack externalization, or packaging. Documents which fallback tiers *actually* exist (not the aspirational chain) and why the CPU workaround is there. |
 | `docs/crop-and-pptx.md` | Touching crop or PowerPoint export: the relative-coordinate contract, the dual EXIF+tEXt metadata write, the `_cropNN` filename contract, or parent/crop slide pairing. |
-| `docs/testing.md` | Adding or changing a test, or trusting one: what each suite pins, the one suite that still tests a *copy* of the shipped code, what nothing covers, and the manual checks. |
+| `docs/testing.md` | Adding or changing a test, or trusting one: the three layers, what each suite pins, the copy-trap history, what nothing covers, and the manual checks. |
 
 Everything below is operating instructions — conventions, commands, release. Subsystem *design*
 belongs in `docs/`, not here.
+
+## Routine procedures (the catalogue)
+
+The two canonical loops, in order — each step is a procedure below:
+- **New feature** → implement → update the docs/invariants it touches → tests per the decision rule
+  → add its row to `test/dashboard/features.json` → verification battery → (demo clip only if a new
+  user-visible flow is worth showing).
+- **Bug** → `/fix-issue` (formalize → failing test → fix → docs) → the new test joins the feature's
+  existing `features.json` row (a new row only if the bug exposed an untracked feature) →
+  verification battery.
+
+Every recurring ritual lives in exactly one place; this list is the index. The split is
+deliberate: **skills** are multi-step workflows an agent executes on demand with their own quality
+gates; **CLAUDE.md sections** are checklists and ambient rules that must be in context for every
+task. Don't convert a checklist into a skill unless it is invoked as a unit and has internal
+verification steps.
+
+| Procedure | Where |
+|---|---|
+| Classify a finished change and audit its obligations | CLAUDE.md → Change close-out |
+| Verify after any change (the gate battery) | CLAUDE.md → Verification |
+| Where a new test goes | CLAUDE.md → Testing (decision rule) |
+| Growing the coverage dashboard | CLAUDE.md → Feature Coverage Dashboard |
+| Release / publish | CLAUDE.md → Release Checklist |
+| Local / remote install of a VSIX | CLAUDE.md → Install Locally |
+| Manual pre-release walk | docs/testing.md → Manual checks |
+| Audit docs against code | `/verify-docs` skill |
+| Fix a reported bug or feature request end-to-end | `/fix-issue` skill |
+| Open image comparisons programmatically | `/imagecompare` skill |
+
+## Change close-out (mandatory)
+
+The loops above describe the path; the close-out proves the path was walked. Before a unit of work
+is committed or reported done, **classify it and audit the diff against the obligations of its
+class**. The CI gates catch what *broke*; this step catches what was *omitted* — the missing
+dashboard row, mutation entry, or doc update that no script can detect.
+
+1. **Classify** the change — one or more of: **feature** (new user-visible behavior), **fix**
+   (existing behavior corrected), **refactor** (behavior identical), **test-only**, **docs**,
+   **infra** (CI/scripts/packaging). A mixed change takes the union of its classes' obligations.
+2. **Obligations by class**:
+   - *feature*: update the docs it invalidates (+ invariants, cited from code) · tests per the
+     decision rule · mutation entry if invariant-grade · `features.json` row (gray if tests come
+     later) · demo clip only if a new visible flow is worth showing.
+   - *fix*: failing test first (`/fix-issue`) · test joins the feature's existing `features.json`
+     row (new row only if the bug exposed an untracked feature) · docs only if the design changed.
+   - *refactor*: no new obligations — but invariant citations must still resolve (checker enforces).
+   - *test-only*: mutation entry (a test nothing can break is decoration) · dashboard mapping.
+   - *docs*: every claim verifiable in code (else fix the code or delete the claim).
+   - *infra*: nothing beyond the battery — but check whether a CLAUDE.md/docs claim about CI is now stale.
+3. **Audit** — for any change touching `src/` or `test/`, dispatch a **subagent that did not write
+   the change**, giving it the diff, the classification, and the obligation list. It must return a
+   verdict per obligation: **done** / **n/a because <reason>** / **MISSING**. Fix every MISSING
+   before committing. For docs/infra-only changes an explicit inline walk of the list (stated in
+   the final report) suffices — no subagent.
+4. Run the **Verification** battery. State the classification and the audit verdicts in the report
+   or commit message, so omissions are visible rather than silent.
 
 ## Agent Skills
 
@@ -104,16 +164,48 @@ npm run compile      # One-off build
 
 ## Testing
 
-Nine `ts-node` suites, no framework. `npm test` runs them, and CI gates the build on it; the `test`
-script in `package.json` is the list CI executes, and `docs/testing.md` repeats it only to show the
-per-suite invocation. What each suite pins, what nothing covers, the manual checks worth walking
-before a release, and `imageCompare.debug` logging: `docs/testing.md`.
+One runner: Vitest. `npm test` runs the whole unit layer (`test/unit/`, via
+`test/vitest.config.ts`), and CI gates the build on it; `test:unit` is an alias of the same run.
+What each suite pins, what nothing covers, the manual checks worth walking before a release, and
+`imageCompare.debug` logging: `docs/testing.md`.
+
+The unit layer is Layer 1 of the multi-layer testing bed described in
+**[docs/testing.md](docs/testing.md)** (runs in its own CI workflow, `.github/workflows/test.yml`):
+
+```bash
+npm run test:unit         # Layer 1 — Vitest, pure logic on real code (fast)
+npm run test:webview      # Layer 3 — Playwright drives the real webview bundle
+                          #           out-of-process (run `npm run compile` first)
+npm run test:integration  # Layer 2 — @vscode/test-cli inside a real VSCode
+npm run test:all          # everything
+```
+
+**Where a new test goes** (decision rule, in order):
+1. Webview DOM/interaction behavior → a Playwright spec in `test/webview/` (drive via
+   `loadInited`/`__ic_send`, assert via `window.__ic_test` and locators).
+2. Real VS Code API behavior (fs scanning, commands, activation) → `test/integration/`.
+3. Pure logic → Vitest in `test/unit/` importing the real module. An invariant-grade rule whose
+   silent breakage corrupts data or violates a documented contract additionally gets a mutation
+   entry in `scripts/mutation-check.mjs`, because only that harness proves the test bites. Matcher
+   tests go in `test/unit/`, importing the real `matchTuplesWithTrie` — full stop.
+Demos (`test/demos/`) are not tests: add one only when a new user-visible flow is worth a gallery
+clip; bug fixes need a test, never a demo.
+
+- **Layer 1** (`test/unit/`) imports real production functions via a `vscode` mock
+  alias (`test/mocks/vscode.ts`); no hand-copied logic.
+- **Layer 3** (`test/webview/`) loads the real `dist/webview.js` against a harness
+  that reuses the production shell (`src/webviewShell.ts`) and stubs
+  `acquireVsCodeApi`. Specs assert via the `window.__ic_test` state hook —
+  deterministic logic checks (no pixel snapshots), so the layer runs in CI on all
+  three OSes. See docs/testing.md.
+- **Layer 2** (`test/integration/`) exercises vscode-API-coupled code (e.g.
+  `scanForImages`) on temp fixtures.
 
 ### Verification — run all of these after any change
 
 ```bash
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
-npm test                            # the suites listed in package.json
+npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
 node scripts/comment-lint.mjs       # no multi-line // blocks in production code
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
@@ -121,24 +213,71 @@ npm run compile                     # both webpack targets
 ```
 
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the two
-checker scripts, the suites, the mutation check. There is **no `tsc --noEmit` step**. Type errors
-still turn CI red today — ts-loader type-checks both tsconfigs during `npm run compile`, `ts-node`
-type-checks each suite, and between them every `src/` file is covered — but that is a side effect of
-two other steps, so a file neither bundles nor a suite imports would go unchecked in CI. Adding a
-test means also adding its mutation to `scripts/mutation-check.mjs` — a test nothing can break is
-decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
+checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs all three
+`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
+step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
+`npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
+transpiles with esbuild and type-checks nothing; `tsconfig.test.json` in the gates job is what
+catches test-file type errors. Adding a test means also adding its mutation to `scripts/mutation-check.mjs` — a test
+nothing can break is decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
 skill.
 
-**`tupleMatching` tests a *copy* of the matching functions, not the functions** — `modalityNames.ts`
-is the exception, imported from the shipped source. Change the matcher in `fileService.ts` and update
-the copy in the same edit, or the suite passes while pinning code that no longer exists.
-`pngTextChunk` used to be a copy too — that is exactly how a crop-breaking bug shipped green. Prefer
-extracting pure logic (`pngText.ts`, `watcherLogic.ts`, `workPool.ts`, `modalityNames.ts`) over
-copying it.
+**The copy era is over.** `tupleMatching` and `pngTextChunk` were once ts-node suites testing
+hand-copies of the shipped functions — that is exactly how a crop-breaking bug shipped green. Both
+are now Vitest suites in `test/unit/` importing the real code (`matchTuplesWithTrie`/`scanForImages`
+from `fileService.ts`, `modalityNames.ts`, `pngText.ts`) via the `vscode` mock alias, so they cannot
+drift. For `vscode`-free logic, prefer extracting a pure module (`pngText.ts`, `watcherLogic.ts`,
+`workPool.ts`, `modalityNames.ts`) over ever copying it.
 
 **A green suite is not evidence.** When you add a test, break the code it covers and watch it fail —
 this suite has passed with a tie-break inverted and with the row sort reversed. Pin values that come
 from outside the implementation; comparing the code to itself proves nothing. See `docs/testing.md`.
+
+> The **Layer 1** Vitest tests in `test/unit/` (`tupleMatching.test.ts`,
+> `pngTextChunk.test.ts`) are the *only* pinning for the matcher and the PNG
+> tEXt writer — the old ts-node copies are deleted, and the mutation gate kills
+> every suite through `vitest run`. Run with `npm test`.
+
+### Feature Coverage Dashboard
+
+`test/dashboard/features.json` maps every feature (keyboard, tools, crop, zoom,
+backend) to the test(s) that cover it. The generator runs all suites with JSON
+reporters and lights each feature green/red/gray from **real** results:
+
+```bash
+npm run test:dashboard        # run all suites + regenerate
+npm run test:dashboard:reuse  # regenerate from the last run's JSON
+open test/dashboard/dashboard.html   # generated, not versioned
+```
+
+Untested features show as gaps (not false-green), lit from real test results.
+
+**Growing the dashboard** (do this whenever a feature or test is added):
+1. Add or find the feature's entry in `test/dashboard/features.json` — an area → feature row with a
+   stable `id`, a display `name`, and `tests: [{suite: unit|webview|integration, match: <substring
+   of the test title>}]`. An empty `tests` array is legitimate: it renders gray, an honest gap —
+   add the feature row *before* its tests exist so the gap is visible rather than invisible.
+2. When the test lands, point `match` at a distinctive substring of its title (a `describe`/`it`
+   string for unit, spec title for webview, mocha title for integration).
+3. `npm run test:dashboard` and check the feature turned green — a `match` that matches nothing
+   when its suite ran **fails the generator (and CI)**, so a stale mapping cannot merge silently.
+4. Nothing else to update: CI republishes the live dashboard from `features.json` + real results on
+   every main push (Pages).
+
+### Feature Demos
+
+`test/demos/` records a short, captioned clip of each feature being used (on
+real photo fixtures from `test/fixtures/images/`, processed into fake CV
+modalities by `test/demos/photoFixtures.ts`), via Playwright → ffmpeg → small
+H.264 MP4 (plays in every browser incl. Safari and VS Code's preview).
+The gallery builds to `test/demos/gallery/index.html` (generated, not versioned; every CI run also uploads it as the `demo-gallery` artifact).
+
+```bash
+npm run test:demos            # record + rebuild the gallery
+open test/demos/gallery/index.html   # after running test:demos, or download the CI artifact
+```
+
+Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
 
 ## Publishing (GitHub Actions)
 
