@@ -79,6 +79,35 @@ const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const generatedAt = process.env.IC_DEMOS_TIME || '(run-time)';
+
+// Group cards into sections by area, preserving demos.json order; first section open, rest collapsed.
+const areaOrder = [];
+const byArea = new Map();
+for (const c of cards) {
+  const a = c.area || 'Other';
+  if (!byArea.has(a)) { byArea.set(a, []); areaOrder.push(a); }
+  byArea.get(a).push(c);
+}
+
+const cardHtml = (c) => `    <div class="card">
+      <div class="meta">
+        <div class="row"><span class="title">${esc(c.title)}</span><span class="keys">${esc(c.keys)}</span></div>
+        <div class="scenario">${esc(c.caption || '')}</div>
+        <div class="desc">${esc(c.description)}</div>
+      </div>
+      <video src="${c.id}.mp4" muted playsinline controls preload="metadata"></video>
+      <div class="size">${c.size} KB</div>
+    </div>`;
+
+const sections = areaOrder
+  .map(
+    (a, i) => `  <details class="area"${i === 0 ? ' open' : ''}>
+    <summary>${esc(a)} <span class="count">${byArea.get(a).length}</span></summary>
+${byArea.get(a).map(cardHtml).join('\n')}
+  </details>`,
+  )
+  .join('\n');
+
 const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>ImageCompare — Feature Demos</title>
 <style>
@@ -86,41 +115,33 @@ const html = `<!DOCTYPE html>
   header { padding: 20px 28px; border-bottom: 1px solid #262a33; }
   h1 { margin: 0 0 4px; font-size: 20px; }
   .sub { color: #9aa0aa; font-size: 13px; }
-  main { padding: 22px 28px; }
-  /* One row per demo: the clip and its caption side by side — a dense card grid buried the captions. */
-  .grid { display: flex; flex-direction: column; gap: 14px; max-width: 980px; margin: 0 auto; }
-  .card { display: flex; gap: 16px; align-items: flex-start; }
-  .card video { width: 420px; flex-shrink: 0; }
-  .card .meta { padding-top: 4px; }
-  .card { border: 1px solid #262a33; border-radius: 10px; background: #151821; overflow: hidden; }
-  .card video { display: block; width: 100%; background: #000; }
-  .meta { padding: 10px 12px; }
+  .hint { color: #9aa0aa; font-size: 12px; margin: 8px 0 0; }
+  main { padding: 22px 28px; max-width: 860px; margin: 0 auto; }
+  .area { margin-bottom: 18px; border: 1px solid #262a33; border-radius: 10px; background: #12141b; }
+  .area summary { cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 600; letter-spacing: .3px; user-select: none; }
+  .area summary .count { color: #9aa0aa; font-weight: 400; margin-left: 6px; }
+  .area[open] summary { border-bottom: 1px solid #262a33; }
+  /* The caption is duplicated ABOVE the clip as crisp HTML — the burned-in banner survives compression poorly. */
+  .card { margin: 22px 16px; padding: 14px; border: 1px solid #262a33; border-radius: 10px; background: #151821; }
+  .card + .card { margin-top: 30px; }
+  .meta { margin-bottom: 10px; }
   .row { display: flex; align-items: baseline; gap: 8px; }
-  .title { font-size: 14px; font-weight: 600; }
+  .title { font-size: 15px; font-weight: 600; }
   .keys { margin-left: auto; font-size: 11px; color: #9aa0aa; background: #1d212b; padding: 1px 7px; border-radius: 10px; white-space: nowrap; }
-  .desc { font-size: 12px; color: #aeb4be; margin-top: 4px; line-height: 1.4; }
+  .scenario { font-size: 13px; color: #dfe3ea; margin-top: 6px; padding: 7px 10px; background: #1a1e28; border-left: 3px solid #3b82f6; border-radius: 4px; line-height: 1.4; }
+  .desc { font-size: 12px; color: #aeb4be; margin-top: 6px; line-height: 1.4; }
+  .card video { display: block; width: 100%; max-width: 680px; background: #000; border-radius: 6px; }
   .size { font-size: 10px; color: #6b717c; margin-top: 6px; }
 </style></head>
 <body>
 <header>
   <h1>ImageCompare — Feature Demos</h1>
-  <div class="sub">${cards.length} demos &middot; ${total} KB total (H.264 MP4) &middot; generated ${esc(generatedAt)}</div>
+  <div class="sub">${cards.length} demos in ${areaOrder.length} sections &middot; ${total} KB total (H.264 MP4) &middot; generated ${esc(generatedAt)}</div>
+  <p class="hint">Hover a clip to preview it; click for playback with controls. Click a section header to expand it.</p>
 </header>
-<p class="hint">Hover a clip to preview it; click for sound-free playback with controls.</p>
-<main><div class="grid">
-${cards
-  .map(
-    (c) => `  <div class="card">
-    <video src="${c.id}.mp4" muted playsinline controls preload="metadata"></video>
-    <div class="meta">
-      <div class="row"><span class="title">${esc(c.title)}</span><span class="keys">${esc(c.keys)}</span></div>
-      <div class="desc">${esc(c.description)}</div>
-      <div class="size">${c.size} KB</div>
-    </div>
-  </div>`,
-  )
-  .join('\n')}
-</div></main>
+<main>
+${sections}
+</main>
 <script>
   // Play-on-hover, one clip at a time — autoplaying every video at once made the page unreadable.
   for (const v of document.querySelectorAll('video')) {

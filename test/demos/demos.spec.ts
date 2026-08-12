@@ -1,7 +1,19 @@
 import { test, Page, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { HARNESS_URL } from '../webview/harness';
 import { initMessage, FixtureSpec } from '../fixtures/messages';
 import { photoFixtures, PHOTO_TUPLES, PHOTO_MODALITIES } from './photoFixtures';
+
+// demos.json is the single source for the banner text: burned into the clip here, printed above it by build-gallery.mjs.
+const DEMO_META = JSON.parse(readFileSync(join(__dirname, 'demos.json'), 'utf8')) as {
+  demos: Array<{ id: string; caption: string }>;
+};
+function captionFor(id: string): string {
+  const d = DEMO_META.demos.find((x) => x.id === id);
+  if (!d) throw new Error(`no demos.json entry for "${id}"`);
+  return d.caption;
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -105,7 +117,7 @@ async function center(page: Page) {
 test('navigate-tuples', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, '↑ / ↓  — move between tuples (airplane → baboon → peppers)');
+  await caption(page, captionFor('navigate-tuples'));
   await beat(page, 900);
   for (const k of ['ArrowDown', 'ArrowDown', 'ArrowUp']) {
     await page.keyboard.press(k);
@@ -116,7 +128,7 @@ test('navigate-tuples', async ({ page }) => {
 test('switch-modality', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, '← / →  — switch modality (original ⇄ desaturated ⇄ …), zoom/pan stay locked');
+  await caption(page, captionFor('switch-modality'));
   await beat(page, 900);
   for (const k of ['ArrowRight', 'ArrowLeft', 'ArrowRight']) {
     await page.keyboard.press(k);
@@ -126,7 +138,7 @@ test('switch-modality', async ({ page }) => {
 
 test('zoom', async ({ page }) => {
   await loadDemo(page);
-  await caption(page, 'Scroll to zoom in — Esc resets to fit');
+  await caption(page, captionFor('zoom'));
   const { x, y } = await center(page);
   await page.mouse.move(x, y);
   await beat(page, 700);
@@ -141,7 +153,7 @@ test('zoom', async ({ page }) => {
 
 test('pan', async ({ page }) => {
   await loadDemo(page);
-  await caption(page, 'Zoom in, then drag to pan around the image');
+  await caption(page, captionFor('pan'));
   const { x, y } = await center(page);
   await page.mouse.move(x, y);
   for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -190);
@@ -157,7 +169,7 @@ test('pan', async ({ page }) => {
 test('crop', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, 'Press C, drag a rectangle, Enter — crops every modality at once');
+  await caption(page, captionFor('crop'));
   await beat(page, 900);
   await page.keyboard.press('c');
   await beat(page, 600);
@@ -174,7 +186,7 @@ test('crop', async ({ page }) => {
 test('winner-vote', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, 'Enter — mark the current modality as the winner (saved to results.txt)');
+  await caption(page, captionFor('winner-vote'));
   await beat(page, 900);
   await page.keyboard.press('Enter');
   await beat(page, 1000);
@@ -186,7 +198,7 @@ test('winner-vote', async ({ page }) => {
 test('reorder-modality', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
-  await caption(page, '[ / ]  — reorder the modality pills');
+  await caption(page, captionFor('reorder-modality'));
   await beat(page, 900);
   await page.keyboard.press(']');
   await beat(page, 1000);
@@ -196,7 +208,7 @@ test('reorder-modality', async ({ page }) => {
 
 test('help-modal', async ({ page }) => {
   await loadDemo(page);
-  await caption(page, 'Click “?” for the keyboard-shortcut reference — Esc closes it');
+  await caption(page, captionFor('help-modal'));
   await beat(page, 700);
   await page.locator('#help-btn').click();
   await beat(page, 1400);
@@ -206,7 +218,7 @@ test('help-modal', async ({ page }) => {
 
 test('collapse-panel', async ({ page }) => {
   await loadDemo(page);
-  await caption(page, 'Collapse / expand the floating Tools panel');
+  await caption(page, captionFor('collapse-panel'));
   await beat(page, 700);
   await page.locator('#fp-collapse-btn').click();
   await beat(page, 1000);
@@ -216,7 +228,7 @@ test('collapse-panel', async ({ page }) => {
 
 test('click-pill', async ({ page }) => {
   await loadDemo(page);
-  await caption(page, 'Click a colored modality pill to jump to it');
+  await caption(page, captionFor('click-pill'));
   await beat(page, 700);
   await page.locator('.modality-btn').nth(1).click();
   await beat(page, 900);

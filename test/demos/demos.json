@@ -1,15 +1,15 @@
 {
-  "_comment": "Metadata for the feature demo gallery. id matches the test title in demos.spec.ts (and the raw/demos-<id>-chromium/ folder). build-gallery.mjs converts each recorded video to a small H.264 MP4 and renders test/demos/gallery/index.html.",
+  "_comment": "Metadata for the feature demo gallery. id matches the test title in demos.spec.ts (and the raw/demos-<id>-chromium/ folder). caption is the SINGLE SOURCE for the on-screen banner: demos.spec.ts burns it into the recording and build-gallery.mjs prints it above the clip, so the two can never drift. area groups the gallery into collapsible sections. build-gallery.mjs converts each recorded video to a small H.264 MP4 and renders test/demos/gallery/index.html.",
   "demos": [
-    { "id": "navigate-tuples", "title": "Navigate tuples", "keys": "↑ / ↓", "description": "Move between image tuples; the carousel highlight and main image follow." },
-    { "id": "switch-modality", "title": "Switch modality", "keys": "← / →", "description": "Flip between modalities (e.g. original vs desaturated) for the current tuple; the active pill updates." },
-    { "id": "zoom", "title": "Zoom", "keys": "scroll / Esc", "description": "Scroll to zoom into the image; press Esc to reset to fit." },
-    { "id": "pan", "title": "Pan", "keys": "drag", "description": "When zoomed in, drag to move around the image." },
-    { "id": "crop", "title": "Crop", "keys": "C, drag, Enter", "description": "Enter crop mode, draw a rectangle, and confirm to crop all modalities at once." },
-    { "id": "winner-vote", "title": "Vote a winner", "keys": "Enter", "description": "Mark the current modality as the winner for this tuple; saved to results.txt." },
-    { "id": "reorder-modality", "title": "Reorder modalities", "keys": "[ / ]", "description": "Reorder the modality pills to change comparison order (and PPTX export order)." },
-    { "id": "help-modal", "title": "Keyboard help", "keys": "?", "description": "Open the keyboard-shortcut reference; Esc closes it." },
-    { "id": "collapse-panel", "title": "Collapse tools panel", "keys": "click ▾", "description": "Collapse or expand the floating Tools/navigator panel." },
-    { "id": "click-pill", "title": "Click a modality pill", "keys": "click", "description": "Click a colored modality pill to jump straight to that modality." }
+    { "id": "navigate-tuples", "area": "Navigate & compare", "title": "Navigate tuples", "keys": "↑ / ↓", "caption": "↑ / ↓  — move between tuples (airplane → baboon → peppers → back to baboon)", "description": "Move between image tuples; the carousel highlight and main image follow. The clip steps down twice, then back up once to show both directions." },
+    { "id": "switch-modality", "area": "Navigate & compare", "title": "Switch modality", "keys": "← / →", "caption": "← / →  — switch modality (original ⇄ desaturated ⇄ …), zoom/pan stay locked", "description": "Flip between modalities (e.g. original vs desaturated) for the current tuple; the active pill updates." },
+    { "id": "click-pill", "area": "Navigate & compare", "title": "Click a modality pill", "keys": "click", "caption": "Click a colored modality pill to jump to it", "description": "Click a colored modality pill to jump straight to that modality." },
+    { "id": "zoom", "area": "Zoom & pan", "title": "Zoom", "keys": "scroll / Esc", "caption": "Scroll to zoom in — Esc resets to fit", "description": "Scroll to zoom into the image; press Esc to reset to fit." },
+    { "id": "pan", "area": "Zoom & pan", "title": "Pan", "keys": "drag", "caption": "Zoom in, then drag to pan around the image", "description": "When zoomed in, drag to move around the image." },
+    { "id": "crop", "area": "Crop", "title": "Crop", "keys": "C, drag, Enter", "caption": "Press C, drag a rectangle, Enter — crops every modality at once", "description": "Enter crop mode, draw a rectangle, and confirm to crop all modalities at once." },
+    { "id": "winner-vote", "area": "Winner voting", "title": "Vote a winner", "keys": "Enter", "caption": "Enter — mark the current modality as the winner (saved to results.txt)", "description": "Mark the current modality as the winner for this tuple; saved to results.txt." },
+    { "id": "reorder-modality", "area": "Workspace", "title": "Reorder modalities", "keys": "[ / ]", "caption": "[ / ]  — reorder the modality pills", "description": "Reorder the modality pills to change comparison order (and PPTX export order)." },
+    { "id": "help-modal", "area": "Workspace", "title": "Keyboard help", "keys": "?", "caption": "Click “?” for the keyboard-shortcut reference — Esc closes it", "description": "Open the keyboard-shortcut reference; Esc closes it." },
+    { "id": "collapse-panel", "area": "Workspace", "title": "Collapse tools panel", "keys": "click ▾", "caption": "Collapse / expand the floating Tools panel", "description": "Collapse or expand the floating Tools/navigator panel." }
   ]
 }
