@@ -5,7 +5,6 @@
  * Runs the three test suites with JSON reporters, correlates each result with
  * the feature catalog (features.json), and emits:
  *   - test/dashboard/dashboard.html  (colored, grouped, with a summary)
- *   - test/dashboard/FEATURES.md     (markdown table fallback)
  *
  * Status per feature:
  *   green  = covered and ALL mapped tests pass
@@ -239,29 +238,8 @@ ${a.features
 
 writeFileSync(join(__dirname, 'dashboard.html'), html);
 
-// --- render FEATURES.md -----------------------------------------------------
 
-const md = [
-  '# ImageCompare — Feature Coverage',
-  '',
-  `**${counts.green}/${total} features tested** · ${pct}% · generated ${generatedAt}`,
-  '',
-  `Legend: ✅ tested · ❌ failing · ⬜ no test yet · 🟡 stale mapping`,
-  missingSuites.length ? `\n> ⚠️ Missing suite JSON: ${missingSuites.join(', ')} — run without \`--reuse\`.` : '',
-  '',
-];
-const MD_ICON = { green: '✅', red: '❌', gray: '⬜', yellow: '🟡' };
-for (const a of areas) {
-  md.push(`## ${a.area}`, '', '| | Feature | Covered by |', '|---|---|---|');
-  for (const f of a.features) {
-    const tests = f.tests && f.tests.length ? f.tests.map((t) => `\`${t.suite}\`: ${t.match}`).join('<br>') : '—';
-    md.push(`| ${MD_ICON[f.status]} | ${f.name} | ${tests} |`);
-  }
-  md.push('');
-}
-writeFileSync(join(__dirname, 'FEATURES.md'), md.join('\n'));
 
 console.log(`\n✔ Dashboard: ${counts.green} tested, ${counts.red} failing, ${counts.gray} no-test, ${counts.yellow} stale (of ${total}).`);
 console.log('  → test/dashboard/dashboard.html');
-console.log('  → test/dashboard/FEATURES.md');
 if (counts.red > 0) process.exitCode = 1;

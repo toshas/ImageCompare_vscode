@@ -89,6 +89,14 @@ belongs in `docs/`, not here.
 
 ## Routine procedures (the catalogue)
 
+The two canonical loops, in order — each step is a procedure below:
+- **New feature** → implement → update the docs/invariants it touches → tests per the decision rule
+  → add its row to `test/dashboard/features.json` → verification battery → (demo clip only if a new
+  user-visible flow is worth showing).
+- **Bug** → `/fix-issue` (formalize → failing test → fix → docs) → the new test joins the feature's
+  existing `features.json` row (a new row only if the bug exposed an untracked feature) →
+  verification battery.
+
 Every recurring ritual lives in exactly one place; this list is the index. The split is
 deliberate: **skills** are multi-step workflows an agent executes on demand with their own quality
 gates; **CLAUDE.md sections** are checklists and ambient rules that must be in context for every
@@ -208,7 +216,7 @@ reporters and lights each feature green/red/gray from **real** results:
 ```bash
 npm run test:dashboard        # run all suites + regenerate
 npm run test:dashboard:reuse  # regenerate from the last run's JSON
-open test/dashboard/dashboard.html   # or read test/dashboard/FEATURES.md (both generated, not versioned)
+open test/dashboard/dashboard.html   # generated, not versioned
 ```
 
 Untested features show as gaps (not false-green), lit from real test results.
@@ -228,8 +236,9 @@ Untested features show as gaps (not false-green), lit from real test results.
 ### Feature Demos
 
 `test/demos/` records a short, captioned clip of each feature being used (on
-legible generated fixtures), via Playwright → ffmpeg → small H.264 MP4
-(~20-60 KB each; plays in every browser incl. Safari and VS Code's preview).
+real photo fixtures from `test/fixtures/images/`, processed into fake CV
+modalities by `test/demos/photoFixtures.ts`), via Playwright → ffmpeg → small
+H.264 MP4 (plays in every browser incl. Safari and VS Code's preview).
 The gallery builds to `test/demos/gallery/index.html` (generated, not versioned; every CI run also uploads it as the `demo-gallery` artifact).
 
 ```bash

@@ -167,7 +167,6 @@ jobs:
             test/demos/gallery
             test/demos/raw
             test/dashboard/dashboard.html
-            test/dashboard/FEATURES.md
           retention-days: 14
 
   # Live coverage dashboard + demo gallery at https://toshas.github.io/ImageCompare_vscode/
@@ -202,7 +201,6 @@ jobs:
         run: |
           mkdir -p _site/dashboard _site/gallery
           cp test/dashboard/dashboard.html _site/dashboard/index.html
-          cp test/dashboard/FEATURES.md _site/dashboard/ || true
           cp -r test/demos/gallery/. _site/gallery/
           cat > _site/index.html <<'HTML'
           <!DOCTYPE html><meta charset="utf-8"><title>ImageCompare — test reports</title>

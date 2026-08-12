@@ -198,7 +198,7 @@ npm run compile          # build dist/ (extension + webview bundle)
 npm run test:unit        # fast pure-logic tests (Vitest)
 npm run test:webview     # webview UX tests (Playwright, real bundle)
 npm run test:integration # runs inside a real headless VS Code
-npm run test:dashboard   # → test/dashboard/ (FEATURES.md + dashboard.html, per-feature coverage)
+npm run test:dashboard   # → test/dashboard/dashboard.html (per-feature coverage)
 npm run test:demos       # → test/demos/gallery/index.html (a captioned clip of each feature)
 ```
 

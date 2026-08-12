@@ -87,3 +87,10 @@ the wrong path."*
 5. **CI** — pure `getState()` assertion (no screenshot) → runs on all three OSes as-is.
 
 Total change: **1 line of app code + 1 spec.** That's the target shape.
+
+## After the fix: the dashboard row
+
+The loop does not end at green tests. Map the new test in `test/dashboard/features.json`: a bug fix
+usually adds its test to the affected feature's existing `tests` array; add a NEW feature row only
+when the bug exposed a feature the registry never tracked. Then `npm run test:dashboard` and confirm
+the row lights green — CI republishes the live dashboard from this registry on every main push.
