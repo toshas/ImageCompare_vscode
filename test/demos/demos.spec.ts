@@ -166,6 +166,59 @@ test('pan', async ({ page }) => {
   await beat(page, 700);
 });
 
+const zoomOf = (page: Page) =>
+  page.evaluate(() => (window as any).__ic_test.getState().zoom as number);
+const viewOf = (page: Page) =>
+  page.evaluate(() => {
+    const s = (window as any).__ic_test.getState();
+    return { zoom: s.zoom as number, panX: s.panX as number, panY: s.panY as number };
+  });
+
+test('zoom-locked-modality', async ({ page }) => {
+  await loadDemo(page);
+  await focusViewer(page);
+  await caption(page, captionFor('zoom-locked-modality'));
+  await beat(page, 800);
+  const { x, y } = await center(page);
+  await page.mouse.move(x, y);
+  for (let i = 0; i < 8; i++) {
+    await page.mouse.wheel(0, -180);
+    await beat(page, 130);
+  }
+  await beat(page, 700);
+  const locked = await viewOf(page);
+  for (const k of ['ArrowRight', 'ArrowLeft', 'ArrowRight']) {
+    await page.keyboard.press(k);
+    await beat(page, 900);
+    // The clip must actually show what its caption claims: zoom AND pan held.
+    expect(await viewOf(page)).toEqual(locked);
+  }
+});
+
+test('zoom-reset-tuple', async ({ page }) => {
+  await loadDemo(page);
+  await focusViewer(page);
+  await caption(page, captionFor('zoom-reset-tuple'));
+  await beat(page, 800);
+  const fit = await zoomOf(page);
+  const { x, y } = await center(page);
+  await page.mouse.move(x, y);
+  for (let i = 0; i < 8; i++) {
+    await page.mouse.wheel(0, -180);
+    await beat(page, 130);
+  }
+  await beat(page, 600);
+  const zoomed = await zoomOf(page);
+  expect(zoomed).toBeGreaterThan(fit);
+  await page.keyboard.press('ArrowRight');
+  await beat(page, 900);
+  expect(await zoomOf(page)).toBe(zoomed);
+  await page.keyboard.press('ArrowDown');
+  await beat(page, 1100);
+  // Different photo → the view must have reset toward fit, not kept the old zoom.
+  expect(await zoomOf(page)).toBeLessThan(zoomed);
+});
+
 test('crop', async ({ page }) => {
   await loadDemo(page);
   await focusViewer(page);
