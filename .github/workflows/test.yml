@@ -166,6 +166,8 @@ jobs:
           path: |
             test/demos/gallery
             test/demos/raw
+            test/dashboard/dashboard.html
+            test/dashboard/FEATURES.md
           retention-days: 14
 
   # Live coverage dashboard + demo gallery at https://toshas.github.io/ImageCompare_vscode/
