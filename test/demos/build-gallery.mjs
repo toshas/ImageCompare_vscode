@@ -102,11 +102,12 @@ const html = `<!DOCTYPE html>
   <h1>ImageCompare — Feature Demos</h1>
   <div class="sub">${cards.length} demos &middot; ${total} KB total (H.264 MP4) &middot; generated ${esc(generatedAt)}</div>
 </header>
+<p class="hint">Hover a clip to preview it; click for sound-free playback with controls.</p>
 <main><div class="grid">
 ${cards
   .map(
     (c) => `  <div class="card">
-    <video src="${c.id}.mp4" autoplay loop muted playsinline controls preload="metadata"></video>
+    <video src="${c.id}.mp4" muted playsinline controls preload="metadata"></video>
     <div class="meta">
       <div class="row"><span class="title">${esc(c.title)}</span><span class="keys">${esc(c.keys)}</span></div>
       <div class="desc">${esc(c.description)}</div>
@@ -115,7 +116,14 @@ ${cards
   </div>`,
   )
   .join('\n')}
-</div></main></body></html>`;
+</div></main>
+<script>
+  // Play-on-hover, one clip at a time — autoplaying every video at once made the page unreadable.
+  for (const v of document.querySelectorAll('video')) {
+    v.addEventListener('mouseenter', () => { v.play(); });
+    v.addEventListener('mouseleave', () => { v.pause(); v.currentTime = 0; });
+  }
+</script></body></html>`;
 
 writeFileSync(join(OUT, 'index.html'), html);
 console.log(`\n✔ ${cards.length} demos, ${total} KB total → test/demos/gallery/index.html`);
