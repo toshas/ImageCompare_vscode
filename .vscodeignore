@@ -29,6 +29,7 @@ package-lock.json
 skills/README.md
 skills/verify-docs/**
 CLAUDE.md
+CONTRIBUTING.md
 docs/**
 scripts/**
 .github/**
