@@ -3,8 +3,8 @@
  * Convert the recorded demo videos (raw/demos-<id>-chromium/video.webm) into
  * tiny H.264 MP4 clips and render a feature gallery (test/demos/gallery/index.html).
  *
- * Pipeline: Playwright records flat synthetic-fixture interactions → ffmpeg
- * downscales + compresses to H.264 MP4 (~15-55 KB each). MP4/H.264 plays in every
+ * Pipeline: Playwright records interactions on real photo fixtures → ffmpeg
+ * downscales + compresses to H.264 MP4. MP4/H.264 plays in every
  * browser incl. Safari and VS Code's built-in preview (unlike VP9 WebM).
  *
  * Prereq: ffmpeg on PATH. Run the recorder first:
@@ -87,7 +87,11 @@ const html = `<!DOCTYPE html>
   h1 { margin: 0 0 4px; font-size: 20px; }
   .sub { color: #9aa0aa; font-size: 13px; }
   main { padding: 22px 28px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 18px; }
+  /* One row per demo: the clip and its caption side by side — a dense card grid buried the captions. */
+  .grid { display: flex; flex-direction: column; gap: 14px; max-width: 980px; margin: 0 auto; }
+  .card { display: flex; gap: 16px; align-items: flex-start; }
+  .card video { width: 420px; flex-shrink: 0; }
+  .card .meta { padding-top: 4px; }
   .card { border: 1px solid #262a33; border-radius: 10px; background: #151821; overflow: hidden; }
   .card video { display: block; width: 100%; background: #000; }
   .meta { padding: 10px 12px; }
