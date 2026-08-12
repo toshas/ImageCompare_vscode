@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HARNESS_URL } from '../webview/harness';
 import { initMessage, FixtureSpec } from '../fixtures/messages';
-import { photoFixtures, PHOTO_TUPLES, PHOTO_MODALITIES } from './photoFixtures';
+import { photoFixtures, cropFixtures, PHOTO_TUPLES, PHOTO_MODALITIES } from './photoFixtures';
+import { tupleInsertIndex } from '../../src/watcherLogic';
 
 // demos.json is the single source for the banner text: burned into the clip here, printed above it by build-gallery.mjs.
 const DEMO_META = JSON.parse(readFileSync(join(__dirname, 'demos.json'), 'utf8')) as {
@@ -232,8 +233,93 @@ test('crop', async ({ page }) => {
   await page.mouse.move(b.x + b.width * 0.62, b.y + b.height * 0.68, { steps: 30 });
   await page.mouse.up();
   await beat(page, 900);
+  const before = await page.evaluate(() => (window as any).__ic_test.getState());
   await page.keyboard.press('Enter');
   await beat(page, 800);
+
+  // The REAL outbound wire message the webview posted on Enter — its rect (in
+  // decoded-image pixel space) drives the Node-side Sharp crop, so the demo
+  // exercises the true relative-coordinate contract (docs/crop-and-pptx.md).
+  const cropMsg = await page.evaluate(() => (window as any).__ic_lastOutbound('cropImages'));
+  expect(cropMsg).not.toBeNull();
+  const crops = await cropFixtures(
+    cropMsg.tupleIndex,
+    cropMsg.cropRect,
+    cropMsg.srcWidth,
+    cropMsg.srcHeight,
+  );
+  expect(crops.length).toBe(PHOTO_MODALITIES.length);
+
+  // Emulate the provider's real post-crop traffic (handleCropImages → handleFileCreated per file):
+  // the FIRST saved file posts a sparse tupleAdded (only its own modality named), each further file
+  // posts fileRestored with imageInfo, then cropComplete; thumbnails land after that synchronous
+  // batch (async pool), and full images only ever arrive on webview request after navigation.
+  const cropName = `${PHOTO_TUPLES[cropMsg.tupleIndex]}_crop01`;
+  const insertIndex = tupleInsertIndex(PHOTO_TUPLES, cropName);
+  await page.evaluate((m) => (window as any).__ic_send(m), {
+    type: 'tupleAdded',
+    tupleIndex: insertIndex,
+    tuple: {
+      name: cropName,
+      images: PHOTO_MODALITIES.map((modality, modalityIndex) => ({
+        name: modalityIndex === 0 ? `${cropName}.png` : '',
+        modality,
+        tupleIndex: insertIndex,
+        modalityIndex,
+      })),
+    },
+  } as any);
+  for (let modalityIndex = 1; modalityIndex < PHOTO_MODALITIES.length; modalityIndex++) {
+    await page.evaluate((m) => (window as any).__ic_send(m), {
+      type: 'fileRestored',
+      tupleIndex: insertIndex,
+      modalityIndex,
+      imageInfo: {
+        name: `${cropName}.png`,
+        modality: PHOTO_MODALITIES[modalityIndex],
+        tupleIndex: insertIndex,
+        modalityIndex,
+      },
+    } as any);
+  }
+  await page.evaluate((m) => (window as any).__ic_send(m), {
+    type: 'cropComplete',
+    tupleIndex: cropMsg.tupleIndex,
+    count: crops.length,
+    paths: PHOTO_MODALITIES.map((m) => `/fixtures/${m}/${cropName}.png`),
+  } as any);
+  for (const c of crops) {
+    await page.evaluate((m) => (window as any).__ic_send(m), {
+      type: 'thumbnail',
+      tupleIndex: insertIndex,
+      modalityIndex: c.modalityIndex,
+      dataUrl: c.thumbUrl,
+    } as any);
+  }
+
+  // The clip must prove its caption: the carousel really grew by one row.
+  const afterAdd = await page.evaluate(() => (window as any).__ic_test.getState());
+  expect(afterAdd.tupleCount).toBe(before.tupleCount + 1);
+
+  await beat(page, 1100);
+  await page.keyboard.press('ArrowDown');
+  await beat(page, 400);
+  // Navigation makes the webview ask for pixels; only then does the host send them.
+  expect(await page.evaluate(() => (window as any).__ic_lastOutbound('requestImage'))).not.toBeNull();
+  for (const c of crops) {
+    await page.evaluate((m) => (window as any).__ic_send(m), {
+      type: 'image',
+      tupleIndex: insertIndex,
+      modalityIndex: c.modalityIndex,
+      dataUrl: c.dataUrl,
+      width: c.width,
+      height: c.height,
+    } as any);
+  }
+  await beat(page, 1400);
+  const final = await page.evaluate(() => (window as any).__ic_test.getState());
+  expect(final.currentTupleIndex).toBe(insertIndex);
+  expect(final.currentTupleName).toBe(cropName);
 });
 
 test('winner-vote', async ({ page }) => {

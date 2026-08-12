@@ -76,3 +76,62 @@ let cache: Promise<PhotoFixture[]> | undefined;
 export function photoFixtures(): Promise<PhotoFixture[]> {
   return (cache ??= build());
 }
+
+export interface CropFixture {
+  modalityIndex: number;
+  /** Full-size PNG data URL (the extension writes crops as PNG). */
+  dataUrl: string;
+  /** ~96px JPEG data URL for the carousel thumbnail. */
+  thumbUrl: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * Crop a tuple's modality variants the way handleCropImages does: the webview's
+ * pixel-space rect is made relative via srcWidth/srcHeight, then re-scaled to
+ * each modality's true on-disk dimensions and clamped
+ * (docs/crop-and-pptx.md: relative-coords-only / srcdims-are-denominator).
+ */
+export async function cropFixtures(
+  tupleIndex: number,
+  cropRect: { x: number; y: number; w: number; h: number },
+  srcWidth: number,
+  srcHeight: number,
+): Promise<CropFixture[]> {
+  const src = path.join(IMAGES_DIR, `${PHOTO_TUPLES[tupleIndex]}.jpg`);
+  const raw = await sharp(src).toBuffer();
+  const rel = {
+    x: cropRect.x / srcWidth,
+    y: cropRect.y / srcHeight,
+    w: cropRect.w / srcWidth,
+    h: cropRect.h / srcHeight,
+  };
+  const out: CropFixture[] = [];
+  for (let modalityIndex = 0; modalityIndex < PHOTO_MODALITIES.length; modalityIndex++) {
+    const modality = PHOTO_MODALITIES[modalityIndex];
+    const meta = await variant(raw, modality).metadata();
+    const mw = meta.width ?? 0;
+    const mh = meta.height ?? 0;
+    const x = Math.max(0, Math.round(rel.x * mw));
+    const y = Math.max(0, Math.round(rel.y * mh));
+    const w = Math.min(Math.round(rel.w * mw), mw - x);
+    const h = Math.min(Math.round(rel.h * mh), mh - y);
+    if (!(w > 0) || !(h > 0)) continue;
+    const region = { left: x, top: y, width: w, height: h };
+    const full = await variant(raw, modality).extract(region).png().toBuffer();
+    const thumb = await variant(raw, modality)
+      .extract(region)
+      .resize({ width: 96 })
+      .jpeg({ quality: 75 })
+      .toBuffer();
+    out.push({
+      modalityIndex,
+      dataUrl: 'data:image/png;base64,' + full.toString('base64'),
+      thumbUrl: toDataUrl(thumb),
+      width: w,
+      height: h,
+    });
+  }
+  return out;
+}
