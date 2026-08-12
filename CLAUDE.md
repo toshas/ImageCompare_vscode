@@ -12,7 +12,9 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
 
 - **Plans are disposable, decisions are durable.** Delete an implementation plan once executed —
   it describes intent, some of which always changes, and a reader can't tell intent from truth.
-  Fold anything durable (the diagnosis, the invariants) into the relevant `docs/` file.
+  Fold anything durable (the diagnosis, the invariants) into the relevant `docs/` file. Plans
+  *awaiting* execution live in `dev_backlog/`, never in `docs/` — `docs/` describes what is,
+  `dev_backlog/` what might be, and a reader must be able to trust the difference.
 - **After a code change, update the docs it invalidates.** Required for: new/removed files,
   changed architecture, changed behaviour of something documented, or a new invariant. Skip for:
   bug fixes with no design change, refactors, typos.
