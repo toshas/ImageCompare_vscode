@@ -87,6 +87,26 @@ has none). Read one on demand — don't load them preemptively.
 Everything below is operating instructions — conventions, commands, release. Subsystem *design*
 belongs in `docs/`, not here.
 
+## Routine procedures (the catalogue)
+
+Every recurring ritual lives in exactly one place; this list is the index. The split is
+deliberate: **skills** are multi-step workflows an agent executes on demand with their own quality
+gates; **CLAUDE.md sections** are checklists and ambient rules that must be in context for every
+task. Don't convert a checklist into a skill unless it is invoked as a unit and has internal
+verification steps.
+
+| Procedure | Where |
+|---|---|
+| Verify after any change (the gate battery) | CLAUDE.md → Verification |
+| Where a new test goes | CLAUDE.md → Testing (decision rule) |
+| Growing the coverage dashboard | CLAUDE.md → Feature Coverage Dashboard |
+| Release / publish | CLAUDE.md → Release Checklist |
+| Local / remote install of a VSIX | CLAUDE.md → Install Locally |
+| Manual pre-release walk | docs/testing.md → Manual checks |
+| Audit docs against code | `/verify-docs` skill |
+| Fix a reported bug or feature request end-to-end | `/fix-issue` skill |
+| Open image comparisons programmatically | `/imagecompare` skill |
+
 ## Agent Skills
 
 Skills live once under `skills/<name>/SKILL.md` and are symlinked into each tool's discovery path
@@ -192,6 +212,18 @@ open test/dashboard/dashboard.html   # or read test/dashboard/FEATURES.md (both 
 ```
 
 Untested features show as gaps (not false-green), lit from real test results.
+
+**Growing the dashboard** (do this whenever a feature or test is added):
+1. Add or find the feature's entry in `test/dashboard/features.json` — an area → feature row with a
+   stable `id`, a display `name`, and `tests: [{suite: unit|webview|integration, match: <substring
+   of the test title>}]`. An empty `tests` array is legitimate: it renders gray, an honest gap —
+   add the feature row *before* its tests exist so the gap is visible rather than invisible.
+2. When the test lands, point `match` at a distinctive substring of its title (a `describe`/`it`
+   string for unit, spec title for webview, mocha title for integration).
+3. `npm run test:dashboard` and check the feature turned green — a `match` that matches nothing
+   stays gray/yellow, which is the generator telling you the mapping is wrong.
+4. Nothing else to update: CI republishes the live dashboard from `features.json` + real results on
+   every main push (Pages).
 
 ### Feature Demos
 
