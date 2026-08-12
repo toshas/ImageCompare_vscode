@@ -229,7 +229,7 @@ Untested features show as gaps (not false-green), lit from real test results.
 2. When the test lands, point `match` at a distinctive substring of its title (a `describe`/`it`
    string for unit, spec title for webview, mocha title for integration).
 3. `npm run test:dashboard` and check the feature turned green — a `match` that matches nothing
-   stays gray/yellow, which is the generator telling you the mapping is wrong.
+   when its suite ran **fails the generator (and CI)**, so a stale mapping cannot merge silently.
 4. Nothing else to update: CI republishes the live dashboard from `features.json` + real results on
    every main push (Pages).
 

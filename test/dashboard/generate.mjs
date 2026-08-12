@@ -134,7 +134,8 @@ const suites = {
 
 function lookup(suite, match) {
   const s = suites[suite];
-  if (!s || !s.present) return { found: false, ok: false };
+  // "missing" (suite emitted no JSON — incomplete run) is not "stale" (suite ran, title gone).
+  if (!s || !s.present) return { found: false, ok: false, missing: true };
   const hit = s.results.find((r) => r.title && r.title.includes(match));
   return hit ? { found: true, ok: hit.ok } : { found: false, ok: false };
 }
@@ -142,6 +143,7 @@ function lookup(suite, match) {
 const catalog = JSON.parse(readFileSync(join(__dirname, 'features.json'), 'utf8'));
 
 const counts = { green: 0, red: 0, gray: 0, yellow: 0 };
+const staleRows = [];
 const areas = catalog.areas.map((area) => {
   const features = area.features.map((f) => {
     let status;
@@ -154,6 +156,10 @@ const areas = catalog.areas.map((area) => {
       if (looked.some((l) => !l.found)) status = 'yellow';
       else if (looked.every((l) => l.ok)) status = 'green';
       else status = 'red';
+      // A mapping whose suite RAN but whose title is gone is registry rot — fail the build on it.
+      for (const l of looked) {
+        if (!l.found && !l.missing) staleRows.push(`${f.id}: ${l.suite} "${l.match}"`);
+      }
     }
     counts[status]++;
     return { ...f, status, detail };
@@ -242,4 +248,9 @@ writeFileSync(join(__dirname, 'dashboard.html'), html);
 
 console.log(`\n✔ Dashboard: ${counts.green} tested, ${counts.red} failing, ${counts.gray} no-test, ${counts.yellow} stale (of ${total}).`);
 console.log('  → test/dashboard/dashboard.html');
-if (counts.red > 0) process.exitCode = 1;
+if (staleRows.length > 0) {
+  console.error(`\n✘ ${staleRows.length} stale mapping(s) — features.json points at test titles that no longer exist:`);
+  for (const r of staleRows) console.error(`    ${r}`);
+  console.error('  Fix the match string (or the row) in test/dashboard/features.json.');
+}
+if (counts.red > 0 || staleRows.length > 0) process.exitCode = 1;
