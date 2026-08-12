@@ -328,6 +328,20 @@
               "match": "] key reorder also keeps tooltips correct"
             }
           ]
+        },
+        {
+          "id": "reorder-insert-preserve",
+          "name": "Watcher-inserted modality preserves user rearrangement + focus",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a watcher-inserted modality preserves the user rearrangement"
+            },
+            {
+              "suite": "webview",
+              "match": "custom order and focus survive an insert"
+            }
+          ]
         }
       ]
     },
@@ -351,6 +365,16 @@
             {
               "suite": "webview",
               "match": "clicking a carousel winner circle posts setWinner"
+            }
+          ]
+        },
+        {
+          "id": "winner-tiny-tile-guard",
+          "name": "Mouse voting disabled on tiny tiles (3x circle guard)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "mouse voting is disabled below 3x the winner-circle size"
             }
           ]
         },
@@ -389,6 +413,16 @@
           ]
         },
         {
+          "id": "carousel-virtualized",
+          "name": "Virtualized carousel (pooled rows bind to visible tuples)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "virtualized carousel binds a pool row to each visible tuple"
+            }
+          ]
+        },
+        {
           "id": "carousel-click",
           "name": "Click thumbnail to navigate",
           "tests": [
@@ -401,6 +435,11 @@
         {
           "id": "carousel-scroll",
           "name": "Scroll carousel",
+          "tests": []
+        },
+        {
+          "id": "carousel-hscroll",
+          "name": "Horizontal carousel scroll (wide many-modality sessions)",
           "tests": []
         },
         {
@@ -444,6 +483,20 @@
           ]
         },
         {
+          "id": "view-hide-pills",
+          "name": "Hide/show modality pills; arrows skip hidden",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a hidden neighbour is skipped"
+            },
+            {
+              "suite": "unit",
+              "match": "a run of hidden pills is skipped in one step"
+            }
+          ]
+        },
+        {
           "id": "view-canvas",
           "name": "Canvas renders the image",
           "tests": [
@@ -456,6 +509,11 @@
         {
           "id": "view-zoom-readout",
           "name": "Zoom % readout in status",
+          "tests": []
+        },
+        {
+          "id": "view-keep-zoom",
+          "name": "keepZoomOnTupleChange setting (zoom survives tuple switch)",
           "tests": []
         },
         {
@@ -553,6 +611,31 @@
             {
               "suite": "unit",
               "match": "injects and reads back a value"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Session files",
+      "features": [
+        {
+          "id": "session-save-as",
+          "name": "Save Session As (Ctrl+S / title bar)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "serializeSessionFile — relative only when every path is inside destDir"
+            }
+          ]
+        },
+        {
+          "id": "session-version-gate",
+          "name": "Session-file version gate (future versions rejected)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "version gate — missing and current pass, future is rejected"
             }
           ]
         }

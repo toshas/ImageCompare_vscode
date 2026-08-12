@@ -49,7 +49,7 @@ describe('matchTuplesWithTrie (real fileService code)', () => {
     for (const t of tuples) expect(t.files.size).toBe(2);
   });
 
-  // KNOWN BUG surfaced by this testbed (see TESTING.md "Findings"):
+  // KNOWN BUG surfaced by this testbed (see docs/testing.md "Findings"):
   // When originals and crops coexist with DIFFERENT suffixes per modality,
   // the orig+crop query files collide on the same reference slot and the crop
   // overwrites the original — so `00000079_gt.png` ends up paired with

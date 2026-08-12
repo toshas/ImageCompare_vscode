@@ -202,7 +202,7 @@ npm run test:dashboard   # → test/dashboard/dashboard.html (per-feature covera
 npm run test:demos       # → test/demos/gallery/index.html (a captioned clip of each feature)
 ```
 
-- **[TESTING.md](TESTING.md)** — the 3-layer test strategy and how the
+- **[docs/testing.md](docs/testing.md)** — the 3-layer test strategy and how the
   out-of-process webview harness works.
 - **Feature coverage dashboard** — live at [toshas.github.io/ImageCompare_vscode/dashboard](https://toshas.github.io/ImageCompare_vscode/dashboard/), regenerated on every main push (locally: `npm run test:dashboard`)
   shows which features are tested, lit from real test results.
@@ -221,11 +221,11 @@ Every fix follows one short loop, so nothing silently regresses:
 2. **Reproduce it with a failing test** at the smallest layer that shows it
    (unit → integration → webview).
 3. **Fix** the code until that test passes.
-4. **Document** it (one line in TESTING.md) — CI then guards it on all three OSes.
+4. **Document** it (one line in docs/testing.md) — CI then guards it on all three OSes.
 
 This is packaged as the **`fix-issue` agent skill** (`.claude/skills/fix-issue/`): open the
 repo in Claude Code and type `/fix-issue <describe the bug>`, and it writes the failing
-test, the fix, and the docs for you. Full walkthrough in **[TESTING.md](TESTING.md)**.
+test, the fix, and the docs for you. Full walkthrough in **[docs/testing.md](docs/testing.md)**.
 
 ## Feedback & Issues
 

@@ -27,7 +27,7 @@ before writing code.
 
 ## 2. Pick the test layer
 
-This repo has three (see [TESTING.md](../../../TESTING.md)):
+This repo has three (see [docs/testing.md](../../../docs/testing.md)):
 
 | The bug is about… | Layer | Lives in | Runner |
 |---|---|---|---|
@@ -56,7 +56,7 @@ Make the smallest change that turns the test green. Re-run the layer; then run t
 ## 5. Document
 
 - Add a one-line entry to the **"Findings (caught by this testbed)"** section of
-  [TESTING.md](../../../TESTING.md): symptom → root cause → fix location → guarding test.
+  [docs/testing.md](../../../docs/testing.md): symptom → root cause → fix location → guarding test.
 - If the fix changed architecture (new message type, new exported API, new state),
   update [CLAUDE.md](../../../CLAUDE.md).
 
@@ -83,7 +83,7 @@ the wrong path."*
    `getState()` that the pill name *and* its path tooltip both moved. Fails before fix.
 3. **Fix** — `moveCurrentModality` swapped `modalities`, `modalityColors`, and
    `modalityOrder` but not `modalityPaths`. Add the one-line `modalityPaths` swap.
-4. **Document** — entry added to TESTING.md "Findings".
+4. **Document** — entry added to docs/testing.md "Findings".
 5. **CI** — pure `getState()` assertion (no screenshot) → runs on all three OSes as-is.
 
 Total change: **1 line of app code + 1 spec.** That's the target shape.

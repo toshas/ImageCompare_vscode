@@ -162,7 +162,7 @@ let votingEnabled = false;
 // Session-file labels are user-authored: show them in full, never truncated.
 let labelsExplicit = false;
 
-// Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see TESTING.md.
+// Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see docs/testing.md.
 if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
   (window as unknown as { __ic_test: unknown }).__ic_test = {
     getState: () => ({

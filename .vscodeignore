@@ -32,7 +32,6 @@ CLAUDE.md
 docs/**
 scripts/**
 .github/**
-TESTING.md
 
 # Testing bed and dev tooling (not shipped)
 test/**

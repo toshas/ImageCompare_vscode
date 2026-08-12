@@ -82,7 +82,7 @@ has none). Read one on demand — don't load them preemptively.
 | `docs/tuple-matching.md` | Touching how files are grouped into tuples/modalities: the trie matcher, tie-breaks, crop deprioritization, modality naming/order, or the sparse-vs-dense and original-vs-display index traps. |
 | `docs/image-backends.md` | Touching Sharp/Jimp/PPMX, `loadFullImage`, webpack externalization, or packaging. Documents which fallback tiers *actually* exist (not the aspirational chain) and why the CPU workaround is there. |
 | `docs/crop-and-pptx.md` | Touching crop or PowerPoint export: the relative-coordinate contract, the dual EXIF+tEXt metadata write, the `_cropNN` filename contract, or parent/crop slide pairing. |
-| `docs/testing.md` | Adding or changing a test, or trusting one: what each suite pins, the one suite that still tests a *copy* of the shipped code, what nothing covers, and the manual checks. |
+| `docs/testing.md` | Adding or changing a test, or trusting one: the three layers, what each suite pins, the copy-trap history, what nothing covers, and the manual checks. |
 
 Everything below is operating instructions — conventions, commands, release. Subsystem *design*
 belongs in `docs/`, not here.
@@ -139,7 +139,7 @@ What each suite pins, what nothing covers, the manual checks worth walking befor
 `imageCompare.debug` logging: `docs/testing.md`.
 
 The unit layer is Layer 1 of the multi-layer testing bed described in
-**[TESTING.md](TESTING.md)** (runs in its own CI workflow, `.github/workflows/test.yml`):
+**[docs/testing.md](docs/testing.md)** (runs in its own CI workflow, `.github/workflows/test.yml`):
 
 ```bash
 npm run test:unit         # Layer 1 — Vitest, pure logic on real code (fast)
@@ -166,7 +166,7 @@ clip; bug fixes need a test, never a demo.
   that reuses the production shell (`src/webviewShell.ts`) and stubs
   `acquireVsCodeApi`. Specs assert via the `window.__ic_test` state hook —
   deterministic logic checks (no pixel snapshots), so the layer runs in CI on all
-  three OSes. See TESTING.md.
+  three OSes. See docs/testing.md.
 - **Layer 2** (`test/integration/`) exercises vscode-API-coupled code (e.g.
   `scanForImages`) on temp fixtures.
 
