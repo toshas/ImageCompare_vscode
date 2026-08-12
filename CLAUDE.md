@@ -188,7 +188,7 @@ reporters and lights each feature green/red/gray from **real** results:
 ```bash
 npm run test:dashboard        # run all suites + regenerate
 npm run test:dashboard:reuse  # regenerate from the last run's JSON
-open test/dashboard/dashboard.html   # or read test/dashboard/FEATURES.md
+open test/dashboard/dashboard.html   # or read test/dashboard/FEATURES.md (both generated, not versioned)
 ```
 
 Untested features show as gaps (not false-green), lit from real test results.
@@ -198,11 +198,11 @@ Untested features show as gaps (not false-green), lit from real test results.
 `test/demos/` records a short, captioned clip of each feature being used (on
 legible generated fixtures), via Playwright → ffmpeg → small H.264 MP4
 (~20-60 KB each; plays in every browser incl. Safari and VS Code's preview).
-The gallery is `test/demos/gallery/index.html`.
+The gallery builds to `test/demos/gallery/index.html` (generated, not versioned; every CI run also uploads it as the `demo-gallery` artifact).
 
 ```bash
 npm run test:demos            # record + rebuild the gallery
-open test/demos/gallery/index.html
+open test/demos/gallery/index.html   # after running test:demos, or download the CI artifact
 ```
 
 Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.

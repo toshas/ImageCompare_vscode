@@ -204,9 +204,9 @@ npm run test:demos       # → test/demos/gallery/index.html (a captioned clip o
 
 - **[TESTING.md](TESTING.md)** — the 3-layer test strategy and how the
   out-of-process webview harness works.
-- **Feature coverage dashboard** (`test/dashboard/dashboard.html` / `test/dashboard/FEATURES.md`)
+- **Feature coverage dashboard** (`npm run test:dashboard` → `test/dashboard/dashboard.html` / `FEATURES.md`, generated)
   shows which features are tested, lit from real test results.
-- **Feature demo gallery** (`test/demos/gallery/index.html`) — short captioned
+- **Feature demo gallery** (`npm run test:demos` → `test/demos/gallery/index.html`, generated; downloadable from any CI run as the `demo-gallery` artifact) — short captioned
   clips of each interaction.
 
 All three layers run automatically in **CI on Windows, Linux, and macOS** for every

@@ -29,5 +29,8 @@ test/webview/harness/
 test/**/*.d.ts
 test/**/*.d.ts.map
 
-# Demo recordings (raw); the built gallery/ webps are kept
+# Generated test outputs — never versioned: rebuild on demand (test:demos / test:dashboard) or download the CI demo-gallery artifact
 test/demos/raw/
+test/demos/gallery/
+test/dashboard/dashboard.html
+test/dashboard/FEATURES.md
