@@ -26,6 +26,7 @@ export interface IcState {
   cropRect: { x: number; y: number; w: number; h: number } | null;
   winners: [number, number][];
   votingEnabled: boolean;
+  pptxBusy: boolean;
 }
 
 /** Load the harness and complete the init handshake with synthetic fixtures. */

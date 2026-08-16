@@ -194,11 +194,23 @@
         },
         {
           "id": "tool-pptx",
-          "name": "PPTX button → exportPptx",
+          "name": "PPTX button → exportPptx (busy spinner, no-votes whole view)",
           "tests": [
             {
               "suite": "webview",
               "match": "shows the floating panel tools"
+            },
+            {
+              "suite": "webview",
+              "match": "PPTX export with no votes sends the whole view with null winners"
+            },
+            {
+              "suite": "webview",
+              "match": "PPTX button goes busy on click and ignores re-clicks"
+            },
+            {
+              "suite": "webview",
+              "match": "pptxError clears the busy state"
             }
           ]
         },
@@ -523,6 +535,20 @@
             {
               "suite": "webview",
               "match": "opens the help modal and Esc closes it"
+            }
+          ]
+        },
+        {
+          "id": "view-copy-image",
+          "name": "Copy Image (context menu / Ctrl+C) writes the displayed image",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "copy writes the displayed image to the clipboard"
+            },
+            {
+              "suite": "webview",
+              "match": "copy after navigation writes the currently displayed image"
             }
           ]
         }

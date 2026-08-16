@@ -160,6 +160,23 @@ body {
 }
 #delete-btn:hover { background: #a33; }
 #pptx-btn:hover { background: #383; }
+#pptx-btn.busy {
+  position: relative;
+  color: transparent;
+  cursor: default;
+}
+#pptx-btn.busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--vscode-button-secondaryForeground, #fff);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
 
 /* Crop overlay */
 #crop-overlay {

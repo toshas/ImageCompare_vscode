@@ -159,6 +159,13 @@ let hiddenModalities: Set<OriginalModalityIndex> = new Set();
 const hiddenByDisplay = (): boolean[] => modalityOrder.map(o => hiddenModalities.has(o));
 let votingEnabled = false;
 
+// Busy until the provider answers; safe only because it always does (docs/crop-and-pptx.md: export-always-answers).
+let pptxBusy = false;
+function setPptxBusy(busy: boolean): void {
+  pptxBusy = busy;
+  pptxBtn.classList.toggle('busy', busy);
+}
+
 // Session-file labels are user-authored: show them in full, never truncated.
 let labelsExplicit = false;
 
@@ -181,6 +188,7 @@ if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?:
       cropRect: crop.cropRect ? { ...crop.cropRect } : null,
       winners: Array.from(winners.entries()),
       votingEnabled,
+      pptxBusy,
     }),
   };
 }
@@ -305,6 +313,7 @@ function setupEventListeners() {
 
   // PPTX export button
   pptxBtn.addEventListener('click', () => {
+    if (pptxBusy) return;
     // Collect tuples that have winners (voted for)
     const tupleIndices: TupleIndex[] = [];
     // Original space: the wire is always the original index (docs/tuple-matching.md: wire-index-is-original).
@@ -319,9 +328,13 @@ function setupEventListeners() {
       }
     }
     if (tupleIndices.length === 0) {
-      // No voted tuples, export nothing (or could show a warning)
-      return;
+      // No votes: export the whole view, null winner per tuple (docs/crop-and-pptx.md).
+      for (let i = 0; i < tuples.length; i++) {
+        tupleIndices.push(asTuple(i));
+        winnerModalityIndices.push(null);
+      }
     }
+    setPptxBusy(true);
     vscode.postMessage({ type: 'exportPptx', tupleIndices, winnerModalityIndices, modalityOrder });
   });
 }
@@ -438,6 +451,13 @@ window.addEventListener('message', (event) => {
       break;
     case 'cropError':
       updateStatus(`Crop failed: ${message.error}`, '', currentTupleIndex);
+      break;
+    case 'pptxComplete':
+      setPptxBusy(false);
+      break;
+    case 'pptxError':
+      setPptxBusy(false);
+      showCopyToast(`PPTX export failed: ${message.error}`);
       break;
     case '_debug':
       console.log('[IC-EXT]', message.msg);
@@ -2106,11 +2126,30 @@ function copyCurrentImage(): void {
       showCopyToast('Copy failed');
       return;
     }
-    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
-      () => showCopyToast('Image copied'),
-      () => showCopyToast('Copy failed')
-    );
+    writeImageToClipboard(blob);
   }, 'image/png');
+}
+
+// Deferred-until-focus clipboard write; latest copy wins — see docs/testing.md "Findings", copy-image staleness.
+let pendingCopyBlob: Blob | null = null;
+function writeImageToClipboard(blob: Blob): void {
+  // Chromium rejects clipboard.write from an unfocused document (the context-menu path), keeping stale content.
+  if (!document.hasFocus()) {
+    if (pendingCopyBlob === null) window.addEventListener('focus', flushPendingCopy, { once: true });
+    pendingCopyBlob = blob;
+    return;
+  }
+  pendingCopyBlob = null;
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
+    () => showCopyToast('Image copied'),
+    () => showCopyToast('Copy failed')
+  );
+}
+
+function flushPendingCopy(): void {
+  const blob = pendingCopyBlob;
+  pendingCopyBlob = null;
+  if (blob) writeImageToClipboard(blob);
 }
 
 function handleCopyEvent(e: ClipboardEvent) {

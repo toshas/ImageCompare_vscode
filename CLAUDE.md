@@ -92,12 +92,12 @@ belongs in `docs/`, not here.
 ## Routine procedures (the catalogue)
 
 The two canonical loops, in order — each step is a procedure below:
-- **New feature** → implement → update the docs/invariants it touches → tests per the decision rule
-  → add its row to `test/dashboard/features.json` → verification battery → (demo clip only if a new
+- **New feature** → `/implement-feature` (contract → docs/invariants + gray dashboard row *first* →
+  adversarial implementer/verifier build) → verification battery → (demo clip only if a new
   user-visible flow is worth showing).
-- **Bug** → `/fix-issue` (formalize → failing test → fix → docs) → the new test joins the feature's
-  existing `features.json` row (a new row only if the bug exposed an untracked feature) →
-  verification battery.
+- **Bug** → `/fix-issue` (formalize → adversarial build: failing test → minimal fix → docs) → the
+  new test joins the feature's existing `features.json` row (a new row only if the bug exposed an
+  untracked feature) → verification battery.
 
 Every recurring ritual lives in exactly one place; this list is the index. The split is
 deliberate: **skills** are multi-step workflows an agent executes on demand with their own quality
@@ -115,7 +115,8 @@ verification steps.
 | Local / remote install of a VSIX | CLAUDE.md → Install Locally |
 | Manual pre-release walk | docs/testing.md → Manual checks |
 | Audit docs against code | `/verify-docs` skill |
-| Fix a reported bug or feature request end-to-end | `/fix-issue` skill |
+| Fix a reported bug end-to-end | `/fix-issue` skill |
+| Implement a new feature end-to-end | `/implement-feature` skill |
 | Open image comparisons programmatically | `/imagecompare` skill |
 
 ## Change close-out (mandatory)
@@ -141,8 +142,9 @@ dashboard row, mutation entry, or doc update that no script can detect.
 3. **Audit** — for any change touching `src/` or `test/`, dispatch a **subagent that did not write
    the change**, giving it the diff, the classification, and the obligation list. It must return a
    verdict per obligation: **done** / **n/a because <reason>** / **MISSING**. Fix every MISSING
-   before committing. For docs/infra-only changes an explicit inline walk of the list (stated in
-   the final report) suffices — no subagent.
+   before committing. A change built through `/fix-issue` or `/implement-feature` already satisfies
+   this — their `change-verifier` PASS *is* this audit; don't run a second one. For docs/infra-only
+   changes an explicit inline walk of the list (stated in the final report) suffices — no subagent.
 4. Run the **Verification** battery. State the classification and the audit verdicts in the report
    or commit message, so omissions are visible rather than silent.
 

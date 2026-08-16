@@ -20,9 +20,9 @@ just the throughput.
 
 ## The two loops (from CLAUDE.md — follow them literally)
 
-- **New feature** → implement → update the docs/invariants it touches → tests per the decision rule
-  → add a row to `test/dashboard/features.json` → verification battery → (demo clip only if a new
-  user-visible flow is worth showing).
+- **New feature** → the `/implement-feature` skill (formalize the contract → docs/invariants and a
+  gray `test/dashboard/features.json` row *first* → adversarial implementer/verifier build) →
+  verification battery → (demo clip only if a new user-visible flow is worth showing).
 - **Bug fix** → the `/fix-issue` skill (formalize → **failing test first** → minimal fix → docs) →
   the new test joins the feature's existing `features.json` row → verification battery.
 

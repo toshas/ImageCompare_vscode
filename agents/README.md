@@ -50,8 +50,13 @@ agents omit write tools where they can, and rely on instruction where the job ne
 | `doc-auditor` | no | Reads docs against code, returns a claim ledger. Never fixes. |
 | `fix-generator` | yes | Implements **one** ledger entry. Never reviews its own work. |
 | `fix-verifier` | no | Derives the diff itself, runs the gates, default REJECT. |
+| `change-implementer` | yes | Implements **one** formalized fix/feature contract. Never reviews its own work. |
+| `change-verifier` | no* | Derives the diff from pre-images, re-proves RED, audits close-out obligations, default REJECT. |
 
-They are dispatched by `skills/verify-docs/SKILL.md`, not invoked directly.
+The first three are dispatched by `skills/verify-docs/SKILL.md`, the last two by
+`skills/fix-issue/SKILL.md` and `skills/implement-feature/SKILL.md` — none invoked directly.
+(*`change-verifier` holds no Edit/Write but does hold Bash for its swap-restore RED check; it must
+leave the tree byte-identical, and proving that is part of its own protocol.)
 
 Two design points that are easy to undo by accident:
 

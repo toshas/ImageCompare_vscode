@@ -175,6 +175,17 @@ the fix, the docs, and the CI check.
 - **Matcher: orig+crop collision** *(open, documented)* — when originals and crops coexist, a crop
   query file can take the original's match slot. Pinned as `it.fails` in
   `test/unit/tupleMatching.test.ts` — it flips to a hard failure the moment the matcher is fixed.
+- **Copy Image kept the previously copied image** *(fixed)* — the context-menu `copyImage` message
+  lands while the workbench menu still holds focus, and Chromium rejects `navigator.clipboard.write`
+  from an unfocused document, so the write was dropped (a 1.4s "Copy failed" toast the only trace)
+  and the clipboard retained the earlier image. Fixed in `webview/main.ts` (`writeImageToClipboard`):
+  an unfocused write is deferred until the window refocuses, with the frame captured at copy time and
+  latest-copy-wins; guarded by `test/webview/copy-image.spec.ts` (real clipboard read-back, dims-keyed).
+- **PPTX button: no feedback, unbounded re-clicks, no-votes no-op** *(fixed)* — the webview never
+  handled `pptxComplete`/`pptxError`, so nothing blocked re-clicks (each spawning another full
+  export re-reading every image through the work pool) and a click with zero votes silently did
+  nothing. Fixed in `webview/main.ts` (busy spinner until the provider answers; no votes exports
+  the whole view with null winners); guarded by `test/webview/pptx-export.spec.ts`.
 
 ## Viewing the generated reports
 

@@ -42,7 +42,8 @@ subdirs, so the symlinks can be committed while `settings.local.json` and caches
 
 ## Subagents live next door
 
-`agents/` uses the same canonical-plus-symlink layout for the subagents `verify-docs` dispatches, but
+`agents/` uses the same canonical-plus-symlink layout for the subagents the skills dispatch
+(`verify-docs`, `fix-issue`, `implement-feature`), but
 it is a weaker guarantee: skills share a published format across tools, subagents do not. See
 `agents/README.md`.
 

@@ -1,31 +1,31 @@
 ---
 name: fix-issue
-description: Turn a plain-text bug/feature/issue report into a formalized issue, a failing test that reproduces it, a minimal fix, docs, and CI coverage across all three platforms. Use whenever someone describes a problem in prose ("when I drag the window the labels collapse", "crops steal the original's match slot", "add a toggle for X") and wants it fixed the right way — reproduced by a test first, then fixed, then documented.
+description: Turn a plain-text bug report into a formalized issue, a failing test that reproduces it, a minimal fix, docs, and CI coverage — built through an adversarial implementer/verifier agent pair. Use whenever someone describes broken existing behavior in prose ("when I drag the window the labels collapse", "crops steal the original's match slot"). For NEW behavior ("add a toggle for X") use implement-feature instead.
 ---
 
 # Fix an issue the testbed way
 
-The goal: **never fix a bug without a test that fails before the fix and passes after.**
-Every fix lands with a guard so it can't silently regress on any of the three OSes.
+The goal: **never fix a bug without a test that fails before the fix and passes after** — and never
+let the author of the fix be the one who certifies it. The orchestrator formalizes and dispatches;
+**it implements nothing and judges nothing itself** — the same context that wrote a change grades
+it measurably softer, which is why the roles are separate agents (see `agents/README.md`).
 
-Input is free-form prose. Drive it through these steps in order. Keep the code diff
-as small as the fix allows — assess every added line.
+## 1. Formalize the report (orchestrator)
 
-## 1. Formalize the report
-
-Restate the prose as a structured issue (write it in the PR/commit body):
+Restate the prose as a structured issue — this becomes the `CONTRACT` both agents are dispatched
+with, so it must stand on its own:
 
 - **Symptom** — what the user observes.
 - **Repro** — exact steps / inputs that trigger it (smallest possible).
 - **Expected vs actual.**
-- **Suspected component** — which file/function. Grep for the UI string, the message
-  type, or the state variable named in the report.
+- **Suspected component** — which file/function. Grep for the UI string, the message type, or the
+  state variable named in the report.
 - **Layer** — see step 2.
 
-If the report is ambiguous (no repro, multiple readings), ask one clarifying question
-before writing code.
+If the report is ambiguous (no repro, multiple readings), ask one clarifying question before
+dispatching anything.
 
-## 2. Pick the test layer
+## 2. Pick the test layer (orchestrator)
 
 This repo has three (see [docs/testing.md](../../../docs/testing.md)):
 
@@ -35,62 +35,54 @@ This repo has three (see [docs/testing.md](../../../docs/testing.md)):
 | Webview UX — keyboard/mouse, zoom/pan, panel, pills, selection, rendering | **webview** | `test/webview/*.spec.ts` | `npm run test:webview` (Playwright) |
 | VS Code API — scanning, activation, commands, results.txt IO | **integration** | `test/integration/*.test.ts` | `npm run test:integration` |
 
-Prefer the **lowest** layer that can reproduce the bug (fastest, most stable). Only
-reach for webview/integration when the bug genuinely needs the DOM or the VS Code host.
+Prefer the **lowest** layer that can reproduce the bug (fastest, most stable). Only reach for
+webview/integration when the bug genuinely needs the DOM or the VS Code host. Write the chosen
+layer into the contract.
 
-To assert webview state without reading canvas pixels, use the `window.__ic_test`
-hook (`getState()` in `helpers.ts`). For new pure logic, `export` the real function
-and import it — never copy logic into the test.
+## 3. Build — adversarial implementer/verifier pair
 
-## 3. Reproduce — write the failing test first (RED)
+Create a run directory (`.agent-runs/fix-<slug>/`, gitignored). Then:
 
-Add the smallest test that fails *because of the bug*. Run it and confirm it fails
-for the right reason (not a typo). For a known-but-unfixed issue, encode it as
-`it.fails(...)` (Vitest) so it flips to a hard failure the moment it's fixed.
+1. Dispatch **`change-implementer`** with `REPO_ROOT`, `RUN_DIR`, `CLASS: fix`, and the `CONTRACT`.
+   It writes the failing test first (RED, captured), makes the smallest change that turns it green,
+   maps the test into the feature's existing `test/dashboard/features.json` row (a new row only if
+   the bug exposed an untracked feature), adds the docs/testing.md "Findings" entry, and records
+   pre-images under `RUN_DIR/before/` so its diff can be derived independently.
+2. Dispatch **`change-verifier`** with `REPO_ROOT`, `RUN_DIR`, `CLASS: fix`, and **the same
+   `CONTRACT` only**. Never forward the implementer's summary, rationale, or self-assessment — the
+   verifier's preflight rejects a dispatch that carries them. It re-derives RED itself by restoring
+   the pre-change production code (recompiling for webview-layer tests, which run against
+   `dist/webview.js`), audits the fix-class obligations, runs the battery, and defaults to REJECT.
+3. On REJECT, re-dispatch the implementer with the verifier's objections. **Two attempts, then stop
+   and escalate to the user** — a third try on the same objections is where adversarial loops start
+   producing regressions instead of fixes.
 
-## 4. Fix — minimal change (GREEN)
+For a known-but-unfixed issue (reproduce now, fix later), the implementer encodes it as
+`it.fails(...)` (Vitest) so it flips to a hard failure the moment it's fixed — that is a legitimate
+single-agent outcome and needs no verifier round.
 
-Make the smallest change that turns the test green. Re-run the layer; then run the
-**full** suite (`npm run test:all`) to catch collateral damage.
+## 4. Close out (orchestrator)
 
-## 5. Document
-
-- Add a one-line entry to the **"Findings (caught by this testbed)"** section of
-  [docs/testing.md](../../../docs/testing.md): symptom → root cause → fix location → guarding test.
-- If the fix changed architecture (new message type, new exported API, new state),
-  update [CLAUDE.md](../../../CLAUDE.md).
-
-## 6. Confirm CI coverage
-
-The matrix in `.github/workflows/test.yml` runs **all three layers — unit, webview,
-integration** — on ubuntu/windows/macos (every push to `main`/`test/**` and every PR).
-So a test placed under `test/` is guarded on all three OSes automatically; no machine-
-specific step is involved. Two rules keep it that way:
-
-- **Assert behavior, not pixels.** Use the `window.__ic_test` `getState()` hook (and
-  outbound-message checks) so every assertion is deterministic on every OS. Don't add
-  screenshot/pixel comparisons — they need per-OS baselines and a human to refresh them.
-- Keep new files out of the published vsix — `test/**` is already in `.vscodeignore`.
+- The verifier's PASS **is** the CLAUDE.md close-out audit — do not run a second one. State its
+  per-obligation verdicts in the report or commit message.
+- `npm run test:dashboard` — confirm the mapped row lights green.
+- CI needs no extra step: the matrix in `.github/workflows/test.yml` runs all three layers on
+  ubuntu/windows/macos for every push and PR, so a deterministic, behavior-not-pixels test is
+  guarded everywhere automatically. Bug fixes get a test, never a demo clip.
 
 ## Worked example — the modality-reorder tooltip bug
 
-Report: *"after I reorder modalities with `[` / `]`, the pill's hover tooltip shows
-the wrong path."*
+Report: *"after I reorder modalities with `[` / `]`, the pill's hover tooltip shows the wrong
+path."*
 
 1. **Formalize** — Symptom: tooltip path stale after reorder. Suspected component:
    `moveCurrentModality` in `webview/main.ts`. Layer: **webview**.
-2. **Reproduce** — `test/webview/reorder.spec.ts` reorders, then asserts via
-   `getState()` that the pill name *and* its path tooltip both moved. Fails before fix.
-3. **Fix** — `moveCurrentModality` swapped `modalities`, `modalityColors`, and
-   `modalityOrder` but not `modalityPaths`. Add the one-line `modalityPaths` swap.
-4. **Document** — entry added to docs/testing.md "Findings".
-5. **CI** — pure `getState()` assertion (no screenshot) → runs on all three OSes as-is.
+2. **Implementer** — `test/webview/reorder.spec.ts` reorders, then asserts via `getState()` that
+   the pill name *and* its path tooltip both moved: fails before the fix. Root cause:
+   `moveCurrentModality` swapped `modalities`, `modalityColors`, and `modalityOrder` but not
+   `modalityPaths` — the one-line swap turns it green. Findings entry added; test mapped to the
+   reorder row.
+3. **Verifier** — restores the pre-fix `main.ts`, recompiles, watches the spec fail for the right
+   reason, restores, re-runs green, audits obligations, runs the battery: PASS.
 
 Total change: **1 line of app code + 1 spec.** That's the target shape.
-
-## After the fix: the dashboard row
-
-The loop does not end at green tests. Map the new test in `test/dashboard/features.json`: a bug fix
-usually adds its test to the affected feature's existing `tests` array; add a NEW feature row only
-when the bug exposed a feature the registry never tracked. Then `npm run test:dashboard` and confirm
-the row lights green — CI republishes the live dashboard from this registry on every main push.

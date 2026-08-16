@@ -127,7 +127,8 @@ move behind the helper.
 
 ## PPTX: pairing parents with crops
 
-The webview exports only voted tuples, and the exporter's job is to guess what the vote *meant*.
+The webview exports the voted tuples — or the whole view when nothing is voted (see below) — and
+the exporter's job is to guess what the vote *meant*.
 A crop and its parent are two rows in the carousel but one idea, so the pairing logic works on
 names:
 
@@ -150,6 +151,20 @@ names:
 
 Slides are emitted per modality in the user's display order, and the caption marks the winner; the
 pairing above decides *which* slides exist, not what is on them (`one-slide-per-region`).
+
+### No votes exports the whole view
+
+A click with zero voted tuples sends every tuple in display order with a `null` winner per tuple —
+the wire type (`(OriginalModalityIndex | null)[]`) always permitted this, and a `null` winner
+simply renders no winner mark in the caption. The old behavior was a silent `return`: a user who
+never voted clicked PPTX and nothing observable happened, ever.
+
+From the click until the provider answers, the button wears a spinner overlay and further clicks
+are ignored. This is not cosmetic: each `exportPptx` re-reads and re-encodes every exported image
+through the shared work pool, so concurrent re-click exports multiply minutes of work and race on
+the output filename. The busy flag can only be trusted because of `export-always-answers` below.
+
+
 
 ### Why the layout negotiates instead of fixing positions
 
@@ -214,6 +229,14 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
   crop slides (one per child), and a voted crop whose parent tuple is gone yields a plain solo slide —
   `findParentTuple` returns -1 and there is no image to draw the callout on. **A voted crop is never
   shown without its parent's context** whenever that parent still exists.
+- **`export-always-answers`** — every `exportPptx` received on a live panel is answered with exactly
+  one `pptxComplete` or `pptxError`: the try body of `handleExportPptx` ends in the complete post,
+  and any throw — including a missing output directory from `suggestPptxUri` — becomes the error
+  post. The webview's PPTX button stays busy and refuses clicks until one of them arrives, so a
+  provider path that returns silently bricks the button for the panel's lifetime. The only
+  non-posting exits are dispose-gated: `state.disposed` checks, and `TaskCancelled`, which the pool
+  raises for this key only from `onDidDispose`'s `cancel(poolKey)` — with the webview already gone,
+  no answer is owed.
 - **`callout-from-metadata`** — the callout thumbnail's red rectangle comes from metadata, not from
   re-deriving the region by comparing images.
 - **`crop-needs-viewport`** — crop mode is never entered without a decoded current image. The two

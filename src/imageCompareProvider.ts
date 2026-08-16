@@ -713,6 +713,7 @@ export class ImageCompareProvider {
       await vscode.workspace.fs.writeFile(saveUri, buffer);
 
       if (state.disposed) return;
+      // Exactly one complete/error per request on a live panel (docs/crop-and-pptx.md: export-always-answers).
       state.panel.webview.postMessage({ type: 'pptxComplete', path: saveUri.fsPath });
       const choice = await vscode.window.showInformationMessage(`PPTX exported: ${saveUri.fsPath}`, 'Reveal in Explorer');
       if (choice) void vscode.commands.executeCommand('revealInExplorer', saveUri);
