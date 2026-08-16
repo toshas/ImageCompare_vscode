@@ -367,8 +367,14 @@ Four rules, each learned by breaking the install:
    including two ~17 MB libvips tiers; over a network mount that can exceed two minutes. A kill
    mid-extract leaves a half-written `<id>.vsctmp` staging directory *and* has already removed the
    previous version, so you are left with no working extension. Run it in the background and wait.
-2. **Bump the version for every local install.** Reinstalling the version the window currently has
-   loaded is refused ("Please restart VS Code before reinstalling"), and `--force` does not lift it.
+2. **Version every local install as `<next-patch>-alphaN`** (repo at 0.3.0 → local builds are
+   `0.3.1-alpha1`, `-alpha2`, …; increment only N, in the packaging step, never committed).
+   Reinstalling the version the window currently has loaded is refused ("Please restart VS Code
+   before reinstalling") and `--force` does not lift it, so every install needs a fresh N. The
+   *next-patch* base is load-bearing, both ways: semver puts `-alphaN` below its base release, so
+   an alpha of the *current* version would be silently auto-updated back to the marketplace build,
+   and a bare bumped patch (the old convention) outranks the next real release so auto-update
+   never delivers it. `vsce package` accepts the suffix.
 3. **Copy the `.vsix` to local disk first** (e.g. `/tmp`). Installing straight off a network mount is
    what makes rule 1 bite.
 4. **Interrupted leftovers can be unremovable until the window reloads.** The running extension host
