@@ -1355,6 +1355,44 @@
           ]
         },
         {
+          "id": "transport-posts-die-with-the-slot",
+          "name": "Parked and held image posts die with the slot they name (no ghost after a delete, no drop for a live slot)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "drops the parked payload the moment the delete is seen"
+            },
+            {
+              "suite": "unit",
+              "match": "drops a payload parked inside the rename window when the delete commits"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the stale payload when the file comes back under its own name"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the stale payload when a rename lands on the slot"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the stale payload when the file is rewritten in place"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the stale payload a forceReload retry is asking past"
+            },
+            {
+              "suite": "unit",
+              "match": "never lets a held burst payload for a deleted slot reach the wire"
+            },
+            {
+              "suite": "unit",
+              "match": "leaves the park alone when the byte cache merely evicts a live distant slot"
+            }
+          ]
+        },
+        {
           "id": "transport-hold-flush-trickle",
           "name": "Payloads parked by a scrub burst trickle out one per tick (the one un-gated route to the wire)",
           "tests": [

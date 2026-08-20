@@ -230,6 +230,17 @@ the fix, the docs, and the CI check.
 
 ## Findings (caught by this testbed)
 
+- **A slot invalidation left the payload already parked for that slot on the wire** *(fixed)* — the
+  five slot-level invalidation paths (a delete when first seen and again when the rename window
+  commits, a restore, a rename onto the slot, an in-place rewrite) deleted the `loadedImages` entry
+  and nothing else, so a speculative payload parked behind a thumbnail sweep — minutes, on a real
+  grid — still posted afterwards and painted an image for a slot whose file was gone; the burst hold
+  had the same gap since before backpressure existed. Fixed by one funnel, `invalidateSlot`, that all
+  of them (plus the `forceReload` retry) now go through
+  (`docs/loading-architecture.md: slot-invalidation-clears-the-wire`). Pinned in
+  `test/unit/transportLifetime.test.ts` in both directions — no ghost after an invalidation, and the
+  park left alone when `evictDistantTuples` merely frees bytes for live slots — and by ten mutations.
+
 - **The mutation harness poisoned the working tree** *(fixed)* — `scripts/mutation-check.mjs` wrote
   each mutation over the real source file and restored it in a `finally`. A `pkill -f mutation-check`
   whose pattern also matched the calling shell orphaned node, which then took `SIGHUP` — not one of

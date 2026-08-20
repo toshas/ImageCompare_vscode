@@ -1498,6 +1498,87 @@ const mutations = [
     replace: '    /* mutated: ack watchdogs left armed */',
     killedBy: 'dispose test (no transport timer is left armed after the panel closes)'
   },
+  // ── Slot invalidation clears the wire copies too (docs/loading-architecture.md: slot-invalidation-clears-the-wire) ──
+  {
+    name: 'transport: slot invalidation leaves the parked payload (it posts later as a ghost)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    state.transport.drop(slotKey);\n    state.heldImagePosts.delete(slotKey);',
+    replace: '    state.heldImagePosts.delete(slotKey);',
+    killedBy: 'slot-invalidation tests (a payload parked for a deleted, restored, renamed, rewritten or force-reloaded slot never posts)'
+  },
+  {
+    name: 'transport: slot invalidation leaves the burst hold (the held payload paints the gone file)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    state.heldImagePosts.delete(slotKey);\n  }',
+    replace: '  }',
+    killedBy: 'held-burst test (a held payload for a deleted slot never reaches the wire)'
+  },
+  {
+    name: 'transport: slot invalidation clears the whole park (live neighbours lose payloads they were about to be shown)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    state.loadedImages.delete(slotKey);\n    state.transport.drop(slotKey);',
+    replace: '    state.loadedImages.delete(slotKey);\n    state.transport.clearParked();',
+    killedBy: 'slot-invalidation tests (the neighbouring slot\'s parked payload still delivers)'
+  },
+  {
+    name: 'transport: cache eviction treated as invalidation (a distant slot\'s parked payload is thrown away)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    for (const key of keysToDelete) {\n      state.loadedImages.delete(key);\n    }',
+    replace: '    for (const key of keysToDelete) {\n      const [t, m] = key.split(\'-\').map(Number);\n      this.invalidateSlot(state, t, m);\n    }',
+    killedBy: 'distant-eviction test (evicting bytes for live slots leaves the park alone)'
+  },
+  {
+    name: 'transport: a forceReload retry clears only the cache (the undecodable bytes stay parked)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    if (forceReload) {\n      this.invalidateSlot(state, tupleIndex, modalityIndex);\n    }',
+    replace: '    if (forceReload) {\n      state.loadedImages.delete(cacheKey);\n    }',
+    killedBy: 'forceReload test (the retry drops the parked copy of the bytes it is asking past)'
+  },
+  {
+    name: 'transport: a seen delete clears only the cache (the parked payload survives the file)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '          this.invalidateSlot(state, tupleIndex, globalModIdx);',
+    replace: '          state.loadedImages.delete(`${tupleIndex}-${globalModIdx}`);',
+    killedBy: 'delete-seen test (the park is dropped the moment the delete is reported)'
+  },
+  {
+    name: 'transport: the delete commit clears only the cache (a payload parked inside the rename window posts)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '                onSlotRemoved: (t, m) => this.invalidateSlot(state, t, m),',
+    replace: '                onSlotRemoved: (t, m) => state.loadedImages.delete(`${t}-${m}`),',
+    killedBy: 'rename-window test (the commit drops what was parked while the window was open)'
+  },
+  {
+    name: 'transport: a restore clears only the cache (the pre-delete payload still paints)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: 'd.uri.toString() !== uri.toString());\n\n      this.invalidateSlot(state, tupleIndex, modalityIndex);',
+    replace: 'd.uri.toString() !== uri.toString());\n\n      state.loadedImages.delete(`${tupleIndex}-${modalityIndex}`);',
+    killedBy: 'restore test (the stale parked payload goes when the file comes back)'
+  },
+  {
+    name: 'transport: a rename onto the slot clears only the cache (the old name\'s payload still paints)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '      );\n\n      this.invalidateSlot(state, tupleIndex, modalityIndex);',
+    replace: '      );\n\n      state.loadedImages.delete(`${tupleIndex}-${modalityIndex}`);',
+    killedBy: 'rename test (the stale parked payload goes when a rename lands on the slot)'
+  },
+  {
+    name: 'transport: an in-place rewrite clears only the cache (the previous contents still paint)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '        this.invalidateSlot(state, tupleIndex, modalityIndex);\n        this.regenerateThumbnail(state, tupleIndex, modalityIndex);',
+    replace: '        state.loadedImages.delete(`${tupleIndex}-${modalityIndex}`);\n        this.regenerateThumbnail(state, tupleIndex, modalityIndex);',
+    killedBy: 'rewrite test (the stale parked payload goes when the file is rewritten in place)'
+  },
   // ── Thumbnails on the binary wire (docs/loading-architecture.md: image-payload-normalized, thumb-url-owned-by-cache) ──
   {
     name: 'thumbnail wire: the post path skips normalizeImageBytes (a pack slice ships the whole packfile)',

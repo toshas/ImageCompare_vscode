@@ -1177,13 +1177,21 @@ ${lead}
     });
   }
 
+  /** The one slot invalidation: cached bytes, parked speculation and the burst hold all name this slot, so a caller that clears one leaves the others to paint a ghost (docs/loading-architecture.md: slot-invalidation-clears-the-wire). */
+  private invalidateSlot(state: PanelState, tupleIndex: number, modalityIndex: number): void {
+    const slotKey = `${tupleIndex}-${modalityIndex}`;
+    state.loadedImages.delete(slotKey);
+    state.transport.drop(slotKey);
+    state.heldImagePosts.delete(slotKey);
+  }
+
   /** A column splice renames every slot key, so parked and held posts go the way `loadedImages` does (docs/file-watching.md: reindex-in-lockstep). */
   private dropPendingImagePosts(state: PanelState): void {
     state.heldImagePosts.clear();
     state.transport.clearParked();
   }
 
-  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; dispose, the cap eviction in postImage and a column splice are the only discards (docs/loading-architecture.md: held-payloads-always-flush). This ~32ms trickle is the only route to the wire that re-checks no byte budget (docs/loading-architecture.md: speculation-yields-the-wire). */
+  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; dispose, the cap eviction in postImage, a column splice and slot invalidation are the only discards (docs/loading-architecture.md: held-payloads-always-flush, slot-invalidation-clears-the-wire). This ~32ms trickle is the only route to the wire that re-checks no byte budget (docs/loading-architecture.md: speculation-yields-the-wire). */
   private scheduleBurstFlush(state: PanelState, delayMs = 180): void {
     if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
     state.burstFlushTimer = setTimeout(() => {
@@ -1231,7 +1239,7 @@ ${lead}
 
     // Drop the cached bytes first or the retry re-serves them (docs/loading-architecture.md).
     if (forceReload) {
-      state.loadedImages.delete(cacheKey);
+      this.invalidateSlot(state, tupleIndex, modalityIndex);
     }
 
     if (state.loadedImages.has(cacheKey)) {
@@ -1461,7 +1469,8 @@ ${lead}
   }
 
   /**
-   * Evict images that are too far from current position
+   * Evict images that are too far from current position. Bytes only: these slots are live, so the
+   * park and the hold stay (docs/loading-architecture.md: slot-invalidation-clears-the-wire).
    */
   private evictDistantTuples(state: PanelState, centerIndex: TupleIndex, maxDistance: number): void {
     const keysToDelete: string[] = [];
@@ -1949,8 +1958,7 @@ ${lead}
             timestamp: Date.now()
           });
 
-          const cacheKey = `${tupleIndex}-${globalModIdx}`;
-          state.loadedImages.delete(cacheKey);
+          this.invalidateSlot(state, tupleIndex, globalModIdx);
 
           setTimeout(() => {
             if (state.disposed) return;
@@ -1975,8 +1983,8 @@ ${lead}
               // Strip, winner clear, empty-tuple vs fileDeleted, then the column-empty check — the shared commit (docs/file-watching.md: delete-message-order).
               commitSlotRemoval(state.scanResult, state.winners, currentTupleIndex, currentModIdx, {
                 post: msg => state.panel.webview.postMessage(msg),
-                // A load that resolved inside the window re-populated this key; clear it or it is served as a ghost.
-                onSlotRemoved: (t, m) => state.loadedImages.delete(`${t}-${m}`),
+                // A load that resolved inside the window re-populated this slot; clear it or it is served as a ghost.
+                onSlotRemoved: (t, m) => this.invalidateSlot(state, t, m),
                 removeTuple: idx => this.removeTuple(state, idx),
                 removeModality: idx => this.removeModality(state, idx),
                 saveResults: () => {
@@ -2096,8 +2104,7 @@ ${lead}
       // Disarm the 500ms timer or it deletes the file that just came back (docs/file-watching.md: no-armed-delete-after-return).
       state.recentlyDeleted = state.recentlyDeleted.filter(d => d.uri.toString() !== uri.toString());
 
-      const cacheKey = `${tupleIndex}-${modalityIndex}`;
-      state.loadedImages.delete(cacheKey);
+      this.invalidateSlot(state, tupleIndex, modalityIndex);
 
       this.regenerateThumbnail(state, tupleIndex, modalityIndex);
 
@@ -2135,8 +2142,7 @@ ${lead}
         d => !(d.tupleIndex === tupleIndex && d.modalityIndex === modalityIndex)
       );
 
-      const cacheKey = `${tupleIndex}-${modalityIndex}`;
-      state.loadedImages.delete(cacheKey);
+      this.invalidateSlot(state, tupleIndex, modalityIndex);
 
       this.regenerateThumbnail(state, tupleIndex, modalityIndex);
 
@@ -2345,8 +2351,7 @@ ${lead}
       if (img) {
         const modalityIndex = asOriginal(state.scanResult.modalities.indexOf(img.modality));
         if (modalityIndex < 0) return;
-        const cacheKey = `${tupleIndex}-${modalityIndex}`;
-        state.loadedImages.delete(cacheKey);
+        this.invalidateSlot(state, tupleIndex, modalityIndex);
         this.regenerateThumbnail(state, tupleIndex, modalityIndex);
         if (tupleIndex === state.currentTupleIndex) {
           this.sendImage(state, asTuple(tupleIndex), modalityIndex);

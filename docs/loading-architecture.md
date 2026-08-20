@@ -784,8 +784,10 @@ Opening a panel is asynchronous, and step order is load-bearing:
   **never** held (holding one is a stuck spinner), and below the parking map's 48-entry cap every
   parked payload is delivered — landing on its tuple flushes it immediately, and the burst-end
   timer re-arms until the scrub quiets, then drains one payload per ~32ms tick (a bulk flush just
-  moved the spike to scrub-end). Three paths discard: panel dispose, the cap evicting the
-  oldest payload, and a *column* splice, which renames every slot key
+  moved the spike to scrub-end). Four paths discard: panel dispose, the cap evicting the
+  oldest payload, slot invalidation (`slot-invalidation-clears-the-wire` — the only one that
+  discards for a slot which still *exists*, because its bytes no longer do), and a *column* splice,
+  which renames every slot key
   (`docs/file-watching.md: reindex-in-lockstep`); a *row* splice re-keys the hold instead, so a held
   payload is never flushed into another file's slot. The eviction is safe only because of two webview behaviours that are therefore
   load-bearing: spinners show solely for the current tuple, whose payloads are never held, and
@@ -824,10 +826,25 @@ Opening a panel is asynchronous, and step order is load-bearing:
   keeps a scrub responsive. The sweep claim is raised in `generateAllThumbnails` and released only
   through `endSweep` — the sweep's settle, a synchronous throw out of its prologue, the idle stall
   watchdog, or panel dispose. A parked push is delivered when the budget frees, or dropped — when the
-  user has left its tuple, when the 64-entry park overflows, when a column splice renames its slot, or
+  user has left its tuple, when the 64-entry park overflows, when a column splice renames its slot,
+  when the slot is invalidated (`slot-invalidation-clears-the-wire`), or
   on dispose — never leaked, and never at the cost of the *read*: the bytes are already in
   `state.loadedImages`, so the worst case a drop can cost is one on-demand transfer the user would
   have paid for with prefetch off.
+- **`slot-invalidation-clears-the-wire`** — invalidating a slot invalidates its *wire* copies, not
+  just its bytes: `loadedImages`, the transport park and the scrub-burst hold are dropped together,
+  through one funnel (`invalidateSlot`), by every path that invalidates a slot — a delete when it is
+  first seen and again when the rename window commits it, a restore, a rename landing on the slot, an
+  in-place rewrite, and a `forceReload` retry. The park is what makes this invariant-grade rather than
+  tidiness: a payload parked while a sweep drains posts *minutes* after its file is gone and paints a
+  ghost — an image under a slot that no longer has one — and the hold does the same over ~180 ms. All
+  three deletes are keyed by slot and idempotent, because the same removal is reported by the watcher,
+  the poll and the sweep (`docs/file-watching.md: duplicate-reports-idempotent`). The converse half is
+  equally load-bearing: **eviction is not invalidation**. `evictDistantTuples` frees bytes for slots
+  whose files are fine, so it must leave the park and the hold alone, and no invalidation may clear the
+  park wholesale — the webview re-asks only for a tuple it navigates to, so a payload dropped for a
+  *live* slot is a transfer paid for twice, and a *held* one dropped that way is a reply the webview is
+  still waiting on.
 - **`wire-budget-remote-only`** — the bound applies only where there is a serialized link to share:
   `vscode.env.remoteName === undefined` (a local window) resolves to `Infinity`, which takes the
   un-instrumented path — no parking, no ack plumbing, no watchdog — whatever the setting says. That

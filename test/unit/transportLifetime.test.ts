@@ -6,6 +6,7 @@ import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, __set
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { Priority } from '../../src/workPool';
 
 // Lifetime half of the transport policy, on the REAL provider: the sweep flag parks every
 // speculative push, so any path that raises it and never lowers it switches prefetch off for the
@@ -380,5 +381,126 @@ describe('a closed panel keeps no transport timer alive', () => {
     rig.provider.disposePanel(rig.state, []);
     expect(rig.state.disposed).toBe(true);
     expect(vi.getTimerCount()).toBeLessThanOrEqual(armed - 2);
+  });
+});
+
+// A slot-level invalidation — the file deleted, restored, renamed onto, rewritten, or its bytes
+// re-requested — leaves the cached bytes behind, and until this fix it left the *wire* copies too:
+// a payload already parked (or held) for that slot still posted and painted a ghost, an image under
+// a slot that no longer has one. The park widened that window from the burst hold's ~180ms to a
+// whole sweep, which on a real grid runs for minutes. Both directions are pinned here: over-eager
+// eviction is the opposite failure, a live slot losing the payload it was about to be shown.
+// (docs/loading-architecture.md: slot-invalidation-clears-the-wire)
+describe('a slot invalidation takes that slot\'s wire copies with it', () => {
+  const DELETED = '/imgs/ours/frame03.png'; // tuple 3, modality index 1; tuple 3's `gt` slot is the live neighbour
+
+  it('drops the parked payload the moment the delete is seen', () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    const rig = makeRig();
+    park(rig, [[3, 1], [3, 0]]);
+
+    rig.provider.handleFileDeleted(rig.state, Uri.file(DELETED));
+
+    expect(drained(rig)).toEqual(['3-0:1']);
+  });
+
+  it('drops a payload parked inside the rename window when the delete commits', async () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rig = makeRig();
+
+    rig.provider.handleFileDeleted(rig.state, Uri.file(DELETED));
+    // A load that resolved inside the 500ms window re-populates the slot, exactly what the commit's
+    // own cache clear exists for — the park is the same trap one layer out.
+    park(rig, [[3, 1], [3, 0]]);
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(rig.state.scanResult.tuples[3].images.map((i: any) => i.modality)).toEqual(['gt', 'baseline']);
+    expect(drained(rig)).toEqual(['3-0:1']);
+  });
+
+  it('drops the stale payload when the file comes back under its own name', () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    const rig = makeRig();
+
+    rig.provider.handleFileDeleted(rig.state, Uri.file(DELETED));
+    park(rig, [[3, 1], [3, 0]]);
+    rig.provider.handleFileCreated(rig.state, Uri.file(DELETED));
+
+    // The bytes on disk are new; the parked ones are the pre-delete contents.
+    expect(drained(rig)).toEqual(['3-0:1']);
+  });
+
+  it('drops the stale payload when a rename lands on the slot', () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    const rig = makeRig();
+
+    rig.provider.handleFileDeleted(rig.state, Uri.file(DELETED));
+    park(rig, [[3, 1], [3, 0]]);
+    // Same directory, one pending delete: the create is claimed as that file's new name.
+    rig.provider.handleFileCreated(rig.state, Uri.file('/imgs/ours/frame03_v2.png'));
+
+    expect(rig.state.scanResult.tuples[3].images.find((i: any) => i.modality === 'ours').name).toBe('frame03_v2.png');
+    expect(drained(rig)).toEqual(['3-0:1']);
+  });
+
+  it('drops the stale payload when the file is rewritten in place', () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    const rig = makeRig();
+    park(rig, [[3, 1], [3, 0]]);
+
+    rig.provider.handleFileChanged(rig.state, Uri.file(DELETED));
+
+    expect(drained(rig)).toEqual(['3-0:1']);
+  });
+
+  it('drops the stale payload a forceReload retry is asking past', async () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    const rig = makeRig();
+    park(rig, [[3, 1], [3, 0]]);
+
+    // The webview re-asks for bytes it could not decode; the parked copy is those same bytes.
+    await rig.provider.sendImage(rig.state, 3, 1, Priority.VISIBLE, true);
+    await settle(3);
+
+    // The re-read fails (no such file), so nothing but the fix can clear the park.
+    expect(rig.posts.filter((p: any) => p.type === 'imageError').length).toBe(1);
+    expect(drained(rig)).toEqual(['3-0:1']);
+  });
+
+  it('never lets a held burst payload for a deleted slot reach the wire', async () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rig = makeRig();
+    hold(rig, [[3, 1], [3, 0]]);
+    expect(rig.state.heldImagePosts.size).toBe(2);
+
+    rig.provider.handleFileDeleted(rig.state, Uri.file(DELETED));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(rig.imagePosts().map((p: any) => `${p.tupleIndex}-${p.modalityIndex}`)).toEqual(['3-0']);
+  });
+
+  it('leaves the park alone when the byte cache merely evicts a live distant slot', () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    const rig = makeRig();
+    park(rig, [[1, 0], [3, 1]]);
+    rig.state.loadedImages.set('1-0', { bytes: new Uint8Array(4), mime: 'image/png', width: 4, height: 4 });
+    rig.state.loadedImages.set('3-1', { bytes: new Uint8Array(4), mime: 'image/png', width: 4, height: 4 });
+
+    // Memory pressure, not invalidation: those files are fine, and nothing re-requests a slot on
+    // eviction alone — drop the payload here and the user waits on a transfer that was already paid for.
+    rig.provider.evictDistantTuples(rig.state, CENTER, 0);
+
+    expect([...rig.state.loadedImages.keys()]).toEqual([]);
+    expect(drained(rig)).toEqual(['1-0:1', '3-1:1']);
   });
 });
