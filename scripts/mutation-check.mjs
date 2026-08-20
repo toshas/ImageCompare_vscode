@@ -8,7 +8,9 @@
  * green first. Mutations are applied to a throwaway copy of the tree, never to
  * the working tree, so no exit path — SIGKILL included — can leave mutated
  * source behind; a checksum manifest verifies that at exit and names any file
- * that moved. See docs/testing.md (the harness runs in a sandbox).
+ * that moved. A run narrowed by the MUTATION_CHECK_TEST seam is not this gate:
+ * it is banner-marked as a subset and exits 2, never 0.
+ * See docs/testing.md (the harness runs in a sandbox).
  */
 
 import {
@@ -1629,8 +1631,7 @@ const mutations = [
   }
 ];
 
-// ── Sandbox: every mutation is applied to a throwaway copy of the tree ──
-// The working tree is never written, so even SIGKILL leaves src/ byte-identical (docs/testing.md).
+// ── Sandbox: mutations land on a throwaway copy, never the working tree (docs/testing.md) ──
 function copyList() {
   const roots = ['src', 'test', 'package.json'];
   for (const entry of readdirSync(repoRoot)) {
@@ -1713,8 +1714,7 @@ function verifyManifest() {
       hash = null;
     }
     if (hash === entry.hash) continue;
-    // A working-tree file that turned into one of this run's mutations was poisoned by the run;
-    // any other change is someone editing while the harness ran, which the sandbox makes harmless.
+    // Poisoned-by-this-run vs edited-during-this-run: docs/testing.md, "A green suite is not evidence".
     const poisoned = text !== null && (applied.get(entry.rel) ?? []).some((m) => entry.text.replace(m.find, m.replace) === text);
     if (entry.side === 'repo' && !poisoned) {
       manifestNotices.push(entry.p);
@@ -1735,10 +1735,17 @@ function verifyManifest() {
 
 // Restore-on-interrupt: track the file currently mutated so a signal cannot leave it dirty.
 let inFlight = null; // { path, original: Buffer }
+let restoreFailed = false;
 function restoreInFlight() {
-  if (inFlight) {
-    writeFileSync(inFlight.path, inFlight.original);
-    inFlight = null;
+  if (!inFlight) return;
+  const { path: target, original } = inFlight;
+  inFlight = null; // cleared first: a second handler must not retry a write that already threw
+  try {
+    writeFileSync(target, original);
+  } catch (err) {
+    restoreFailed = true;
+    console.error(`\nCOULD NOT RESTORE ${target} (${err.message})`);
+    console.error('  The sandbox went away mid-run (a temp reaper, or an rm -rf). Nothing was written to the working tree, so src/ is intact; delete any leftover imagecompare-mutation-* dir under the temp root and re-run. Exiting non-zero.');
   }
 }
 
@@ -1747,22 +1754,25 @@ function finish(code) {
   restoreInFlight();
   const dirty = verifyManifest();
   removeSandbox();
-  process.exit(dirty ? 1 : code);
+  process.exit(dirty || restoreFailed ? 1 : code);
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
   process.on(sig, () => finish(130));
 }
 process.on('uncaughtException', (err) => {
+  console.error('\nuncaughtException - restoring and dropping the sandbox:');
   console.error(err);
   finish(1);
 });
+// Named separately from uncaughtException so a test can prove which handler ran (docs/testing.md).
 process.on('unhandledRejection', (err) => {
+  console.error('\nunhandledRejection - restoring and dropping the sandbox:');
   console.error(err);
   finish(1);
 });
 process.on('exit', () => {
   restoreInFlight();
-  if (verifyManifest()) process.exitCode = 1;
+  if (verifyManifest() || restoreFailed) process.exitCode = 1;
   removeSandbox();
 });
 
@@ -1774,6 +1784,14 @@ if (selected.length === 0) {
   process.exit(1);
 }
 
+// A seam-narrowed run is not the gate and must never exit 0 — the subset exit, docs/testing.md.
+const SUBSET_EXIT = 2;
+const subsetTrailer = () => `NOT A GATE - subset run: ${selected.length} of ${mutations.length} mutations, chosen by MUTATION_CHECK_TEST. Only a full run (env var unset) can exit 0.`;
+if (seam) {
+  const bar = '#'.repeat(78);
+  console.log(`\n${bar}\n##  SUBSET RUN - NOT THE GATE\n##  MUTATION_CHECK_TEST is set: ${selected.length} of ${mutations.length} mutations will run.\n##  Whatever this run prints, it certifies nothing about the suites. It exits ${SUBSET_EXIT}.\n${bar}\n`);
+}
+
 // spawnSync blocks the loop: yield between suites so a pending signal handler actually runs.
 const yieldToLoop = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -1782,6 +1800,11 @@ async function seamHook(m) {
   if (seam.throwAfterApply) {
     setTimeout(() => {
       throw new Error('MUTATION_CHECK_TEST injected failure');
+    }, 10);
+  }
+  if (seam.rejectAfterApply) {
+    setTimeout(() => {
+      Promise.reject(new Error('MUTATION_CHECK_TEST injected rejection'));
     }, 10);
   }
   if (seam.pauseMs) await new Promise((resolve) => setTimeout(resolve, seam.pauseMs));
@@ -1894,6 +1917,11 @@ if (harnessErrors.length) {
 }
 const manifestDirty = verifyManifest();
 if (survivors.length || harnessErrors.length || manifestDirty) {
+  if (seam) console.error(`\n${subsetTrailer()}`);
   process.exit(1);
 }
-console.log('\nAll mutations killed. The suites pin the rules they claim to.');
+if (seam) {
+  console.log(`\n${subsetTrailer()}`);
+  process.exit(SUBSET_EXIT);
+}
+console.log(`\nAll ${mutations.length} mutations killed. The suites pin the rules they claim to.`);

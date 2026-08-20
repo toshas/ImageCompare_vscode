@@ -10,7 +10,9 @@ import * as path from 'node:path';
 // process and signal it: the only honest way to test an exit path.
 //
 // Windows is out of scope: the harness is an ubuntu-only CI gate, `npx` is not spawnable
-// the same way there, and Windows has no SIGHUP/SIGQUIT to deliver.
+// the same way there, and Windows has no SIGHUP/SIGQUIT to deliver. The other two legs of the
+// 3-OS unit job do run it — every spec here pays one ~8.5 MB sandbox copy, which is the price of
+// driving the real script rather than a stand-in.
 
 const repoRoot = path.resolve(__dirname, '../..');
 const HARNESS = path.join(repoRoot, 'scripts/mutation-check.mjs');
@@ -26,6 +28,10 @@ const PROBE_FIND = 'return new Uint8Array(bytes);';
 // indistinguishable from the harness poisoning it, which is what the manifest must catch.
 const HARMLESS_FIND = '  // new Uint8Array(view) copies';
 const HARMLESS_REPLACE = '  // new Uint8Array(view) then copies';
+
+// The seam narrows the run to a subset, so the harness must refuse to exit 0: 0 is the one status
+// automation consumes, and a subset that exits 0 is indistinguishable from the gate (docs/testing.md).
+const SUBSET_EXIT = 2;
 
 const hash = (p: string) => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
@@ -119,7 +125,7 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
 
     expect(run.output()).toContain(`KILLED   ${PROBE_MUTATION}`);
     expect(run.output()).toContain('killed: 1  survived: 0  errors: 0');
-    expect(code).toBe(0);
+    expect(code).toBe(SUBSET_EXIT);
     expect(hash(PROBE_ABS)).toBe(before);
     expect(fs.existsSync(box)).toBe(false);
   }, 120_000);
@@ -131,7 +137,7 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
 
     expect(run.output()).toContain('green  test/unit/tupleMatching.test.ts');
     expect(run.output()).toContain('KILLED   tuple: row sort reversed');
-    expect(code).toBe(0);
+    expect(code).toBe(SUBSET_EXIT);
   }, 120_000);
 
   for (const signal of ['SIGHUP', 'SIGTERM', 'SIGINT', 'SIGQUIT'] as const) {
@@ -176,6 +182,7 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
     const box = await sandboxOf(run);
     const { code } = await run.exit;
 
+    expect(run.output()).toContain('uncaughtException - restoring');
     expect(run.output()).toContain('MUTATION_CHECK_TEST injected failure');
     expect(code).toBe(1);
     expect(hash(PROBE_ABS)).toBe(before);
@@ -216,7 +223,7 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
 
       expect(run.output()).toContain(`KILLED   ${PROBE_MUTATION}`);
       expect(run.output()).toContain('changed while the run was in progress');
-      expect(code).toBe(0);
+      expect(code).toBe(SUBSET_EXIT);
       expect(fs.readFileSync(PROBE_ABS)).toEqual(edited);
     } finally {
       atomicWrite(PROBE_ABS, original);
@@ -250,5 +257,50 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
     } finally {
       atomicWrite(PROBE_ABS, original);
     }
+  }, 120_000);
+
+  it('leaves src/ byte-identical when an unhandled rejection ends the run', async () => {
+    const before = hash(PROBE_ABS);
+    const run = startHarness({ only: PROBE_MUTATION, pauseMs: 120_000, rejectAfterApply: true });
+    const box = await sandboxOf(run);
+    const { code } = await run.exit;
+
+    // Named handlers, so removing this one and letting node's default route the rejection to
+    // uncaughtException (same exit code, same restore) is still a visible regression.
+    expect(run.output()).toContain('unhandledRejection - restoring');
+    expect(run.output()).toContain('MUTATION_CHECK_TEST injected rejection');
+    expect(code).toBe(1);
+    expect(hash(PROBE_ABS)).toBe(before);
+    expect(fs.existsSync(box)).toBe(false);
+  }, 120_000);
+
+  it('brands a seam-narrowed run a subset and refuses to exit 0, so it cannot pass for the gate', async () => {
+    const run = startHarness({ only: PROBE_MUTATION });
+    await sandboxOf(run);
+    const { code } = await run.exit;
+
+    expect(run.output()).toContain('SUBSET RUN - NOT THE GATE');
+    expect(run.output()).not.toMatch(/mutations killed\./);
+    const lines = run.output().trimEnd().split('\n');
+    expect(lines[lines.length - 1]).toMatch(/NOT A GATE/);
+    expect(lines[lines.length - 1]).toContain('1 of ');
+    expect(code).not.toBe(0);
+    expect(code).toBe(SUBSET_EXIT);
+  }, 120_000);
+
+  it('reports an actionable failure, not a raw abort, when the sandbox vanishes before the restore', async () => {
+    const before = hash(PROBE_ABS);
+    const run = startHarness({ only: PROBE_MUTATION, pauseMs: 120_000 });
+    const box = await sandboxOf(run);
+    await run.waitFor(/##MC applied/);
+
+    fs.rmSync(box, { recursive: true, force: true });
+    run.child.kill('SIGTERM');
+    const { code } = await run.exit;
+
+    expect(run.output()).toContain('COULD NOT RESTORE');
+    expect(run.output()).toContain(path.join(box, PROBE_REL));
+    expect(code).toBe(1);
+    expect(hash(PROBE_ABS)).toBe(before);
   }, 120_000);
 });

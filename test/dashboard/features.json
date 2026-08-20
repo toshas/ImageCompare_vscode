@@ -1749,7 +1749,7 @@
       "features": [
         {
           "id": "mutation-harness-isolation",
-          "name": "Mutation harness mutates a sandbox copy, never the working tree (every handleable exit restores; SIGKILL leaves a stale temp dir)",
+          "name": "Mutation harness mutates a sandbox copy, never the working tree (every handleable exit restores; SIGKILL leaves a stale temp dir; a seam-narrowed subset run is branded and cannot exit 0)",
           "tests": [
             {
               "suite": "unit",

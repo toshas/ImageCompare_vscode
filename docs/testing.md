@@ -166,10 +166,27 @@ all, which is the point of the copy — what they leave behind is a stale temp d
 The manifest separates the two changes it can see: a working-tree file that turned into *this run's*
 mutation is a poisoning and fails the run by name, while any other change is someone editing during
 the run and is only noted, so an edit landing mid-run neither breaks the run nor is broken by it.
+A restore that cannot happen — the sandbox reaped or `rm -rf`'d out from under a live run — prints
+`COULD NOT RESTORE <path>` and what to do about it, and forces a non-zero exit; it used to throw
+*inside* the crash handler, which node answers with a bare double stack and exit 7 at exactly the
+moment someone is reading the log.
+
 `test/unit/mutationHarness.test.ts` drives the real script and signals it for each of those exits.
 It narrows the run through the `MUTATION_CHECK_TEST` env seam (JSON: `only` or `mutations`,
-`pauseMs`, `throwAfterApply`), which is unset in every real run — with it unset the script takes
-exactly the path CI gates, all 195 mutations against the whole list.
+`pauseMs`, `throwAfterApply`, `rejectAfterApply`), which is unset in every real run — with it unset
+the script takes exactly the path CI gates, all 195 mutations against the whole list.
+
+**Only a full run can exit 0.** A seam-narrowed run opens with a `SUBSET RUN - NOT THE GATE` banner,
+closes with a `NOT A GATE - subset run: N of 195` trailer instead of the all-killed line, and exits
+**2** — never 0, and never 1 either, which stays reserved for a genuine survivor/error/manifest
+failure so the spec can still tell a healthy subset from a broken one. Exit 0 is the only status
+automation reads: a banner is invisible to `&&`, to `set -e` and to a green CI step, so a subset that
+exited 0 would be indistinguishable from the gate that guards publishing to both marketplaces. The
+seam cannot be refused outright when `CI` is set — the spec runs under `npm test`, which runs in CI,
+and needs it. The harness is also the one script no mutation can cover (mutations edit `src/` inside
+a sandbox that does not even contain `scripts/`), so its specs are proven by hand-breaking instead:
+each handler prints its own name, so deleting the `unhandledRejection` hook — which node then routes
+to `uncaughtException` for the same exit code and the same restore — still fails a test.
 
 ## Adding a feature, fix, or test — the one workflow
 
@@ -222,6 +239,13 @@ the fix, the docs, and the CI check.
   `SIGQUIT`, `uncaughtException`, `unhandledRejection` and `exit`, and a checksum manifest that fails
   the run naming any file that moved. Guarded by `test/unit/mutationHarness.test.ts`, which spawns the
   real harness and kills it mid-mutation with each of those signals.
+
+- **A subset mutation run looked exactly like the gate** *(fixed)* — `MUTATION_CHECK_TEST` shrinks the
+  run to any subset and exited 0 all the same, so "195 killed" in a log could not be told from "1
+  killed" and every later claim to have run the gate was worth less. A subset now carries a banner and
+  a trailer and exits 2. Found by review of the sandboxing change, not by a test; the same review found
+  that the crash handlers' restore could throw (exit 7, raw stack) and that `unhandledRejection` was
+  the one exit path with no test — both closed with `test/unit/mutationHarness.test.ts`.
 
 - **Every tuple visited queued its whole tuple, and nothing ever cancelled it** *(fixed)* — found in
   the field, not by a test: a 746×10 panel sat six minutes at `run=[0,15,0,0,0,1,0]
