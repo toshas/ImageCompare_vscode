@@ -40,6 +40,10 @@ jobs:
       - name: Check comment length
         run: node scripts/comment-lint.mjs
 
+      # Module sidedness (extension/standalone/shared) derived from real imports. See docs/standalone.md.
+      - name: Check module sidedness
+        run: node scripts/check-sidedness.mjs
+
       # The test command is defined once, in package.json — a copy here would silently go stale.
       - name: Run tests
         run: npm test

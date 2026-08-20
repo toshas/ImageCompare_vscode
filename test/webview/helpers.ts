@@ -27,6 +27,7 @@ export interface IcState {
   winners: [number, number][];
   votingEnabled: boolean;
   pptxBusy: boolean;
+  thumbUrlsLive: number;
 }
 
 /** Load the harness and complete the init handshake with synthetic fixtures. */

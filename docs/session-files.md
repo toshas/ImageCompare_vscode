@@ -196,7 +196,7 @@ filenames, so changing cluster membership can change it and orphan votes
 modalities are added or removed; nothing durable may depend on them.
 
 Colliding names are de-duplicated with a ` (N)` suffix on **both** tuple-creation paths — the scan
-(`scanDirectoriesAsModalities`) and the watcher (`handleNewFile`) — so two tuples never share a vote
+(`scanDirectoriesAsModalities`) and the arrival planner (`planArrival` in `arrivalPlan.ts`) — so two tuples never share a vote
 key. Both must keep doing it: `mapWinnersToIndices` looks the key up per tuple, so one duplicate name
 makes a single results line vote for every row that carries it. The line format still has holes: a name starting with `#` reads back as a
 comment, one containing `=` truncates at the first `=`, and the reader trims both the line and each

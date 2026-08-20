@@ -189,6 +189,26 @@
             {
               "suite": "webview",
               "match": "shows the floating panel tools"
+            },
+            {
+              "suite": "unit",
+              "match": "tupleDeleted -> refresh -> re-save in that order"
+            },
+            {
+              "suite": "unit",
+              "match": "re-saves after EVERY step"
+            },
+            {
+              "suite": "unit",
+              "match": "indices pre-shifted for earlier splices"
+            },
+            {
+              "suite": "unit",
+              "match": "deletes every file before executing the removal plan"
+            },
+            {
+              "suite": "unit",
+              "match": "files, tupleDeleted, refresh, save"
             }
           ]
         },
@@ -211,6 +231,34 @@
             {
               "suite": "webview",
               "match": "pptxError clears the busy state"
+            },
+            {
+              "suite": "unit",
+              "match": "emits one plain slide per modality"
+            },
+            {
+              "suite": "unit",
+              "match": "orders slides by modalityOrder"
+            },
+            {
+              "suite": "unit",
+              "match": "marks exactly the winner caption"
+            },
+            {
+              "suite": "unit",
+              "match": "a voted crop never ships without its parent"
+            },
+            {
+              "suite": "unit",
+              "match": "increments past the max existing number"
+            },
+            {
+              "suite": "unit",
+              "match": "speaks the canon sequence"
+            },
+            {
+              "suite": "unit",
+              "match": "posts pptxError exactly once"
             }
           ]
         },
@@ -293,6 +341,46 @@
           "id": "crop-snap-square",
           "name": "Double-click cardinal handle → snap to square",
           "tests": []
+        },
+        {
+          "id": "crop-output-plan",
+          "name": "Crop output naming (_cropNN max across modality dirs) + rect scale/clamp + shared flow order",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "max across modality dirs"
+            },
+            {
+              "suite": "unit",
+              "match": "clamps width and height to the image bounds"
+            },
+            {
+              "suite": "unit",
+              "match": "speaks the canon transcript"
+            },
+            {
+              "suite": "unit",
+              "match": "numbers past the max existing crop"
+            },
+            {
+              "suite": "unit",
+              "match": "injects the crop meta as a readable tEXt chunk"
+            }
+          ]
+        },
+        {
+          "id": "crop-rel-rect",
+          "name": "Crop rect crosses modalities in relative form (shared toRelativeRect)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "divides x/w by the width and y/h by the height"
+            },
+            {
+              "suite": "unit",
+              "match": "round-trips through scaleAndClampRect"
+            }
+          ]
         },
         {
           "id": "crop-coords-math",
@@ -404,8 +492,28 @@
               "match": "write then read round-trips"
             },
             {
+              "suite": "unit",
+              "match": "maps winner indices to durable modality names"
+            },
+            {
               "suite": "integration",
               "match": "CRLF-encoded results"
+            },
+            {
+              "suite": "unit",
+              "match": "serializes the exact header and vote lines"
+            },
+            {
+              "suite": "unit",
+              "match": "round-trips through serialize and parse"
+            },
+            {
+              "suite": "unit",
+              "match": "empty winners delete the results file"
+            },
+            {
+              "suite": "unit",
+              "match": "winners serialize through the shared format"
             }
           ]
         }
@@ -421,6 +529,108 @@
             {
               "suite": "webview",
               "match": "renders the viewer and ingests fixtures"
+            },
+            {
+              "suite": "unit",
+              "match": "plans slots in scanline order"
+            },
+            {
+              "suite": "unit",
+              "match": "reports a slot whose modality the tuple lacks as missing"
+            },
+            {
+              "suite": "unit",
+              "match": "zero-item terminal case"
+            },
+            {
+              "suite": "unit",
+              "match": "missing slots error out first"
+            },
+            {
+              "suite": "unit",
+              "match": "zero items still posts the terminal progress tick"
+            },
+            {
+              "suite": "webview",
+              "match": "corrupt thumbnail payload falls back to the error placeholder"
+            },
+            {
+              "suite": "webview",
+              "match": "restores the tile and re-arms the retry"
+            },
+            {
+              "suite": "webview",
+              "match": "pool rebinds after a decode failure keep the placeholder"
+            },
+            {
+              "suite": "webview",
+              "match": "a recycled empty tile paints exactly like a never-filled one"
+            },
+            {
+              "suite": "webview",
+              "match": "every visible tile carries a decodable src"
+            },
+            {
+              "suite": "unit",
+              "match": "the blank tile src is a decodable 1x1 fully transparent png"
+            },
+            {
+              "suite": "webview",
+              "match": "a genuinely missing slot still shows the"
+            }
+          ]
+        },
+        {
+          "id": "carousel-thumb-binary",
+          "name": "Thumbnails on the binary wire (bytes+mime, object-url lifetime)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a pack-slice thumbnail is copied tight before it is posted"
+            },
+            {
+              "suite": "unit",
+              "match": "an on-demand re-request posts the same tight binary shape"
+            },
+            {
+              "suite": "unit",
+              "match": "revokes the superseded url and never the incoming one"
+            },
+            {
+              "suite": "unit",
+              "match": "adopts the successor before revoking the loser"
+            },
+            {
+              "suite": "unit",
+              "match": "stores the placeholder data url but never revokes it"
+            },
+            {
+              "suite": "unit",
+              "match": "delete and clear revoke exactly what they drop"
+            },
+            {
+              "suite": "unit",
+              "match": "re-keys a row removal"
+            },
+            {
+              "suite": "webview",
+              "match": "a thumbnail payload paints from an object url"
+            },
+            {
+              "suite": "webview",
+              "match": "a superseded delivery releases exactly one url"
+            },
+            {
+              "suite": "webview",
+              "match": "pooled-row rebinds repaint from the cache without revoking a live url"
+            },
+            {
+              "suite": "webview",
+              "match": "the error placeholder releases the slot url and a re-init releases all of them"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone build boots the real webview"
             }
           ]
         },
@@ -471,6 +681,18 @@
             {
               "suite": "webview",
               "match": "renders the viewer and ingests fixtures"
+            },
+            {
+              "suite": "unit",
+              "match": "builds the init message with dense tuples"
+            },
+            {
+              "suite": "unit",
+              "match": "densifies tuples"
+            },
+            {
+              "suite": "unit",
+              "match": "defaults colors to the positional palette"
             }
           ]
         },
@@ -519,6 +741,24 @@
           ]
         },
         {
+          "id": "view-image-serve",
+          "name": "Full-image serve: one terminal reply (image XOR imageError), passthrough vs convert",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a missing image posts exactly one imageError"
+            },
+            {
+              "suite": "unit",
+              "match": "a passthrough extension serves the original bytes"
+            },
+            {
+              "suite": "unit",
+              "match": "a convert failure posts exactly one imageError"
+            }
+          ]
+        },
+        {
           "id": "view-zoom-readout",
           "name": "Zoom % readout in status",
           "tests": []
@@ -535,6 +775,14 @@
             {
               "suite": "webview",
               "match": "opens the help modal and Esc closes it"
+            },
+            {
+              "suite": "webview",
+              "match": "help modal fits entirely within a small viewport"
+            },
+            {
+              "suite": "webview",
+              "match": "help table lists mode-dependent and mouse inputs"
             }
           ]
         },
@@ -549,6 +797,20 @@
             {
               "suite": "webview",
               "match": "copy after navigation writes the currently displayed image"
+            }
+          ]
+        },
+        {
+          "id": "help-version",
+          "name": "Version shown in the help modal",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "help modal shows the ImageCompare version carried by init"
+            },
+            {
+              "suite": "webview",
+              "match": "no version in init renders no footer"
             }
           ]
         }
@@ -574,6 +836,50 @@
             {
               "suite": "integration",
               "match": "partial tuple when a modality is missing"
+            }
+          ]
+        },
+        {
+          "id": "scan-symlinks",
+          "name": "Symlinked modality dirs and images are scanned",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "scanForImages follows symlinks"
+            }
+          ]
+        },
+        {
+          "id": "scan-parallel-dirs",
+          "name": "Modality dirs listed concurrently (capped), assembled in caller order",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "issues all 11 directory listings at once"
+            },
+            {
+              "suite": "unit",
+              "match": "overlaps the subdirectory listings of a mode-1 root"
+            },
+            {
+              "suite": "unit",
+              "match": "caps the fan-out at exactly 16 and lists in waves"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the caller order when the directories resolve slowest-first"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the caller order across concurrency waves"
+            },
+            {
+              "suite": "unit",
+              "match": "propagates the earliest failing directory"
+            },
+            {
+              "suite": "unit",
+              "match": "sorts each directory naturally, whatever order the listing returns"
             }
           ]
         },
@@ -608,6 +914,58 @@
           ]
         },
         {
+          "id": "watcher-arrival",
+          "name": "Watcher arrival placement: slot-fill vs new tuple (shared with standalone crops)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "exact-basename sibling fills the free slot"
+            },
+            {
+              "suite": "unit",
+              "match": "a taken slot means a new tuple"
+            },
+            {
+              "suite": "unit",
+              "match": "post-crop sequence"
+            },
+            {
+              "suite": "unit",
+              "match": "shifts winners and the current index up"
+            }
+          ]
+        },
+        {
+          "id": "sweep-deletion-detection",
+          "name": "Existence sweep: deletions derived from the cycle's directory listings (one pooled task per dir, not per file)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a steady-state cycle costs one pooled task per watched directory"
+            },
+            {
+              "suite": "unit",
+              "match": "the cycle cost does not grow with the number of files"
+            },
+            {
+              "suite": "unit",
+              "match": "a real deletion is still detected"
+            },
+            {
+              "suite": "unit",
+              "match": "a modality directory that cannot be listed still reports its files gone"
+            },
+            {
+              "suite": "unit",
+              "match": "a tracked file that became a dangling symlink is reported gone"
+            },
+            {
+              "suite": "unit",
+              "match": "a tracked file under no listed directory keeps its own existence check"
+            }
+          ]
+        },
+        {
           "id": "match-crossplatform",
           "name": "Path disambiguation (POSIX/Windows parity)",
           "tests": [
@@ -637,6 +995,72 @@
             {
               "suite": "unit",
               "match": "injects and reads back a value"
+            }
+          ]
+        },
+        {
+          "id": "thumb-pack-cache",
+          "name": "Thumbnail packfile cache (warm open; survives a close)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "round-trip — every key comes back byte-identical"
+            },
+            {
+              "suite": "unit",
+              "match": "uuid mismatch between idx and pack is rejected"
+            },
+            {
+              "suite": "unit",
+              "match": "dispose() publishes the pending pack instead of dropping it"
+            },
+            {
+              "suite": "unit",
+              "match": "flush() resolves only once the pack and idx are on disk"
+            },
+            {
+              "suite": "unit",
+              "match": "never publishes an empty pack over a good one"
+            },
+            {
+              "suite": "unit",
+              "match": "the pack a close left behind serves the next open"
+            }
+          ]
+        },
+        {
+          "id": "thumb-cache-keying",
+          "name": "Thumbnail cache key sees an in-place overwrite (ctime); superseded entries evicted",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "an in-place overwrite with identical mtime and size serves the new pixels"
+            },
+            {
+              "suite": "unit",
+              "match": "a fresh service re-reads the overwritten file"
+            },
+            {
+              "suite": "unit",
+              "match": "a superseded key is evicted"
+            }
+          ]
+        },
+        {
+          "id": "thumb-cache-expiry",
+          "name": "Thumbnail cache expires by last use (an in-use pack survives the sweep; a deleted one is republished)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a week-old pack that is serving this session survives the sweep"
+            },
+            {
+              "suite": "unit",
+              "match": "a week-old pack nobody opened still expires"
+            },
+            {
+              "suite": "unit",
+              "match": "a pack deleted under a live session is republished by the close"
             }
           ]
         }
@@ -691,12 +1115,630 @@
           ]
         },
         {
+          "id": "pool-width-sizing",
+          "name": "Work-pool width sized from usable parallelism, capped at the libuv ceiling (imageCompare.maxConcurrentReads overrides)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "sizes from usable parallelism"
+            },
+            {
+              "suite": "unit",
+              "match": "an explicit width override wins"
+            },
+            {
+              "suite": "unit",
+              "match": "clamps the pool width"
+            }
+          ]
+        },
+        {
+          "id": "debug-log-sink",
+          "name": "Debug logging to the ImageCompare output channel (imageCompare.debug)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "writes a tagged line to the ImageCompare channel with an elapsed prefix"
+            },
+            {
+              "suite": "unit",
+              "match": "turning debug on at runtime starts logging without re-activation"
+            },
+            {
+              "suite": "unit",
+              "match": "disposes the output channel when the extension subscription is disposed"
+            },
+            {
+              "suite": "unit",
+              "match": "an idle window stops repeating itself"
+            },
+            {
+              "suite": "unit",
+              "match": "a pool with work in it is reported every cycle"
+            },
+            {
+              "suite": "unit",
+              "match": "a cycle that finds a deletion still reports it"
+            }
+          ]
+        },
+        {
+          "id": "debug-open-rollup",
+          "name": "Open path attributed in one [IC-OPEN] rollup (scan/watchers/boot/init/hand-off)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "renders one line whose spans are the differences between consecutive marks"
+            },
+            {
+              "suite": "unit",
+              "match": "time between marked spans is reported as `other`, never absorbed into a neighbour"
+            },
+            {
+              "suite": "unit",
+              "match": "sendInitData closes the trace and logs exactly one [IC-OPEN] line, ahead of the sweep"
+            },
+            {
+              "suite": "unit",
+              "match": "reports the serialized init payload size, measured on the payload that was posted"
+            },
+            {
+              "suite": "unit",
+              "match": "counts the image files handed to the matcher, and times the matcher inside the scan"
+            },
+            {
+              "suite": "unit",
+              "match": "the html mark sits at the html assignment"
+            },
+            {
+              "suite": "unit",
+              "match": "the ready mark sits at the top of the ready handler"
+            },
+            {
+              "suite": "unit",
+              "match": "the sweep mark sits at the sweep"
+            }
+          ]
+        },
+        {
+          "id": "debug-costs-nothing-when-off",
+          "name": "Instrumentation is free while debug is off",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "debug off: the message thunk is never invoked and nothing reaches the channel"
+            },
+            {
+              "suite": "unit",
+              "match": "the init payload is serialized for its size only inside the trace gate"
+            },
+            {
+              "suite": "unit",
+              "match": "debug off: the scan carries no stats at all"
+            },
+            {
+              "suite": "unit",
+              "match": "debug off: serving thumbnails updates no counter at all"
+            },
+            {
+              "suite": "unit",
+              "match": "turning debug off at runtime stops the counters mid-session"
+            },
+            {
+              "suite": "unit",
+              "match": "no debugLog call in fileService.ts runs without a debugEnabled() guard"
+            }
+          ]
+        },
+        {
+          "id": "prefetch-wave-rollup",
+          "name": "Prefetch waves logged on issue and on drain (sparse tuples included)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a dense wave logs issuance and a rollup carrying the loaded bytes"
+            },
+            {
+              "suite": "unit",
+              "match": "a wave whose FIRST slot has no image still logs both lines"
+            },
+            {
+              "suite": "unit",
+              "match": "a wave with a hole in the middle still logs both lines"
+            }
+          ]
+        },
+        {
+          "id": "transport-user-never-delayed",
+          "name": "User-facing image pushes are never delayed by wire backpressure",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "the policy never withholds a user-facing push"
+            },
+            {
+              "suite": "unit",
+              "match": "a user-facing image posted mid-wave is not queued behind speculative bytes"
+            },
+            {
+              "suite": "unit",
+              "match": "never withholds a user-facing push — not while sweeping, not over budget"
+            }
+          ]
+        },
+        {
+          "id": "transport-sweep-priority",
+          "name": "Prefetch pushes yield the wire while the thumbnail sweep drains",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "the sweep drains without a prefetch wave on the wire"
+            },
+            {
+              "suite": "unit",
+              "match": "every thumbnail has crossed the wire in under 1.5 virtual seconds"
+            },
+            {
+              "suite": "unit",
+              "match": "withholds every speculative push while a bulk sweep drains"
+            },
+            {
+              "suite": "unit",
+              "match": "deferred speculation is delivered, not dropped, once the sweep ends"
+            }
+          ]
+        },
+        {
+          "id": "transport-byte-budget",
+          "name": "Speculative transfers bounded in bytes in flight (remote sessions only)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "speculative bytes in flight stay inside the budget"
+            },
+            {
+              "suite": "unit",
+              "match": "bounds speculation in bytes, not in messages"
+            },
+            {
+              "suite": "unit",
+              "match": "lets one over-budget image go alone"
+            },
+            {
+              "suite": "unit",
+              "match": "is unlimited on a local session, whatever the setting says"
+            },
+            {
+              "suite": "unit",
+              "match": "with the budget off (local session) the wave still head-of-line blocks"
+            }
+          ]
+        },
+        {
+          "id": "transport-sweep-claim-released",
+          "name": "The thumbnail sweep always gives the wire back (settle, throw, or stall)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "releases the wire when a synchronous throw escapes the sweep prologue"
+            },
+            {
+              "suite": "unit",
+              "match": "releases the wire when the sweep stops making progress"
+            },
+            {
+              "suite": "unit",
+              "match": "does not cut short a sweep that is still settling slots"
+            }
+          ]
+        },
+        {
+          "id": "transport-posts-reindexed",
+          "name": "Parked and held image posts re-index with the splice that moves their slots",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a new tuple inserted ahead of them shifts both"
+            },
+            {
+              "suite": "unit",
+              "match": "a removed tuple drops its own posts and shifts the ones behind it down"
+            },
+            {
+              "suite": "unit",
+              "match": "a modality splice drops them, exactly as it clears loadedImages"
+            }
+          ]
+        },
+        {
+          "id": "transport-hold-flush-trickle",
+          "name": "Payloads parked by a scrub burst trickle out one per tick (the one un-gated route to the wire)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a park released mid-scrub trickles out one payload per tick"
+            }
+          ]
+        },
+        {
+          "id": "transport-timers-die-with-panel",
+          "name": "A closed panel leaves no transport timer armed",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "dispose clears the outstanding ack watchdogs"
+            }
+          ]
+        },
+        {
+          "id": "thumb-tier-accounting",
+          "name": "Thumbnail cache-tier accounting (memory/pack/disk/generated)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a cold read counts as generated, the repeat as memory"
+            },
+            {
+              "suite": "unit",
+              "match": "a fresh service reading the published pack counts as pack"
+            },
+            {
+              "suite": "unit",
+              "match": "a per-entry JPEG with no pack counts as disk"
+            },
+            {
+              "suite": "unit",
+              "match": "six concurrent pack hits report their own work"
+            },
+            {
+              "suite": "unit",
+              "match": "the one-off pack read is reported once"
+            },
+            {
+              "suite": "unit",
+              "match": "the tiers BELOW the pack inherit the same shared wait"
+            },
+            {
+              "suite": "unit",
+              "match": "the verbose per-thumbnail line separates the item ms from the wait"
+            },
+            {
+              "suite": "unit",
+              "match": "the sweep rollup prints the shared read once"
+            }
+          ]
+        },
+        {
           "id": "results-crlf",
           "name": "results.txt CRLF parsing (cross-platform)",
           "tests": [
             {
               "suite": "integration",
               "match": "CRLF-encoded results"
+            },
+            {
+              "suite": "unit",
+              "match": "parses CRLF-encoded results text"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Loading policy",
+      "features": [
+        {
+          "id": "load-arrival-visible-only",
+          "name": "Tuple arrival requests only the on-screen modality",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a navigation requests only the modality on screen"
+            },
+            {
+              "suite": "unit",
+              "match": "requests exactly the on-screen modality and defers every sibling"
+            }
+          ]
+        },
+        {
+          "id": "load-dwell-gate",
+          "name": "Siblings wait for a dwell that navigation cancels",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a burst of navigations never asks for the siblings of the tuples it passes"
+            }
+          ]
+        },
+        {
+          "id": "load-sibling-order",
+          "name": "Siblings ordered by display distance, nearest first",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "the siblings follow after the dwell, nearest-first over the display order"
+            },
+            {
+              "suite": "unit",
+              "match": "orders nearest-first, forward before backward at equal distance"
+            },
+            {
+              "suite": "unit",
+              "match": "measures distance over the user-rearranged display order"
+            }
+          ]
+        },
+        {
+          "id": "load-hidden-skipped",
+          "name": "Hidden modalities are never speculated on",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "hidden modalities are never speculated on"
+            },
+            {
+              "suite": "unit",
+              "match": "skips hidden modalities entirely"
+            }
+          ]
+        },
+        {
+          "id": "load-in-dwell-flip",
+          "name": "Flip inside the dwell window loads at VISIBLE",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "flipping to a sibling inside the dwell window loads it at once"
+            }
+          ]
+        },
+        {
+          "id": "load-rank-upgrade",
+          "name": "A flip after the dwell re-asks a tail-ranked slot at VISIBLE",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a flip after the dwell re-asks a tail-ranked slot at VISIBLE"
+            },
+            {
+              "suite": "unit",
+              "match": "re-asks when the slot is queued below the rank now needed"
+            }
+          ]
+        },
+        {
+          "id": "load-sibling-tail-yields",
+          "name": "Sibling tail never takes a slot the sweep could use",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "the sibling tail never takes a slot another class has queued work for"
+            },
+            {
+              "suite": "unit",
+              "match": "yields every slot to the thumbnail sweep while it has work"
+            }
+          ]
+        },
+        {
+          "id": "load-stale-tuple-cancelled",
+          "name": "Leaving a tuple cancels its queued image loads",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "keeps at most the current tuple queued while browsing six tuples"
+            },
+            {
+              "suite": "unit",
+              "match": "cancels the panel's tuple loads on dispose"
+            }
+          ]
+        },
+        {
+          "id": "sweep-centre-out",
+          "name": "Open-time thumbnail sweep starts at the current row and re-aims when the user jumps",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "walks outward from the centre row, forward first on a tie"
+            },
+            {
+              "suite": "unit",
+              "match": "a centre moved mid-walk re-aims the remainder"
+            },
+            {
+              "suite": "unit",
+              "match": "the current row and its neighbours are dispatched first"
+            },
+            {
+              "suite": "unit",
+              "match": "starts at the row the panel opened on and walks outward"
+            },
+            {
+              "suite": "unit",
+              "match": "re-aims mid-sweep when setCurrentTuple moves the panel"
+            },
+            {
+              "suite": "unit",
+              "match": "serves the new centre after one running batch"
+            },
+            {
+              "suite": "unit",
+              "match": "serves the row the user jumped to after one running batch"
+            },
+            {
+              "suite": "unit",
+              "match": "drops only the sweep's own queue"
+            }
+          ]
+        },
+        {
+          "id": "sweep-covers-every-slot",
+          "name": "Re-centring never loses, duplicates or strands a sweep slot",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "every slot is handed out exactly once however often the centre jumps"
+            },
+            {
+              "suite": "unit",
+              "match": "a returned slot is handed out again exactly once"
+            },
+            {
+              "suite": "unit",
+              "match": "every slot is delivered exactly once when the centre moves on every batch"
+            },
+            {
+              "suite": "unit",
+              "match": "settles a disposed panel's cancellations instead of returning them"
+            },
+            {
+              "suite": "unit",
+              "match": "every planned slot is delivered exactly once, and the tail is swept"
+            },
+            {
+              "suite": "unit",
+              "match": "rows with no planned items are skipped"
+            },
+            {
+              "suite": "unit",
+              "match": "a centre past the ends is clamped to the grid"
+            }
+          ]
+        },
+        {
+          "id": "sweep-dispatch-bounded",
+          "name": "The sweep feeds the pool in bounded chunks instead of the whole grid",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "keeps at most `chunk` slots outstanding and refills as they settle"
+            },
+            {
+              "suite": "unit",
+              "match": "the default dispatch bound is SWEEP_CHUNK"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps at most SWEEP_CHUNK slots in flight, not the whole grid"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Standalone",
+      "features": [
+        {
+          "id": "standalone-build",
+          "name": "Standalone HTML builds, boots, and matches via the real scanForImages",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "standalone build boots the real webview and matches via the real scanForImages"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone landing shows the ported dropzone chrome"
+            }
+          ]
+        },
+        {
+          "id": "standalone-pool",
+          "name": "Standalone schedules IO through the shared work pool (width clamp shared with the extension)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "clamps the pool width"
+            }
+          ]
+        },
+        {
+          "id": "standalone-polling",
+          "name": "Standalone external-change detection (poll + observer, shared pollPlan decisions)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "pollPlan diffSnapshots"
+            },
+            {
+              "suite": "unit",
+              "match": "pollPlan pairRenames"
+            },
+            {
+              "suite": "unit",
+              "match": "commitSlotRemoval"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone poll detects an external new file as a granular tupleAdded"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone poll delivers external deletes, content changes and results.txt edits"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone re-open cancels the previous root"
+            }
+          ]
+        },
+        {
+          "id": "standalone-modality-adoption",
+          "name": "Modality-dir adoption shared with the provider (poll adopts a copied-in dir; a dir rename lands as remove-then-adopt)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "adoptionPlan newModalityDirCandidates"
+            },
+            {
+              "suite": "unit",
+              "match": "adoptionPlan adoptableImages"
+            },
+            {
+              "suite": "unit",
+              "match": "adoptionPlan applyModalityInsert"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone poll adopts a modality directory copied in after boot"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone poll executes a modality dir rename as remove-then-adopt"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone re-open picks up a modality dir added while the comparison was open"
+            }
+          ]
+        },
+        {
+          "id": "standalone-sweep-extraction",
+          "name": "Provider existence-sweep decisions shared via pollPlan (barren-dir policy, name-first diff, per-dir arrivals/candidates)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "pollPlan planSweepDirs"
+            },
+            {
+              "suite": "unit",
+              "match": "pollPlan planDirSweep"
+            }
+          ]
+        },
+        {
+          "id": "standalone-drop-read-only",
+          "name": "Firefox/Safari read-only drag-drop (webkitGetAsEntry walker into the FileList backend)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "standalone no-FSA drop path walks webkit entries into the read-only backend"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone landing falls back to the read-only picker without FSA"
             }
           ]
         }

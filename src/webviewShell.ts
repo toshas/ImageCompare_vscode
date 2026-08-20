@@ -561,12 +561,15 @@ body {
   z-index: 100;
 }
 #help-modal.active { display: flex; }
+/* Must always fit the viewport (13" laptops clipped a fixed 450px box): cap both axes and scroll inside. */
 .modal-content {
   background: var(--vscode-notifications-background, #2a2a2a);
-  padding: 30px;
+  padding: clamp(12px, 4vmin, 30px);
   border-radius: 12px;
   text-align: center;
-  max-width: 450px;
+  max-width: min(450px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
   border: 1px solid var(--vscode-panel-border, #444);
 }
 .modal-content h3 {
@@ -598,7 +601,13 @@ body {
   background: var(--vscode-button-background, #0af);
   color: var(--vscode-button-foreground, #000);
 }
-.btn:hover { opacity: 0.9; }`;
+.btn:hover { opacity: 0.9; }
+#help-version {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+#help-version:empty { display: none; }`;
 
 export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
 
@@ -654,19 +663,23 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Space</td><td>Flip to previous modality (hold)</td></tr>
         <tr><td>1-9</td><td>Jump to modality N</td></tr>
         <tr><td>[ ]</td><td>Reorder current modality</td></tr>
-        <tr><td>Enter</td><td>Toggle winner for current modality</td></tr>
-        <tr><td>Scroll</td><td>Zoom in/out</td></tr>
+        <tr><td>Enter</td><td>Toggle winner / confirm crop (in crop mode)</td></tr>
+        <tr><td>Scroll</td><td>Zoom in/out; scroll tuples on the film strip</td></tr>
+        <tr><td>Shift+Scroll</td><td>On the film strip: scroll the film strip sideways</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
+        <tr><td>Click</td><td>Film-strip tile: go to it; its corner circle: toggle winner</td></tr>
         <tr><td>Right-click</td><td>Copy path / reveal / copy image; hide or show a modality (on its pill)</td></tr>
-        <tr><td>Ctrl+C</td><td>Copy current image (when no text is selected)</td></tr>
-        <tr><td>Ctrl+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
+        <tr><td>Ctrl/Cmd+C</td><td>Copy current image (when no text is selected)</td></tr>
+        <tr><td>Ctrl/Cmd+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
+        <tr><td>2\u00d7-click</td><td>On a crop edge handle, square the crop toward that edge (in crop mode)</td></tr>
         <tr><td>Del / Backspace</td><td>Delete current tuple files (permanent!)</td></tr>
         <tr><td>Esc</td><td>Reset zoom / cancel crop / close this help</td></tr>
       </table>
       <div style="margin-top: 20px;">
         <button class="btn btn-primary" id="close-help-btn">Close</button>
       </div>
+      <div id="help-version"></div>
     </div>
   </div>
 `;

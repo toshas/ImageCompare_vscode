@@ -2,7 +2,7 @@
 
 How ImageCompare gets pixels onto the screen, and the rules that keep it responsive.
 
-Code: `workPool.ts` (scheduling), `imageCompareProvider.ts` (`sendImage`, `generateAllThumbnails`,
+Code: `workPool.ts` (scheduling), `transportBudget.ts` (bytes on the wire), `imageCompareProvider.ts` (`sendImage`, `generateAllThumbnails`,
 prefetch, the existence sweep), `thumbnailService.ts` (`loadFullImage`, `getThumbnail` — the actual
 reads and decodes; the provider only schedules them), `webview/main.ts` (`loadedTuples`, `render`).
 Pinned by `test/unit/workPool.test.ts` (Vitest), which imports the real source.
@@ -33,14 +33,25 @@ Bounded · Prioritized · Cancellable · Identity-checked · Guaranteed-response
 
 ## The work pool (`workPool.ts`)
 
-One process-wide `WorkPool` (`sharedWorkPool()`) that every **display** read/decode goes through —
-full images, thumbnails, and the existence poll. Sized `max(1, min(16, cpus-1))` (the floor matters on
-a 1-core box; the 16 is deliberate width — see `pool-width-hides-latency` below). Every comparison tab shares it, so N open tabs cannot multiply load.
+One process-wide `WorkPool` (`sharedWorkPool()`, kept provider-side — `workPool.ts` itself has no
+node imports so the standalone adapter can bundle it and run its own instance, `docs/standalone.md`)
+that every **display** read/decode goes through —
+full images, thumbnails, and the existence poll. Sized from *usable* parallelism —
+`availableParallelism <= 2 ? 1 : min(availableParallelism - 1, 4) + 2`, so 1 or 4..6 (a 1-2 core box
+keeps its single slot, since it has no second core to overlap the JS round-trip onto; the ceiling
+is libuv's, not the core count's — see `pool-width-hides-latency` below), overridable with
+`imageCompare.maxConcurrentReads`. Every comparison tab shares it, so N open tabs cannot multiply load.
 
-- **Priorities** (`VISIBLE < SIBLING < EXPORT < PREFETCH < THUMBNAIL < THUMBNAIL_BULK < POLL`). Strict
-  ordering: the image on screen never waits behind prefetch, the carousel, or the sweep. Ordering
+- **Priorities** (`VISIBLE < SIBLING < EXPORT < PREFETCH < THUMBNAIL < THUMBNAIL_BULK < POLL < SIBLING_TAIL`). Strict
+  ordering: the image on screen never waits behind prefetch, the carousel, or the sweep. That holds
+  only because the *request* is re-posted when a slot goes on screen after being asked for lower —
+  a queued task is never promoted (`request-rank-upgrades`). Ordering
   governs only the queue, though — a running task is never interrupted — so speculative ranks
   (`PREFETCH` and below) are additionally capped at `concurrency - 1` running slots (`canStart`).
+  `SIBLING_TAIL` — the current tuple's modalities past the nearest two — is last *and* exempt from
+  the fair-share pick below: it is admitted only when no other class has queued work
+  (`sibling-tail-never-competes`), because "below `PREFETCH`" alone would still outrank
+  `THUMBNAIL_BULK` and take half the sweep's slots.
   One slot always stays clear of speculation, so above concurrency 1 speculative work on its own
   can never delay a `VISIBLE` arrival — it finds a slot free unless work ranked above `PREFETCH`
   holds the rest of the pool; at concurrency 1 every reservation is waived, since it would
@@ -67,23 +78,24 @@ a 1-core box; the 16 is deliberate width — see `pool-width-hides-latency` belo
   arithmetic wall, so scroll, stepping and resize re-layout only what is visible. It is not a native
   scroll container: stepping jumps exactly one row height with no animation (the grid reads as
   pixel-stationary, only tile content changes), wheel and a custom scrollbar thumb apply the offset
-  directly, and every row repaint derives from the state maps (`thumbnailDataUrls`, `winners`) — a
+  directly, and every row repaint derives from the state maps (`thumbnailUrls`, `winners`) — a
   recycled slot must be fully reconstructable from state, never from prior DOM. No scroll or bind
   handler requests loading work. `requestThumbnails` is posted on tuple add (that row) and on modality add/remove (every
   row) — not on visibility, and not on tuple delete, where the webview re-indexes its own thumbnail
   map instead and the extension re-sends nothing.
-- **FIFO within a priority** — load-bearing: the sweep is submitted in scanline order (tuple-major,
-  then modality), so thumbnails *start* top-to-bottom (the intended UX), below every foreground
+- **FIFO within a priority** — load-bearing: the sweep submits its slots in the order it dispatches
+  them (nearest row to the user first, modality-minor within a row — "The sweep is centre-out"
+  below), so thumbnails *start* where the user is looking, below every foreground
   priority (only the existence sweep's `POLL` ranks lower). It is
   FIFO *start* order — with any concurrency above 1 and varying decode times a later item can finish
   first, so the fill is approximate, skew bounded by the sweep's running-slot window: `concurrency - 1`
   (the speculative-rank cap above, waived at concurrency 1), where the pool's concurrency is
-  `max(1, min(16, cpus-1))`.
+  `availableParallelism <= 2 ? 1 : min(availableParallelism - 1, 4) + 2` (1, or 4..6).
 - **`cancel(key)`** drops queued (not-yet-started) tasks; running tasks always finish. Keys scope
   work per panel (`state.poolKey`) and per prefetch wave (`state.prefetchWaveKey`). Matching is
   exact string equality, so both keys must be cancelled explicitly.
 - **Panel keys must be unique for the process lifetime** — hence `nextPanelKey()`'s counter is a
-  module global beside the shared pool, not per-provider state. The pool outlives any panel, so a
+  module global in `workPool.ts`, not per-provider state. The pool outlives any panel, so a
   reused key lets a new panel's `cancel(poolKey)` drop an older panel's queued tasks, stranding *its*
   spinners with no error.
 - **No aging.** A continuous stream of high-priority work would starve low priority forever. That is
@@ -103,7 +115,7 @@ awaited before the next is submitted. The awaiter resumes one microtask *before*
 decrements `active` and pumps, so the export's next task is already queued, at `EXPORT`, when the
 slot frees. That only excludes anything while consecutive submits sit in the same async function:
 `addCropSlide`'s return adds a hop, the pool pumps in that gap, and queued speculation takes the
-slot. And it holds only *one* slot of `max(1, min(16, cpus-1))`, so above concurrency 1 the rest stay
+slot. And it holds only *one* slot of the pool's 1..6, so above concurrency 1 the rest stay
 open regardless. A one-off measurement — no test pins these sequences, so read them as an
 illustration of the microtask gap above (which is structural), not as a maintained property of the
 current pool: at cap 1 a same-function loop yielded `E E E E BULK`, the same loop through
@@ -112,12 +124,13 @@ fills the foreground budget for a round — the whole pool, or one slot less whi
 queued (`background-trickle`). The pool is process-global, so this
 crosses panels. Bounded, because every export producer is finite.
 
-**Crop.** `handleCropImages` still calls `Promise.all(tuple.images.map(...))`, but each modality's work
-is one pooled task, so a wide tuple queues rather than launching every decode at once. Inside a task
+**Crop.** The shared `performCrop` flow (`cropFlow.ts`) still invokes every modality eagerly via
+`Promise.all`, but each modality's work unit crosses the provider's `schedule` io as one pooled task,
+so a wide tuple queues rather than launching every decode at once. Inside a task
 it is still *two* full-res reads (`getImageDimensions` then `cropImage`, each re-reading the file) plus
 one extract-and-encode — the pool bounds concurrency, not the per-image cost.
 
-**PPTX export.** `loadImageBase64` is pooled per placed image and `readCropMetadata` once per crop slide: a full-res decode
+**PPTX export.** The deck's `io.loadImage` is pooled per placed image and `readCropMetadata` once per crop slide: a full-res decode
 plus a capped-and-recompressed JPEG re-encode (`docs/crop-and-pptx.md: deck-images-bounded`), at least once per voted tuple × modality, twice on crop slides
 (crop and parent). The worst branch is a voted parent with several unvoted crops — one slide per crop
 *per modality*, so 2·N full-res loads per modality rather than one. Long-lived rather than bursty.
@@ -126,8 +139,8 @@ What the pool does **not** cover, deliberately: the base64 of each result is syn
 (`docs/image-backends.md`, "Why the sync/base64 work matters"), so a large export is still felt on the
 extension-host thread; the zip deflate at the end of an export (inside `pptx.write({ outputType:
 'nodebuffer' })`) is outside the pool too, and is the single largest CPU event of a large export; and the directory listings on the crop
-and export paths are not pooled — `getNextCropNumber`, which runs once per modality rather than once
-per crop, and the export's single `readdir` of the output directory — because the pool exists to
+and export paths are not pooled — the pre-crop listings feeding `nextCropName`, which run once per
+modality rather than once per crop, and the export's single `readdir` of the output directory — because the pool exists to
 bound image reads and decodes (memory, CPU and network round trips per *image*), not metadata calls.
 The `fs.watch` probe's `access` 50ms after a rename event is unpooled for the same reason. Adoption cuts the other way: reached from the sweep, its
 `stat` and listings run *inside* the sweep's own `POLL` task; reached from either watcher, they are
@@ -136,14 +149,45 @@ outrank anything.
 
 ## Request path (the image on screen)
 
-`webview loadTuple` → `requestImage` per uncached modality → `sendImage` → pool @ `VISIBLE` →
-`loadFullImage` → post `image`.
+`webview loadTuple` → `requestImage` for the modality on screen → `sendImage` → pool @ `VISIBLE` →
+`loadFullImage` → post `image`; the siblings follow ~150 ms later, if the user is still there.
 
 - On this navigation path, only the **currently displayed** modality is submitted at `VISIBLE`;
-  siblings ride at `SIBLING`. (Mutation/restore paths re-send the current tuple at `VISIBLE` too.)
+  siblings ride at `SIBLING` (nearest two) or `SIBLING_TAIL` (the rest). (Mutation/restore paths
+  re-send the current tuple at `VISIBLE` too.)
   That priority split (not FIFO) is what guarantees the on-screen image the first slot and stops
-  tuple N's siblings queueing ahead of tuple N+1's visible image when stepping fast. The webview also
-  sends the shown modality first, which only breaks ties within `VISIBLE`.
+  tuple N's siblings queueing ahead of tuple N+1's visible image when stepping fast.
+- **Arrival asks for one image, not the tuple** (`siblings-dwell-gated`). Requesting all N modalities
+  on arrival is what a field log caught starving a 746×10 panel: browsing queued 7 460 full-resolution
+  loads, 15 of 16 pool slots carried images nobody was waiting for, the wire moved 3.5 GB, and the
+  carousel sweep delivered ~4 tiles/s for six minutes. The webview now posts the on-screen modality
+  immediately and arms a dwell timer for the siblings; any navigation clears it, so a tuple scrolled
+  past never *requests* its siblings at all — un-requested work needs no cancelling. The dwell is
+  `LOAD_DEBOUNCE_MS`, the same 150 ms constant as the leading-edge navigation debounce
+  (`tupleLoadPlan.ts`), deliberately: both answer "has the user settled here?".
+- **Siblings are ordered by distance in the display order** (`sibling-order-by-display-distance`),
+  hidden pills skipped, forward first on a tie — the modality `→` reaches must arrive first. Raw
+  modality ids would mis-order both a rearranged column set and a hidden one.
+- **The nearest two rank as `SIBLING`, the remainder as `SIBLING_TAIL`.** Ten modalities at ~2.25 MB
+  is ~20 MB per lingered tuple; nearest-first makes the first few load-bearing and the rest genuinely
+  speculative, so the tail is the one class that must never take a slot the sweep could use.
+- The accepted regression, knowingly: **flipping to a sibling inside the dwell window costs one
+  `VISIBLE` load** instead of a cache hit — one image's latency, against the old scheme's N images per
+  tuple passed. `render()` issues that load itself when the current slot is empty, so the flip is
+  never a spinner nobody clears; a small `requestedSlots` map (cleared on every reply, on every
+  index shift, and for the arriving tuple on each `loadTuple`) keeps a repaint from re-asking.
+- A flip *after* the dwell is the same case one rank down, and it is what `requestedSlots` maps
+  rather than sets for (`request-rank-upgrades`): the slot is already outstanding at `SIBLING` or
+  `SIBLING_TAIL`, so a plain "already asked" guard posts nothing and the on-screen tile inherits the
+  tail's admission rule — a spinner until the sweep drains. The re-post costs a duplicate: pool keys
+  are per *tuple*, not per slot, so the stale low-rank task survives and that slot may decode twice
+  (bounded at one extra decode per flip onto an undelivered slot; a duplicate `image` reply just
+  overwrites the webview's cached frame and re-renders). Per-slot keys plus a pool bump would remove
+  it and are not worth the surface.
+- **Leaving a tuple cancels its queued loads** (`stale-tuple-loads-cancelled`): `sendImage` keys its
+  pool task by tuple, like a prefetch wave, and `setCurrentTuple` cancels every key but the arriving
+  one. Running tasks finish (pool semantics); queued ones die. Dispose cancels all of them — the
+  per-tuple keys are not covered by `poolKey`, which `cancel` matches exactly.
 - `sendImage` replies exactly once (`image`/`imageError`) unless the panel is gone or another file
   now occupies the enqueued slot (see `reply-exactly-once`) — at the file's live slot, or at the
   enqueued slot when that slot has been vacated. Delivery takes two liberties: while the user is
@@ -175,6 +219,13 @@ So the extension sends no dimensions for these formats; the webview reads
 
 Triggered by `tupleFullyLoaded`; loads `center ± prefetchCount` × all modalities at `PREFETCH`
 priority and pushes each into the webview cache so stepping to a neighbour is instant.
+
+Note what `siblings-dwell-gated` did to that trigger: a tuple is "fully loaded" only once its dwell
+has expired *and* its `SIBLING_TAIL` slots have landed, and the tail waits for every other class. So
+on a cold, wide session prefetch effectively does not start until the sweep drains — which is the
+intent, not a regression: the wire budget already parked speculative pushes for the sweep's duration
+(`speculation-yields-the-wire`), and a revisit to a fully cached tuple still fires the trigger from
+`loadTuple` directly.
 
 - Each wave **supersedes the previous one** (`pool.cancel(prefetchWaveKey)`, done before the
   visibility bail, so a hidden panel still drops its stale wave), so neighbours of where you *were*
@@ -210,7 +261,8 @@ dropped, turning the "instant" navigation into a silent re-read.
 
 ## Thumbnails
 
-`generateAllThumbnails` submits every *populated* slot at `THUMBNAIL_BULK` in scanline order,
+`generateAllThumbnails` submits every *populated* slot at `THUMBNAIL_BULK`, nearest row to the user
+first (below),
 reporting progress as they land — a slot with no file is answered immediately with `thumbnailError`
 and counted straight into both progress terms, plus one terminal tick when there is nothing to
 enqueue at all, since the per-item
@@ -230,6 +282,347 @@ per-directory listing hands to `handleFileCreated`. The second is the common one
 in-place overwrite on every training step refills that slot — so a skipped slot is not necessarily
 blank for the life of the panel.
 
+### The sweep is centre-out, and fed to the pool in chunks
+
+Scanline order is fine at 90 slots and wrong at 7 460. A field log of a 746×10 session on remote SSH
+over NFS: `[IC-SWEEP] start slots=7460 items=7398 missing=62`, then `[IC-POOL] sweeping 2022ms …
+queued=[0,0,0,0,0,7293,0,4]`, then `[IC-SWEEP] done 21184ms … pack=7398/34.4MB disk=0 generated=0`.
+Nothing was decoded at all — every tile came from the warm pack — and the sweep still took 21 s: at
+7 398 slots that is ~11 ms each of pack read plus a 34.4 MB push across a serialized remote channel,
+and the log cannot say which half dominates. A *cold* pack over the same order is ~7 398 decodes on
+top, previously estimated at 13 minutes. Order, not throughput, is what the user feels: the row
+they are looking at was delivered when the scanline reached it, however far that was from where they
+were.
+
+So the sweep dispatches **outward from the current tuple** and re-aims when the user moves. The
+structure is a cursor over the plan's items grouped by tuple row (`SweepCursor` in
+`thumbnailPlan.ts`): two walks, one up from the centre and one down, each advancing past rows it has
+emptied, and each `next(centre)` takes from whichever walk is nearer — forward on a tie, the same
+"forward first" rule the sibling order uses. A centre change just restarts both walks at the new
+row; rows consumed under the old centre are empty, so they are skipped rather than re-visited. That
+is the whole coverage argument, and it is why the structure is a cursor rather than a re-sorted
+queue: an item leaves its row exactly once (`shift`), so it can be dispatched at most once, and the
+two walks between them cover `[0, rows)` from any centre, so it is dispatched at least once. Distance
+is over the tuple index only — the carousel's axis — and within a row the order stays modality-minor.
+
+The hosts supply only *where the user is*: the provider passes `() => state.currentTupleIndex`, the
+adapter `() => s.currentTupleIndex`, both updated by the webview's `setCurrentTuple`. The decision —
+what that means for order — lives in the shared module, so the two products cannot diverge
+(`docs/standalone.md: adapter-contains-no-logic`). Nothing is pushed at the sweep: the centre is read
+at each dispatch, so a jump costs nothing when nobody navigates.
+
+**Chunking.** Re-aiming is only possible if the pool has not already been handed the whole grid — a
+queued task is never re-ordered or promoted, so 7 293 queued items *are* the order. The sweep
+therefore keeps at most `SWEEP_CHUNK` dispatches outstanding and refills on every settle. The size is
+32, chosen against the pool width (5 here, 1..6 in general):
+
+- **Big enough that the pool never starves.** Refills happen per settle, not per batch, so the pool
+  keeps queued items behind its running ones until the tail — 28 at the measured peak, dipping to
+  ~12 at width 5 and ~3 at width 1 mid-run, never to zero while work remains (measured: no
+  idle-with-work turn at any width 1..6). Even if every running slot settles in the same turn the
+  queue cannot empty. Anything
+  ≥ 2× the width would do; the margin costs nothing.
+- **Not so big that a re-aim churns.** The re-centre lag no longer depends on the chunk (see
+  "Cancelling on re-aim"), so what an oversized chunk costs is the *cancel-and-re-dispatch* work each
+  jump does: measured on the cold 115×9 harness below, one jump cancels `chunk - 5` slots — 3 at
+  chunk 8, 27 at 32, 123 at 128 — none of which had started, so the cost is bookkeeping, not IO.
+  32 is ~7× the effective bulk width and was left alone on this evidence; going lower buys nothing
+  the anti-starvation bullet does not already spend.
+
+Measured at 746×10 on a virtual-clock harness calibrated to the field log — 4.65 KB per tile on a
+~2 MB/s channel, 11.45 ms per slot (21 184 ms × the pool's 4 effective bulk slots ÷ 7 398 items),
+which reproduces the log's 21 184 ms wall to the millisecond. "Jump" = the user moves to row 500 two
+seconds into the sweep:
+
+| | before | after |
+|---|---|---|
+| current row ±1 delivered after the jump | 12 256 ms | 174 ms |
+| current row ±1 delivered with no navigation | 64 ms | 64 ms |
+| whole sweep delivered | 21 187 ms | 21 187 ms |
+| peak queued `THUMBNAIL_BULK` | 7 394 | 28 |
+| … same jump, cold pack (120 ms/slot) | 147 365 ms | 1 802 ms |
+| … same jump, instant pack (2 ms/slot) | 9 451 ms | 7 333 ms |
+
+Total time is unchanged by construction — the same slots, the same pool, only the order — and that is
+the point: this buys latency for the row in front of the user, not throughput.
+
+The last row is the honest limit of this round. When the extension can produce tiles faster than the
+channel drains them (a warm pack on a slow link: 2 ms per slot against 2.3 ms per tile of wire), the
+backlog moves off the pool queue and onto the *wire* queue, which nothing here re-orders — thumbnail
+posts are handed to `postMessage` FIFO and the transport budget covers only speculative *image*
+pushes. Re-centring still helps (9.5 s → 7.3 s) but cannot beat a queue it does not own. Pacing or
+re-ordering the thumbnail wire is a separate lever, and a separate round.
+
+Two things it deliberately does **not** do. It does not gate on visibility — every slot is still
+swept, including rows the user never looks at, which is what keeps the guarantee simple. And it does
+not touch the prefetch band, which is a separate resource with a separate problem. Chunking does not make a hung `makeThumbnail` worse:
+the pool's effective bulk width (4 here) is narrower than the 32-slot chunk, so the same 4 hangs jam
+the chunked and un-chunked sweeps identically. The wire claim is protected against that by the idle
+watchdog (`speculation-yields-the-wire`); the tail is not, and never was.
+
+### Cancelling on re-aim
+
+Bounding the dispatches is not the same as re-aiming them. Of the 32 outstanding, only the pool's
+effective bulk width is *running*; the rest sit queued, and a queued task is frozen order. The field
+put a number on what that costs when tiles are genuinely cold — a 115×9 comparison generating
+thumbnails from source:
+
+```
++68135ms  [IC-POOL] sweeping … queued=[0,0,0,0,0,28,0,6] run=[0,0,0,0,0,4,0,0] wire thumbs=604/2.6MB
++110213ms [IC-POOL] sweeping … queued=[0,0,0,0,0,28,0,6] run=[0,0,0,0,0,4,0,0] wire thumbs=710/3.2MB
+```
+
+106 tiles in 42 s at 4 running = **1 586 ms per thumbnail**, so the 28 queued were ~13 s of tiles at
+the row the user had *left*. The chunk had been sized against a 120 ms/slot "cold" model — 16× off
+the real thing — and the reported symptom was exactly the arithmetic: "scroll down, click — image
+appears in the viewer, but tiles don't load immediately from that place."
+
+So the sweep now **drops its own queued dispatches when the centre moves**. The decision is the
+shared module's; each host supplies only the mechanism it already had (`docs/standalone.md:
+adapter-contains-no-logic`). `pump()` compares the centre it last aimed at with the live one, and on
+a change calls `io.dropQueued()` — `WorkPool.cancel(key)`, which drops queued-but-unstarted tasks
+and leaves running ones alone. Each dropped task rejects with `TaskCancelled`; the host maps that to
+`SWEEP_REQUEUE`, and the runner then **returns the slot to the cursor** (`putBack`) instead of
+counting it. Three rules make that safe, and each fails silently if broken:
+
+- **Return before settle.** The slot goes back into the cursor inside the `then`, before `outstanding`
+  drops, so the sweep can never observe `outstanding === 0 && remaining === 0` with a slot in the air.
+- **Rewind the walk.** The cursor's coverage argument is "every row in `[centre, up)` and
+  `(down, centre)` is empty". Re-filling a row inside a walked band breaks it, so `putBack` moves the
+  relevant pointer back to that row. Without the rewind the returned rows are skipped forever —
+  blank tiles for the life of the panel, which is the exact failure the cursor exists to prevent.
+- **A requeued dispatch is not a delivery.** No `thumbnail` post, no progress tick, no `done++`. Work
+  may be *attempted* more than once; a slot is delivered and counted exactly once
+  (`sweep-covers-every-slot-once`).
+
+Running work is never cancelled — the pool cannot interrupt it, and it is nearly finished anyway — so
+the floor on re-aim latency is one running batch. That is what the numbers show. Measured on the
+115×9 field calibration above (1 586 ms per thumbnail, pool width 5 → 4 bulk slots, 4.4 KB per tile
+on a ~2 MB/s channel), "jump" = the user moves to row 100, 20 s into the sweep:
+
+| | before | after |
+|---|---|---|
+| first tile at the new row, after the jump | 12 690 ms | 1 590 ms |
+| whole new row (9 tiles) delivered, after the jump | 15 862 ms | 4 762 ms |
+| whole sweep delivered (1 035 tiles) | 410 774 ms | 410 774 ms |
+| thumbnail reads performed | 1 035 | 1 035 |
+| slots cancelled and re-dispatched, six-jump navigation | 0 | 162 |
+
+The wall time is identical and so is the read count: cancelled work never started, so re-dispatching
+it re-does nothing. The lag also stops depending on `SWEEP_CHUNK` — 1 590 ms at chunk 8, 32, 64 and
+128 alike — which is why the chunk's justification above is now about starvation and churn, not lag.
+
+Two scoping rules the mechanism needs. The sweep submits under **its own cancellation key**
+(`${poolKey}-sweep`), because a re-aim must not drop the panel's queued export or poll work, which
+shares `poolKey`; panel dispose and standalone re-open therefore cancel that key too, or the sweep's
+queue would outlive them. And the host must distinguish *its own* cancellation from a re-aim's:
+`PanelState.disposed` (and the adapter's `closed`, set before the re-open cancel so the rejections it
+delivers read it) means "settle silently", anything else means "put it back". Get that backwards and
+a dead panel's sweep re-dispatches forever.
+
+### Thumbnails ship as bytes, and the webview owns their urls
+
+A `thumbnail` message carries `{bytes, mime}`, exactly like `image` — not a
+`data:image/jpeg;base64,…` string. Base64 cost the same ×1.33 inflation and large-string churn the
+full-image path shed years ago, on the payload that arrives ~1000 times per open instead of six:
+measured on this repo's photo fixtures at the production encode (8 977 B/tile), 1000 tiles cost
+11.50 MB of data-URL messages against 8.64 MB of binary ones, and every one of them was encoded
+synchronously on the extension host and decoded again by the renderer's URL parser. Nothing below the wire changed: the memory cache, the per-entry `.jpg` files and the packfile
+all stored raw JPEG bytes before and still do — the conversion simply disappeared, so `getThumbnail`
+now returns the bytes its tiers already held (`THUMBNAIL_MIME`, JPEG for both backends). The
+standalone adapter encodes through `canvas.toBlob` instead of `canvas.toDataURL` and posts the same
+shape (PNG for `.png` sources, JPEG otherwise).
+
+The cost moves to the webview, where the bytes become `URL.createObjectURL(new Blob(...))`. An object
+url is a document-lifetime GC root: forget to revoke one and its blob is pinned until the panel
+closes, and the carousel rebinds tiles constantly through the pooled rows. The full-image path can
+revoke inside `img.onload` because its url is used exactly once; a thumbnail url is not — it is
+*cached* in the webview's slot map and re-applied on every pooled-row rebind, on the blurry preview
+canvas, and after every row/column splice re-keys the map. So ownership sits with the map, not with
+the tile: `webview/thumbUrlCache.ts` (pure, unit-pinned) revokes a url exactly when its key stops
+pointing at it — superseded by a fresh delivery, overwritten by the ✕ placeholder, deleted on
+restore, dropped by a re-key, or cleared on re-init — and nothing else revokes, so a recycled row can
+never blank a url another row is showing. Two details are load-bearing: the successor is written into
+the map and onto the tile *before* the superseded url is revoked (revoke-first kills a tile that is
+still loading it), and the shared ✕ placeholder is a data url the cache stores but must never revoke.
+The residual case the design accepts: a preview `<img>` still decoding a url that this same slot's
+newer delivery supersedes loses its blurry frame (the spinner stands in until the full image lands).
+
+## Transport backpressure (`transportBudget.ts`)
+
+The pool orders **work**; this orders **bytes on the wire**. They are different resources, and for
+most of this file's history only the first had a scheduler.
+
+A Chrome renderer trace of a remote-SSH session (230 tiles, 71.8 s) found the webview main thread
+0.7 % busy and no task over 50 ms: the renderer was not the bottleneck and neither was the host. The
+1.24 MB of thumbnails trickled over 35 s, of which **28.6 s was nine gaps longer than a second**, and
+**106 MB of the session's 115 MB of full-resolution images arrived inside those gaps** — one prefetch
+wave (`prefetchCount 3` → ~7 tuples × ~6 modalities ≈ 44 images, largest 16.71 MB) against a 1.2 MB
+thumbnail sweep. On a remote window the extension→webview channel is one serialized link, so this is
+textbook head-of-line blocking: `visible-never-starved` and `background-trickle` hold on the pool and
+say nothing about the wire.
+
+The fix is scheduling, never fidelity. Zoom reads the original bytes (`docs/image-backends.md`:
+`passthrough-no-backend`), so nothing here downscales, recompresses or chunks a payload; it only
+decides *when* a speculative payload is handed to `postMessage`.
+
+Three rules, in the order they are applied to an `image` push:
+
+1. **User-facing pushes go now.** Every `sendImage` reply — the image on screen, its siblings, crop
+   and export refreshes — is posted in the turn it is ready, whatever is in flight. The budget is
+   never a reason a user waits.
+2. **Speculation yields while a bulk sweep drains.** Between `generateAllThumbnails` and the sweep's
+   completion, prefetch pushes are parked, not posted. This costs almost nothing: parking delays the
+   *push*, not the *work* — the bytes are already in `state.loadedImages`, so a parked (or even
+   dropped) push costs at most one on-demand transfer at the moment the user actually navigates
+   there, which is exactly what a session with `prefetchCount: 0` pays. Sweeps are finite (one slot
+   per grid cell, one sweep per open), and the claim is released through a single exit (`endSweep`,
+   idempotent) reached four ways: the sweep's settle (which logs the `[IC-SWEEP] done` rollup), a
+   synchronous throw out of the sweep's prologue, a 30 s stall watchdog, and panel dispose. The
+   throw path is not hypothetical bookkeeping: `runThumbnailSweep` posts the plan-missing errors
+   *before* it returns a promise, so a `postMessage` that throws there escapes before any `.finally`
+   is attached — raise the flag outside that guard and the panel spends its life with speculation
+   parked, silently. The watchdog is **idle**, not total: every settled slot re-arms it, so a sweep
+   that is merely slow (thousands of tiles on a cold mount) is never cut short, while one read that
+   never settles costs 30 s of parked speculation instead of the panel's life. Releasing early is
+   cheap — it degrades to "no rule 2", which is the pre-backpressure behaviour — so the timeout is
+   sized to be obviously pathological rather than tight.
+3. **Outside a sweep, speculation is capped in bytes in flight**, not in messages — one 16 MB image
+   is the unit of damage, so a message count would bound nothing. Default 8 MB
+   (`imageCompare.prefetchTransportBudgetMB`): roughly one whale, or a handful of ordinary images
+   pipelined, standing between a user-facing message and the link. A single push over the whole
+   budget is still allowed when nothing is in flight, or an image larger than the budget could never
+   be sent at all.
+
+In flight means *posted but not acknowledged*: the release signal is the `Thenable` returned by
+`webview.postMessage`, which on a remote window resolves only after a round trip through the same
+link. Two honest limits follow. If a future VS Code resolved that promise eagerly, rule 3 would
+degenerate to a no-op — but rule 2, which needs no ack at all, would still hold, and rule 2 is what
+the trace indicts. And if the promise never settles (a disposed webview mid-post), a 30 s watchdog
+releases the credit, so a lost ack costs one stalled wave rather than a session with prefetch
+switched off. Both watchdogs — the ack timers and the sweep's stall timer — are tracked on the panel
+and cleared in `disposePanel`, so a closed panel is not retained by a timer for half a minute.
+
+Parked pushes are keyed by slot, capped at 64 entries (oldest dropped, like the scrub-burst park),
+re-checked against the prefetch band when they are released — a push for a tuple the user has left is
+dropped exactly as `loadImageToCache` would have dropped it at push time — and cleared on dispose.
+In the common case a parked entry holds a payload `state.loadedImages` already holds, so parking
+costs no extra memory until eviction outruns the queue. Both the park and the scrub-burst hold are
+keyed by slot, so they re-index with `loadedImages` on every splice
+(`docs/file-watching.md: reindex-in-lockstep`) — without that, a park draining across a 35 s sweep is
+a 35 s window in which a payload can land under another file's label, and the directories this
+extension is pointed at are ones a training loop rewrites in place.
+
+The policy is inert on local windows (`vscode.env.remoteName === undefined`): there is no serialized
+link to fight over, `postMessage` acks land on the same machine, and throttling would only slow the
+warm case. `undefined` is the API's own "not remote" answer — any remote kind (`ssh-remote`, `wsl`,
+`dev-container`, a Codespace) is a string and gets the bound. The **standalone build has no
+transport layer at all** — the adapter posts in-process, `transportBudget.ts` is extension-only by
+construction (`check-sidedness.mjs` classifies it), so there is nothing to no-op there.
+
+Measured on the real provider against a simulated 5 MB/s serialized wire (`transportFairness.test.ts`:
+120 thumbnails ≈ 703 KB, one 42-slot wave ≈ 59.6 MB with a 16 MB whale, wave issued mid-sweep):
+
+| | budget off (pre-change, and every local session) | budget on (8 MB, remote) |
+|---|---|---|
+| last thumbnail on the wire | 12 648 ms | 749 ms |
+| user-facing image requested mid-wave | 12 524 ms | 624 ms |
+| speculative bytes queued ahead of it | 59.5 MB | 0 |
+| peak speculative bytes in flight | 59.5 MB | 16.0 MB (the whale, alone) |
+| `[IC-SWEEP] done … wire` | `images=43/59.6MB` | `images=1/2.9MB` |
+| total time to move every byte | 12 649 ms | 12 649 ms |
+
+The last row is the point: nothing is throttled away, and no byte is dropped — the same traffic is
+reordered so the user-facing 3 MB and the 703 KB carousel stop queueing behind 59 MB of speculation.
+
+## Observability
+
+None of the above is measurable from the outside: on a remote host the renderer trace shows an idle
+webview and says nothing about where the seconds went. `imageCompare.debug` therefore instruments the
+whole loading path into a single "ImageCompare" output channel (`debugLog.ts`; the how-to is in
+docs/testing.md): which cache tier answered each `getThumbnail`, the open-time sweep's wall time and
+tier histogram, `WorkPool.stats()` snapshots every 2 s while a sweep drains, outbound bytes per
+`thumbnail`/`image` message (both are raw payload bytes since thumbnails went binary — the `(b64)`
+marker those figures used to carry is gone), and prefetch-wave issuance and rollup. The channel — not the console —
+is the sink on purpose: VS Code forwards extension-host console output into the renderer, so a
+matcher trace of a few thousand lines is itself renderer work at exactly the moment the panel is
+trying to paint. `imageCompare.debugConsole` restores the mirror when someone wants it.
+
+The instrumentation is *diagnostic*, so it must not become a cost of its own. Every site is behind a
+cached flag and builds no string until it is on. The sweep's tier histogram is a diff of two
+cumulative snapshots (`ThumbnailService.thumbTierStats()`) rather than a per-sweep reset, so a
+sweep cannot zero counters another sweep is still using — but the service is one provider-wide
+instance, so two panels sweeping at once still land in each other's deltas. Read a histogram as
+"thumbnails served while this sweep ran", not "thumbnails served *for* this sweep".
+
+### The open path: one rollup, `[IC-OPEN]`
+
+Everything above measures work the pool does. The *open* is the part before any of it, and it used to
+be dark: a 746x10 comparison left the window blank for ~20 s, and the channel could only show a 6.96 s
+hole between `=== TUPLE MATCHING END ===` and `[IC-SWEEP] start` with `active=0/5` — no image work at
+all, and no line attributing a millisecond of it. The open therefore carries a trace (`OpenMarks` in
+`debugLog.ts`) whose marks are taken at the boundaries the hole was made of, and emits one line at the
+moment the thumbnail sweep starts — **and only then**: an open that ends before the sweep prints
+nothing at all (see "When the line is absent" below).
+
+Real output, captured from a run of the real open path (`openCompare` → `ready` → sweep) over a
+synthetic 746x10 tree of empty files on a local tmpfs with the thumbnail decode stubbed out — the field
+case's grid at a local floor, so read the *shape*, not the magnitudes:
+
+```
++366ms [IC-OPEN] open 238ms scan=214ms/7460f(match=26ms) watchers=8ms/11dirs boot=0ms init=6ms(sizing 2ms)/614.4KB grid=746x10 toSweep=6ms other=4ms
++366ms [IC-SWEEP] start slots=7460 items=7460 missing=0 grid=746x10 pool active=0/5 …
++428ms [IC-SWEEP] done 61ms items=7460 122295.1/s posted=116.6KB …
+```
+
+`open` is the **whole** open, scan included; the hole that motivated the line — matcher's last line to
+`[IC-SWEEP] start` — is `open` *minus* `scan`, i.e. `watchers + boot + init + toSweep + other` (24 ms
+here; the 6.96 s above is that same quantity). `boot=0ms` is an artefact of the capture, whose stub
+answered `ready` synchronously; in a real window it is the renderer's startup and never zero. Read the
+three lines together for the property the numbers rest on: `[IC-SWEEP] done 61ms` at `+428ms` counts
+from `+367ms`, the instant the rollup above was printed (±1 ms of stamp rounding) — the two rollups
+abut, so no time hides between them.
+
+One line, not one per span: a large open must not bury the rest of the channel. What each term means:
+
+- `scan=` the open's first mark to the scan's return — `scanForImages` plus the early-dispose
+  subscription armed before it — the image files it handed the matcher, and, nested inside that, the
+  matcher's own time. Only the scan can split those two, so `ScanResult.stats` carries them back to the
+  provider (absent entirely when debug is off).
+- `watchers=` the watcher setup, and how many directories got one.
+- `boot=` the html assignment until the webview's `ready` post — the renderer's own startup, which no
+  extension-side timer can otherwise see. It ends where the `ready` handler *begins*, so the handler's
+  own work (the pending-debug flush) belongs to `other`, not to the renderer.
+- `init=` `sendInitData` from entry to the posted payload, with the serialized payload size. `sizing` is
+  the part of that span that is *debug's own cost*: the size is one extra `JSON.stringify` of the
+  payload, paid only when debug is on and reported rather than hidden, so nobody reads it as product
+  time.
+- `grid=` tuples x modalities — the size the other numbers should be read against.
+- `toSweep=` the hand-off: the posted payload to the sweep's *own clock*, config read and thumbnail
+  plan included. It is the same timestamp `[IC-SWEEP] done`'s ms counts from, so the two rollups meet
+  with nothing between them; taken any earlier it would be structurally ~0 and the plan's cost would
+  fall inside neither line.
+- `other=` everything the marked spans do not cover (`open-spans-account-for-the-whole-open`).
+
+**When the line is absent.** The trace is consumed by the sweep, so an open that never reaches the
+sweep never reports: the panel closed during the scan, a scan that matched nothing, a throw on the open
+path, or a webview that never posts `ready`. The channel simply ends after the matcher — which is
+itself the diagnosis (the open did not get as far as thumbnails), but it means *no `[IC-OPEN]` line* is
+not the same as *a fast open*. Deliberate: an abort emission would have to invent an end mark for a
+span that never ended, and the case the line exists for reaches the sweep.
+
+Two things a reader has to be able to tell apart, and the log used to conflate both:
+
+- **One shared wait vs. N slow operations.** Every thumbnail request that misses memory awaits the
+  same `ensurePackLoaded()` promise, so charging each waiter its full wall wait multiplied one file
+  read by the number of callers. The tiers therefore report per-item work with that wait subtracted,
+  and the shared read is reported once beside them as `packLoad=…/blocked=…`
+  (`shared-waits-are-not-per-item-work`). `packLoad` is diffed across snapshots like the tiers, so
+  only the sweep that actually paid for the read reports it; a second sweep in the same session shows
+  `packLoad=0`, which is the correct statement that its pack cost nothing.
+- **Nothing happening vs. nothing being said.** The poll's pool snapshot is emitted on change or on a
+  busy pool, never on every idle cycle (`idle-poll-logs-nothing-new`).
+
 ## The webview's tuple cache (`loadedTuples`)
 
 The webview keeps its own cache of decoded frames, keyed by tuple index — the authority for what is
@@ -245,7 +638,8 @@ Eviction is bounded by distance, not count: `evictDistantWebviewTuples` runs on 
 dropping anything beyond `prefetchCount + 3` from the current index — see "Two caches, two eviction
 bounds" for why the webview's band is wider than the extension's.
 
-The navigation debounce is leading-edge (`LOAD_DEBOUNCE_MS = 150`, guarded by `lastNavAt`): an
+The navigation debounce is leading-edge (`LOAD_DEBOUNCE_MS = 150`, in `webview/tupleLoadPlan.ts`,
+guarded by `lastNavAt`): an
 isolated navigation loads with *zero* delay, only rapid stepping coalesces. A trailing debounce would
 coalesce rapid stepping too but tax every isolated navigation 150ms — the common case — so the shape
 is the point, not the interval.
@@ -283,11 +677,13 @@ mechanism reports what, and what each event mutates, is `docs/file-watching.md`.
 - **Fully async** (`fs.promises.access`) — the old synchronous `fs.accessSync` sweep blocked the
   extension host for seconds per tick on a network mount (the ~10s spinners).
 - Scheduled at **`POLL` priority** (yields to everything) — every part of the cycle goes through the
-  pool: the per-file existence checks, the mode-1 new-modality-directory scan, and one listing per
-  watched leaf dir that routes unknown image files to `handleFileCreated` (the only new-file detector
-  on mounts whose watchers are silent).
-- The new-modality scan runs **first**: it is one `readDirectory`, so putting it ahead of thousands of
-  `access` calls bounds its latency at the interval instead of the duration of the existence pass.
+  pool: the mode-1 new-modality-directory scan, one listing per watched leaf dir (which routes
+  unknown image files to `handleFileCreated` — the only new-file detector on mounts whose watchers
+  are silent — *and* names the deletion candidates), and one existence check per candidate.
+- **One pooled task per watched directory, not per file** — a quiet cycle over a 746×10 comparison
+  submits ~11 tasks, not 7 407 (`docs/file-watching.md: sweep-derives-deletions-from-listings`).
+- The new-modality scan runs **first**: it is one `readDirectory`, so putting it ahead of the other
+  listings bounds its latency at the interval instead of the duration of the whole cycle.
   Adoption can inject `THUMBNAIL`/`VISIBLE` work for the images it finds, which is the point. It is
   one `readDirectory` in the steady state, plus one `stat` per base-dir *subdirectory* that is not
   already a modality (a plain file like `results.txt` costs nothing) — a barren sibling is re-`stat`ed every cycle and only skips its *listing*
@@ -310,7 +706,9 @@ on hide, and nothing restarts it on re-show: it restarts on the next `tupleFully
 *while visible*. One arriving while still hidden is consumed for nothing, because the wave-key bump
 happens before the visibility bail.
 
-Closing a panel cancels everything (`poolKey` **and** `prefetchWaveKey` — `cancel` is exact-match).
+Closing a panel cancels everything (`poolKey`, the sweep's own `${poolKey}-sweep` **and**
+`prefetchWaveKey` — `cancel` is exact-match; see `sweep-cancels-on-reaim` for why the sweep has a key
+of its own).
 
 ### Setup ordering (three rules, each closing a real window)
 
@@ -332,11 +730,17 @@ Opening a panel is asynchronous, and step order is load-bearing:
   view the reply still goes to the enqueued slot — even one that no longer exists, which the
   webview discards — unless another file has taken that slot: a taken slot is
   healthy, and marking it missing would blank it for good, since the webview never re-requests a
-  filled slot. That occupied-slot case and the burst cap's eviction of a parked off-screen reply
-  (`held-payloads-always-flush`) are the only panel-alive silences. Nothing polls for a missing reply, so a
+  filled slot. That occupied-slot case and the two ways an off-screen reply parked in the hold is
+  discarded — the burst cap's eviction, and a column splice dropping the hold wholesale
+  (`held-payloads-always-flush`) — are the only panel-alive silences; both are discharged by the
+  same `loadTuple` re-request on revisit, and the splice itself makes the webview re-run it. Nothing polls for a missing reply, so a
   dropped one clears only when something re-enters `loadTuple(currentTupleIndex)` — navigating away
   and back, deleting some *other* tuple, or a modality add/remove — or when a watcher-driven
-  `fileRestored` re-requests that slot. Clicking the current carousel row does not.
+  `fileRestored` re-requests that slot. Clicking the current carousel row does not. The XOR half of
+  the discipline — one terminal reply computed first, then posted exactly once — is owned by the
+  shared `serveImage` orchestrator (`src/imageServe.ts`), which both products drive through IO; the
+  provider's slot re-addressing, cache writes and burst holds are delivery-side IO around it, and a
+  pool cancellation is not a silence because a cancelled serve never started (its flow is not live).
 - **`held-payloads-always-flush`** — during a scrub burst (last `setCurrentTuple` younger than
   150ms), `image` payloads for *off-screen* tuples are parked instead of posted — a multi-MB
   message deserializing on the webview main thread measured 10-22ms, right in the scroll
@@ -344,17 +748,56 @@ Opening a panel is asynchronous, and step order is load-bearing:
   **never** held (holding one is a stuck spinner), and below the parking map's 48-entry cap every
   parked payload is delivered — landing on its tuple flushes it immediately, and the burst-end
   timer re-arms until the scrub quiets, then drains one payload per ~32ms tick (a bulk flush just
-  moved the spike to scrub-end). Two paths discard: panel dispose, and the cap evicting the
-  oldest payload. The eviction is safe only because of two webview behaviours that are therefore
+  moved the spike to scrub-end). Three paths discard: panel dispose, the cap evicting the
+  oldest payload, and a *column* splice, which renames every slot key
+  (`docs/file-watching.md: reindex-in-lockstep`); a *row* splice re-keys the hold instead, so a held
+  payload is never flushed into another file's slot. The eviction is safe only because of two webview behaviours that are therefore
   load-bearing: spinners show solely for the current tuple, whose payloads are never held, and
   `loadTuple` re-requests every uncached slot on revisit (`requestMissing`) — delete that
   re-request and a cap drop becomes a permanent hole instead of a deferred re-read.
 - **`image-payload-normalized`** — the bytes handed to `postMessage` are a tight, plain
-  `Uint8Array` (`normalizeImageBytes`, pinned by `wireFormat.test.ts`). A `Buffer` subclass risks
+  `Uint8Array` (`normalizeImageBytes`, pinned by `wireFormat.test.ts`) — on **both** payload paths,
+  `image` and `thumbnail`, in both products. The thumbnail path is the sharper trap of the two: a
+  pack hit is a `Buffer` *slice* of the one shared packfile buffer (`thumbPack.ts`), so an
+  un-normalized post ships the whole pack per tile. A `Buffer` subclass risks
   the serializer JSON-mangling it into `{type:"Buffer",data:[…]}` — which decodes to nothing and
   reads as "Image not available" — and note `Uint8Array.prototype.slice` on a Buffer returns
   another Buffer (species constructor), so a slice is not an escape. An offset view ships its whole
   backing allocation.
+- **`user-pushes-never-withheld`** — the transport budget delays only *speculative* pushes. A push
+  someone is waiting on — every `sendImage` reply: the visible image, its siblings, crop and export
+  refreshes — is handed to `postMessage` in the turn it is ready, however many bytes are in flight
+  (`postImage`'s speculative-only branch; `TransportBudget.canSend` short-circuits on the flag before
+  it looks at anything else). User-facing bytes are still *counted* against the budget
+  (`postImageNow`) — that is the half that makes speculation yield to them. Invert either half —
+  gate a user push on the budget, or stop counting user bytes — and the whole priority ladder the
+  pool builds is undone one layer higher, silently: nothing errors, the viewer is just slow again,
+  which is precisely how this shipped unnoticed for months.
+- **`speculation-yields-the-wire`** — no speculative full-image push is *admitted* to the channel
+  while an open-time thumbnail sweep is draining, and outside a sweep one is admitted only while at
+  most `imageCompare.prefetchTransportBudgetMB` of counted bytes are in flight (a single over-budget
+  push may go alone, or a 16 MB image could never be sent at all). The gate is **admission**: once the
+  budget has admitted a payload, the scrub-burst hold (`held-payloads-always-flush`) can park it, and
+  **both** of the hold's exits reach the wire without re-checking `canSend` — `scheduleBurstFlush`
+  trickles one payload per ~32 ms, and the arrival flush in `setCurrentTuple` empties *every* held
+  payload for the arrived tuple in a single turn. The second is the larger excursion: its worst case
+  is one whole tuple's images at once (six 16 MB modalities ≈ 96 MB against an 8 MB budget), so the
+  bound holds on admission, not on instantaneous bytes in flight. Re-gating either flush is *not* the fix: it would
+  either withhold user-facing held payloads (breaking `user-pushes-never-withheld`, since the hold
+  does not record which pushes were speculative) or need a re-park loop around the one timer that
+  keeps a scrub responsive. The sweep claim is raised in `generateAllThumbnails` and released only
+  through `endSweep` — the sweep's settle, a synchronous throw out of its prologue, the idle stall
+  watchdog, or panel dispose. A parked push is delivered when the budget frees, or dropped — when the
+  user has left its tuple, when the 64-entry park overflows, when a column splice renames its slot, or
+  on dispose — never leaked, and never at the cost of the *read*: the bytes are already in
+  `state.loadedImages`, so the worst case a drop can cost is one on-demand transfer the user would
+  have paid for with prefetch off.
+- **`wire-budget-remote-only`** — the bound applies only where there is a serialized link to share:
+  `vscode.env.remoteName === undefined` (a local window) resolves to `Infinity`, which takes the
+  un-instrumented path — no parking, no ack plumbing, no watchdog — whatever the setting says. That
+  `undefined` is the VS Code API's own "not remote" answer and the only cheap, honest signal
+  available; every remote kind (`ssh-remote`, `wsl`, `dev-container`, a Codespace) is a string and
+  gets the bound. An explicit `0` means unlimited everywhere.
 - **`visible-never-starved`** — the visible image is never starved by thumbnails, prefetch, or
   polling. Every image read/decode goes through the pool — crop and PPTX export included, at
   `EXPORT` — so nothing outranks the visible image, and `VISIBLE` is exempt from the courtesy rule
@@ -365,7 +808,8 @@ Opening a panel is asynchronous, and step order is load-bearing:
   the queued class with the fewest running tasks (max-min, ties to the higher priority). With two or
   more speculative slots (`concurrency ≥ 3`) that pick bounds waits: contended classes converge to
   roughly even shares of the speculative budget. With one (`concurrency ≤ 2` — a real configuration:
-  `sharedWorkPool` sizes the pool `max(1, min(16, cpus - 1))`, so a 3-core host gets exactly 2), it degenerates to
+  `sharedWorkPool` gives a host with two or fewer usable cores exactly 1, and
+  `imageCompare.maxConcurrentReads` can pin any host there), it degenerates to
   strict priority within speculation: a speculative task is admitted only when none is running, so
   every successful pick is an all-zero tie that the higher-priority class wins, and a prefetch wave
   re-takes the lone slot on each completion until its queue drains. The one
@@ -374,14 +818,70 @@ Opening a panel is asynchronous, and step order is load-bearing:
   and both starved the sweep measurably — strict priority froze it for a wave's whole duration
   (15s dead progress bar), and a one-slot courtesy left it 1-wide, where a single slow NFS read
   stalled the bar head-of-line. Breaking either rule re-introduces stall-then-burst.
-- **`pool-width-hides-latency`** — the pool cap (16) is sized for *latency*, not CPU: its tasks are
-  file-service RPC reads and Sharp decodes that run on Sharp's own thread pool, so extension-host
-  CPU per task is small and width is what hides a slow mount's round trips. Capping it "to match
-  libuv" was a category error — these tasks barely touch the extension host's libuv pool — and at
-  width 4 a single wave saturated everything. Shrink it back and the stalls return. The `readDirectory` calls on the crop and export
+- **`pool-width-hides-latency`** — the pool width is a *dispatch* width, and admission is not
+  execution. Sharp holds one libuv thread per operation (`sharp.concurrency()` is 1 on a glibc build
+  without jemalloc, by sharp's own rule — jemalloc would raise it and make over-dispatch worse, not
+  better), so the real decode ceiling is the extension host's libuv pool:
+  4 threads, which we cannot raise from inside the host — setting `process.env.UV_THREADPOOL_SIZE`
+  at runtime is measurably ignored, only the exec-time environment counts, and that one is VS Code's.
+  Everything dispatched past that ceiling waits in a FIFO the priority ladder does not reach: at
+  width 16 with 15 sweep tasks running, a `VISIBLE` decode took **2799 ms** (9.9× its 283 ms solo
+  cost) and an unpooled `fs.stat` **2201 ms**; at width 4 the same workload gave **525 ms** and
+  **0.4 ms** — for the same throughput (90 real images: 2764 ms at width 6, 2794 ms at 16). Width
+  above the ceiling therefore buys nothing and costs interaction latency, so `poolWidth` in
+  `workPool.ts` is one slot at parallelism <= 2, else `min(parallelism - 1, 4)` saturating slots plus 2
+  of dispatch slack (so 1, or 4..6 —
+  floor 1 on a 1-core box; the slack covers the JS round-trip that refills a freed libuv thread),
+  and `sharedWorkPool` feeds it `usableParallelism(os.availableParallelism(), os.cpus())` —
+  never `os.cpus()` alone, which on a cgroup- or affinity-limited host (SLURM, Docker `--cpus`)
+  reported 256 logical cores for 4 usable ones and turned the old `min(16, cpus - 1)` into width 16.
+  `imageCompare.maxConcurrentReads`, read by `sharedWorkPool`, is the escape hatch for a host whose
+  libuv pool really is bigger. Reads are the part width still hides — but warm reads are ~118–468 ms
+  against ~3000 ms of decode over the same corpus, so hidden mount latency is a secondary effect,
+  not the sizing rule (the earlier claim that Sharp "decodes on its own thread pool" was simply
+  false). The `readDirectory` calls on the crop and export
   paths are not pooled and do not need to be; the sweep's own listing and existence checks
-  are, at `POLL`, and so is adoption when the sweep is what triggers it.
-- **`thumbnails-scanline-order`** — thumbnails fill in scanline order on open.
+  are, at `POLL`, and so is adoption when the sweep is what triggers it. The rule itself is shared
+with the standalone build, which feeds `poolWidth`
+`navigator.hardwareConcurrency`: there the tasks are in-page canvas decodes with no libuv in the
+picture, so width buys decoder-competition fairness between priority classes rather than hidden
+mount latency — but the same shape applies, so neither product can quietly diverge.
+- **`thumbnails-centre-out`** — the open-time sweep dispatches slots by distance from the tuple the
+  user is on (forward first on a tie, modality-minor within a row), and re-aims at the new row as
+  soon as the user moves there — the remaining work is re-ordered, never finished in the old order
+  first. Scanline order is the special case of a centre pinned at 0, which is what a host that
+  supplies no centre gets. Three sites: the ordering itself (`thumbnailPlan.ts`) and the centre each
+  host feeds it (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that stops passing its
+  live current tuple silently restores the 746×10 pathology, since the sweep still works, just in
+  the order the user is least likely to want.
+- **`sweep-covers-every-slot-once`** — re-centring is an ordering change and nothing else: every
+  planned slot is **delivered and counted exactly once**, however often the centre moves and whenever
+  it moves, and the tail is still swept when the user stops navigating. This is
+  the property that made the sweep blind in the first place — nothing re-enqueues a slot the sweep
+  drops, so a lost slot is blank for the life of the panel, and a duplicated one is a wasted decode
+  plus a second post for a tile already shown. The cursor is what enforces it (an item is `shift`ed
+  out of its row before dispatch; the up/down walks cover every row from any centre), and the
+  progress denominator depends on it too: `total` counts each slot once, so a double dispatch
+  overruns the bar and a lost one hangs it below `total` forever. The one dispatch that is *not* a
+  delivery is a slot the host dropped before it started (`sweep-cancels-on-reaim`): it is returned to
+  the cursor (`putBack`, before its settle, rewinding whichever walk had passed its row) and handed
+  out again — so both sites are load-bearing, the hand-out and the return.
+- **`sweep-cancels-on-reaim`** — when the centre moves, the sweep drops the dispatches that have not
+  started (`io.dropQueued` → `WorkPool.cancel`) instead of letting them deliver at the old row: at
+  the field's cold cost (1 586 ms per thumbnail, 4 bulk slots) the queued 28 were ~13 s of stale
+  tiles, and the floor is one running batch, ~1.6 s. Every piece is required. The drop is *keyed to
+  the sweep alone* (`${poolKey}-sweep`), or a jump also cancels the panel's queued export and poll
+  work; that key must therefore be cancelled on dispose/re-open as well, or the sweep's queue outlives
+  its panel. And a cancellation the host itself caused (`disposed`/`closed`) settles the slot
+  silently, while any other one returns it to the cursor — swap those and a dead panel's sweep
+  re-dispatches forever, or a live panel loses every dropped slot.
+- **`sweep-dispatch-bounded`** — the sweep keeps at most `SWEEP_CHUNK` (32) dispatches outstanding
+  and refills on every settle, rather than handing the pool the whole grid. Both halves are
+  load-bearing: the bound is what keeps re-centring *cheap* (the pool never re-orders or promotes a
+  queued task, so anything already submitted is frozen order and must be dropped and re-dispatched to
+  move — `sweep-cancels-on-reaim`), and the per-settle refill
+  is what keeps it from costing throughput (the pool's 1..6 slots always have queued work behind
+  them until the tail). A field log showed the un-bounded version: `queued=[0,0,0,0,0,7293,0,4]`.
 - **`no-sync-blocking`** — no unbounded synchronous CPU/FS work on the extension-host thread. The pool
   bounds *concurrency*, not event-loop time: PPTX export base64s every full-res image synchronously
   inside its pooled task, and deflates the zip outside it, so a large export is still felt on the
@@ -391,10 +891,116 @@ Opening a panel is asynchronous, and step order is load-bearing:
   the exact bug.
 - **`debounce-leading-edge`** — the navigation debounce stays leading-edge; a trailing one still
   coalesces rapid stepping but taxes every isolated navigation 150ms.
+- **`siblings-dwell-gated`** — a tuple arrival requests **only the modality on screen**. Every other
+  modality waits for a dwell (`LOAD_DEBOUNCE_MS`, the navigation debounce reused) that the next
+  navigation clears, so a tuple the user scrolls past never asks for its siblings at all. Three parts
+  are load-bearing and each fails silently: the arrival plan itself (`tupleLoadPlan.ts`), the timer's
+  arming *and* its clearing on every `loadTuple` (`webview/main.ts` — an unarmed timer means siblings
+  never load, an uncleared one restores the flood one tuple later), and the `VISIBLE` re-request
+  `render()` issues for an empty current slot, which is what makes an in-dwell modality flip cost one
+  image instead of a permanent spinner (nothing else re-requests: the webview never re-asks for a
+  filled slot, and `loadTuple` only runs on tuple change). The regression this trades for is
+  deliberate; the pathology it removes is 10 full-resolution loads per tuple *passed*.
+- **`request-rank-upgrades`** — a request for a slot whose outstanding request ranks **below** the
+  rank now needed must be re-posted at the higher rank. `requestedSlots` therefore records the rank
+  each unanswered request carries, and the suppression guard in `requestSlot` fires only when the
+  stored rank is at least as high as the one wanted; the `render()` empty-slot branch is the site
+  that needs it, since a modality flip after the dwell lands on a slot already asked for at
+  `SIBLING_TAIL`. Nothing else can save it: both hosts map the wire rank to a pool priority once, at
+  submit, and the pool has no bump — so a suppressed re-ask leaves the on-screen tile under the
+  tail's "only when nothing else is queued" admission rule, i.e. a spinner for the sweep's whole
+  duration (measured on a 746×10 session; the pre-`SIBLING_TAIL` code served the same flip at
+  `SIBLING`). The accepted cost is one duplicate decode per flip onto an undelivered slot, described
+  in the request-path section above.
+- **`sibling-order-by-display-distance`** — siblings are ordered by distance in the **display** order
+  (`modalityOrder`, user-rearrangeable), hidden pills skipped both as targets and as steps, forward
+  before backward at equal distance. The one `→` reaches must arrive first; raw modality ids mis-order
+  a rearranged or partly hidden column set, and the failure is invisible — everything still loads,
+  just in the order the user is least likely to want.
+- **`sibling-tail-never-competes`** — modalities past the nearest two ride `SIBLING_TAIL`, which is
+  admitted only when **no other priority class has queued work** (`canStart`, exempt from both the
+  concurrency-1 waiver and the speculative fair-share pick). A rank merely "below `PREFETCH`" would
+  still outrank `THUMBNAIL_BULK`, and even at equal rank the max-min share of `background-trickle`
+  would hand the tail half the sweep's slots — which is the starvation this whole policy exists to
+  end. Both hosts map the wire's `tail` flag onto it (provider and standalone adapter); dropping the
+  flag on either side silently restores `SIBLING`.
+- **`stale-tuple-loads-cancelled`** — image loads are keyed by tuple (`<poolKey>-image-<tupleIndex>`)
+  and leaving a tuple cancels its queued ones; running tasks finish, as everywhere. Prefetch waves
+  were keyed and cancelled from the start and the current-tuple loads were not, which is how a panel
+  accumulated one queued load per modality per tuple ever visited. Every site is a way to break it:
+  the key at submit, the cancel on `setCurrentTuple`, and the cancel on dispose — `pool.cancel`
+  matches exactly, so `poolKey` does not cover these keys and a panel closed mid-browse would
+  otherwise keep reading files for a view that is gone. It is not a silence under
+  `reply-exactly-once`: a cancelled serve never started, and `loadTuple` re-requests every uncached
+  slot on revisit. The standalone adapter carries the same wiring, for the same reason.
 - **`decode-retry-once`** — a transient decode failure re-requests the slot once rather than marking
-  it missing; no sticky "not available" for a file that is present.
+  it missing; no sticky "not available" for a file that is present. Carousel thumbnails obey the same
+  rule: an undecodable thumb payload renders the designed ✕ placeholder (never the browser's
+  broken-image glyph) and re-requests its tuple once, with the guard consumed-then-re-armed per
+  delivery so a permanently corrupt file cannot drive an infinite request loop.
+- **`thumb-url-owned-by-cache`** — a thumbnail object url is owned by the webview's slot map
+  (`webview/thumbUrlCache.ts`), never by the `<img>` showing it. The map revokes a url exactly when
+  its key stops pointing at it (superseded, placeholdered, deleted, dropped by a re-key, cleared on
+  re-init) and nothing else revokes — a pooled row that revoked what it was recycling away from
+  would blank a tile another row still shows, and a map that revoked nothing would pin one blob per
+  tile for the life of the panel. Two halves that look incidental and are not: the successor reaches
+  the map and the tile *before* the superseded url is revoked (revoke-first aborts a decode already
+  in flight, which surfaces as the ✕ placeholder), and the shared ✕ placeholder data url is stored
+  like any value but never revoked.
+- **`empty-tile-never-broken`** — a carousel tile whose slot has no thumbnail carries the shared
+  transparent `BLANK_THUMB` data url (`webview/thumbUrlCache.ts`), never an absent `src`. Removing
+  the `src` of an `<img>` that already loaded one leaves it in the browser's *broken* image state:
+  Chromium paints its broken-image glyph there and fires no `error` event, so the ✕ fallback
+  (`decode-retry-once`) never runs and nothing in the DOM tells the tile apart from a blank one —
+  `naturalWidth` is 0 and `complete` is true either way. Pooled rows are recycled from delivered
+  rows onto not-yet-delivered ones on every scroll, so the whole not-yet-loaded region below the
+  sweep fills with glyphs interspersed with the correctly blank tiles of rows that never held an
+  image. The blank must also *decode* (1×1, fully transparent): an undecodable one would fire
+  `error` on every empty tile and drive the retry path instead.
 - **`render-from-loaded-tuples`** — `render()` never trusts the module-level `images`; it re-derives
   from `loadedTuples` for the current index, or a *previous* sample's frames appear under the current
   sample's labels.
 - **`panel-keys-never-reused`** — panel keys are never reused (`nextPanelKey()`'s counter is
   process-global), or one panel's cancellation silently strands another's.
+- **`debug-off-costs-nothing`** — with `imageCompare.debug` off, every instrumentation site costs one
+  cached-boolean read and nothing else: no message string is built (the sinks take a thunk, not a
+  formatted line), no clock is read, no counter is updated, no snapshot timer exists. The flag is
+  cached in `debugLog.ts` and refreshed from `onDidChangeConfiguration`, never read per call — the
+  matcher alone calls its logger thousands of times per open, which is what made a per-call
+  `getConfiguration` worth removing. This is the property that rots silently: instrumentation that is
+  free today acquires an eager template string tomorrow and nobody notices, because the numbers still
+  look right when it is on. The sites the rule binds are the sink itself (`debugLog.ts`), the matcher
+  trace and the scan's own numbers (`fileService.ts`), the per-thumbnail tier accounting
+  (`thumbnailService.ts`) and the sweep, pool, wire, prefetch and open-trace instrumentation
+  (`imageCompareProvider.ts`). The open trace is the sharpest case: sizing the `init` payload costs a
+  whole `JSON.stringify` of it, so the trace object must not exist at all with debug off, and its
+  absence — not a flag re-read — is what gates every mark and the sizing pass.
+- **`open-spans-account-for-the-whole-open`** — the `[IC-OPEN]` rollup's spans are differences between
+  marks taken on the open path, and whatever time they do not cover is printed as `other`, never
+  folded into a neighbouring span. That is the whole point of the line: the 6.96 s that motivated it
+  was invisible precisely because it belonged to no instrumented step, so a scheme that could only
+  report the steps it knows about would have reported the same silence. A step added to the open
+  without a mark therefore grows `other` — visibly wrong rather than silently mis-attributed. Two
+  corollaries the line lives or dies by: a mark must be taken *at* the boundary it names, since moving
+  one silently migrates time between two spans that both stay plausible; and the last mark is the
+  sweep's own clock, so the open rollup and `[IC-SWEEP]` are contiguous and no millisecond escapes
+  between them. The
+  sites are the formatter (`debugLog.ts`), the marks and the emission (`imageCompareProvider.ts`) and
+  the scan's file count and nested matcher time, which only the scan can measure (`fileService.ts`).
+- **`shared-waits-are-not-per-item-work`** — a tier's `ms` in the histogram counts only that item's
+  own work. Time spent blocked on a wait *shared* with other in-flight calls — today exactly one, the
+  one-off `thumbs.pack` read behind `ensurePackLoaded` — is subtracted from every waiter and reported
+  once, as `packLoad=<n>x<ms>/<bytes> blocked=<callers>/<summed wait>`. A warm 9x10 open printed
+  `pack=83/385.1KB/8118ms` for a sweep that finished in 658 ms wall: one ~600 ms NFS read, charged in
+  full to each of the 83 callers awaiting the same promise, which reads as a slow tier when the tier
+  is ~12x faster than stated. Memory hits are exempt by position (they return above the load); pack,
+  disk and generated all sit behind it, so all three subtract. The sites are the subtraction and the
+  one-off measurement (`thumbnailService.ts`), the formatter (`debugLog.ts`) and the sweep rollup
+  (`imageCompareProvider.ts`). The general rule outlives the packfile: any future shared await must
+  be measured where it happens and reported once, never N times through its waiters.
+- **`idle-poll-logs-nothing-new`** — the existence poll prints its pool snapshot only when the pool is
+  doing something, or when the snapshot changed since the last one printed. The poll runs every 10 s
+  for the life of a visible panel, so an unconditional line grew an idle remote session's channel
+  forever with identical `active=0/16 run=[0,…] queued=[0,…]` — the shape a reader scrolls past to
+  find the sweep. Silence here means "idle and unchanged"; a busy pool still prints every cycle even
+  when its numbers repeat, and nothing else the poll finds (deletions, arrivals, adoption) is gated.

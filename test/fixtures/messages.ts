@@ -13,6 +13,8 @@ export interface FixtureSpec {
   width: number;
   height: number;
   votingEnabled: boolean;
+  /** Optional product version for the init message; absent mirrors specs predating the field. */
+  version?: string;
 }
 
 export const DEFAULT_SPEC: FixtureSpec = {
@@ -55,6 +57,7 @@ export function initMessage(spec: FixtureSpec = DEFAULT_SPEC) {
     winners: {} as Record<number, number>,
     votingEnabled: spec.votingEnabled,
     labelsExplicit: false,
+    ...(spec.version ? { version: spec.version } : {}),
   };
 }
 
@@ -80,7 +83,11 @@ export function imageMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   return msgs;
 }
 
-/** Thumbnail messages (smaller solid pngs) for the carousel. */
+/**
+ * Thumbnail messages (smaller solid pngs) for the carousel. Like the image
+ * messages above, they are emitted as a dataUrl for serializability and the
+ * harness's __ic_send converts each to the real binary bytes+mime wire shape.
+ */
 export function thumbnailMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   const msgs: Array<Record<string, unknown>> = [];
   spec.tupleNames.forEach((_n, tupleIndex) => {

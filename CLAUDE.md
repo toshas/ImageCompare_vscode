@@ -54,7 +54,11 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
 - **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
 - **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
+- **`pollPlan.ts`** - Pure (no vscode dependency): poll-cycle decisions — barren-dir listing policy, snapshot name/fingerprint diffing, same-cycle rename pairing — shared by the provider's existence sweep and the standalone poll → `docs/file-watching.md`
 - **`workPool.ts`** - Pure: the bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
+- **`transportBudget.ts`** - Pure (extension-only): backpressure for outbound image bytes — the pool orders *work*, this orders *bytes on the wire* so speculation cannot starve a remote session → `docs/loading-architecture.md`
+- **`debugLog.ts`** - Pure (no vscode dependency): the `imageCompare.debug` sink — cached flags, an injected line sink, elapsed stamping and the byte/tier/throughput formatters; shared with the standalone build → `docs/testing.md`, `docs/loading-architecture.md`
+- **`debugChannel.ts`** - The extension's half of that sink: the "ImageCompare" `OutputChannel` and the config-change refresh → `docs/testing.md`
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
 - **`webviewShell.ts`** - The webview's static HTML shell (styles + body), single source of truth for the production panel and the Playwright test harness (`test/webview/harness.ts`)
 - **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities → `docs/tuple-matching.md`
@@ -64,11 +68,24 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`modalityNames.ts`** - Pure (no vscode dependency): shortest-unique-tail naming of modality columns from directory paths → `docs/session-files.md`
 - **`thumbPack.ts`** - Pure (no vscode dependency): the thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
 - **`wireFormat.ts`** - Pure (no vscode dependency): image payload normalization for extension→webview transfer → `docs/loading-architecture.md`
+- **`resultsFile.ts`** - Pure (no vscode dependency): `results.txt` parse/serialize plus the persist flow (empty votes delete the file), shared with the standalone build → `docs/standalone.md`
+- **`cropPlan.ts`** - Pure (no vscode dependency): `_cropNN` output naming and crop-rect scale/clamp → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`cropFlow.ts`** - Pure (no vscode dependency): the whole crop sequence (`performCrop` — one name, relative rect, per-modality render/inject/write, arrivals, `cropComplete`, thumbnails) over per-product IO, shared with the standalone build → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`pptxDeck.ts`** - Pure (no vscode dependency): PPTX slide selection, parent/crop pairing and layout over an injected IO, `comparison_NN` export-file numbering, and the export flow (`exportDeck` — name, build, save, exactly one answer) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`thumbnailPlan.ts`** - Pure (no vscode dependency): open-time thumbnail-sweep planning and running (slot order, missing slots, progress ticks, sweep wire traffic over injected IO), shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`imageServe.ts`** - Pure (no vscode dependency): full-image serving — passthrough-vs-convert branch, payload normalization, the single terminal reply, and the current-tuple refresh loop — shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`initPayload.ts`** - Pure (no vscode dependency): `init`-message assembly (dense tuples, positional color defaults, winners record, product version for the help modal), shared with the standalone build → `docs/standalone.md`
+- **`arrivalPlan.ts`** - Pure (no vscode dependency): new-file placement (slot-fill vs new tuple, shifts, wire payloads) for provider watcher arrivals and standalone crop writes → `docs/file-watching.md`, `docs/standalone.md`
+- **`adoptionPlan.ts`** - Pure (no vscode dependency): modality-dir adoption decisions (which dirs qualify, the imageful gate, the column-insert mutations and `modalityAdded` payload), shared by the provider's three detectors and the standalone poll → `docs/file-watching.md`, `docs/standalone.md`
+- **`removalPlan.ts`** - Pure (no vscode dependency): the tuple-delete sequence (step order, emptied columns, re-save points) and the whole delete flow (per-file disk deletes before the live-index re-plan), executed by both products through injected IO → `docs/file-watching.md`, `docs/standalone.md`
+- **`imageMime.ts`** - Pure (no vscode dependency): the passthrough-mime table → `docs/image-backends.md`
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
+- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
+- **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
 
 ## Design docs (`docs/`)
 
@@ -84,6 +101,7 @@ has none). Read one on demand — don't load them preemptively.
 | `docs/tuple-matching.md` | Touching how files are grouped into tuples/modalities: the trie matcher, tie-breaks, crop deprioritization, modality naming/order, or the sparse-vs-dense and original-vs-display index traps. |
 | `docs/image-backends.md` | Touching Sharp/Jimp/PPMX, `loadFullImage`, webpack externalization, or packaging. Documents which fallback tiers *actually* exist (not the aspirational chain) and why the CPU workaround is there. |
 | `docs/crop-and-pptx.md` | Touching crop or PowerPoint export: the relative-coordinate contract, the dual EXIF+tEXt metadata write, the `_cropNN` filename contract, or parent/crop slide pairing. |
+| `docs/standalone.md` | Touching the standalone browser build: `standalone/`, `scripts/build-standalone.mjs`, or any pure module the adapter shares with the provider (results format, crop plan, deck layout). |
 | `docs/testing.md` | Adding or changing a test, or trusting one: the three layers, what each suite pins, the copy-trap history, what nothing covers, and the manual checks. |
 
 Everything below is operating instructions — conventions, commands, release. Subsystem *design*
@@ -161,6 +179,7 @@ with Codex/other tools and the symlink convention breaks.
 npm install          # Install dependencies
 npm run watch        # Watch mode (rebuilds on changes)
 npm run compile      # One-off build
+npm run build:standalone  # Single-file browser build → dist/standalone/image_compare.html (docs/standalone.md)
 # Press F5 in VSCode to launch Extension Development Host
 ```
 
@@ -210,11 +229,12 @@ npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
 npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
 node scripts/comment-lint.mjs       # no multi-line // blocks in production code
+node scripts/check-sidedness.mjs    # module sidedness (extension/standalone/shared) from real imports; no dead src/ modules
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
 npm run compile                     # both webpack targets
 ```
 
-CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the two
+CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the three
 checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs all three
 `tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
 step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
@@ -374,7 +394,14 @@ Four rules, each learned by breaking the install:
    *next-patch* base is load-bearing, both ways: semver puts `-alphaN` below its base release, so
    an alpha of the *current* version would be silently auto-updated back to the marketplace build,
    and a bare bumped patch (the old convention) outranks the next real release so auto-update
-   never delivers it. `vsce package` accepts the suffix.
+   never delivers it. `vsce package` accepts the suffix. **Use `npm run alpha -- <N>`** — it bumps
+   `package.json` (the single version source: the provider reads it at runtime, the standalone
+   stamps it at build time) and builds VSIX + standalone in one window so the pair always agree.
+   The bump then STAYS in the working tree for the whole testing period — a transient bump loses
+   the race against test-driven rebuilds, which re-stamp the base version (learned when an alpha
+   install shipped beside a stale `v0.3.0` standalone twice in one day). `npm run alpha -- --restore`
+   reverts before committing; the CI gates job fails on any committed prerelease version, so a
+   forgotten restore cannot ship.
 3. **Copy the `.vsix` to local disk first** (e.g. `/tmp`). Installing straight off a network mount is
    what makes rule 1 bite.
 4. **Interrupted leftovers can be unremovable until the window reloads.** The running extension host

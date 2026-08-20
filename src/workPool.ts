@@ -1,9 +1,9 @@
 /**
  * Bounded, prioritized, cancellable async work pool; ordered by priority (lower
- * first), FIFO within a priority. See docs/loading-architecture.md.
+ * first), FIFO within a priority. No aging: safe only while every producer
+ * stays finite. Browser-safe on purpose — the standalone adapter bundles this
+ * module, so no node imports. See docs/loading-architecture.md.
  */
-
-import * as os from 'os';
 
 // This order is what keeps the visible image ahead of thumbnails/prefetch/polling (docs/loading-architecture.md: visible-never-starved).
 export enum Priority {
@@ -13,7 +13,8 @@ export enum Priority {
   PREFETCH = 3, // neighbor tuples
   THUMBNAIL = 4, // on-demand re-requests after the carousel changes (tuple/modality added or removed, watcher regeneration)
   THUMBNAIL_BULK = 5, // the whole-session sweep at open; must not starve the above
-  POLL = 6 // background filesystem existence checks
+  POLL = 6, // background filesystem existence checks
+  SIBLING_TAIL = 7 // modalities beyond the nearest two of the current tuple: strictly last (docs/loading-architecture.md: sibling-tail-never-competes)
 }
 
 /** Thrown to a queued task's awaiter when it is cancelled before it starts. */
@@ -38,7 +39,7 @@ export interface SubmitOptions {
   key?: string;
 }
 
-const PRIORITY_COUNT = 7;
+const PRIORITY_COUNT = 8;
 
 export class WorkPool {
   private readonly concurrency: number;
@@ -102,9 +103,18 @@ export class WorkPool {
     return false;
   }
 
+  private anyQueuedElsewhere(p: number): boolean {
+    for (let q = 0; q < PRIORITY_COUNT; q++) {
+      if (q !== p && this.queues[q].length > 0) return true;
+    }
+    return false;
+  }
+
   // The admission rules; see docs/loading-architecture.md ("The work pool") for why each exists.
   private canStart(p: number): boolean {
     if (this.active >= this.concurrency) return false;
+    // Exempt from the concurrency-1 waiver below: being deferred behind every other class is the point (docs/loading-architecture.md: sibling-tail-never-competes).
+    if (p === Priority.SIBLING_TAIL && this.anyQueuedElsewhere(p)) return false;
     if (this.concurrency === 1) return true; // every reservation is waived at one slot: it would starve a whole class outright
     if (p >= Priority.PREFETCH) {
       // Speculation collectively leaves one slot free for user-facing arrivals (docs/loading-architecture.md: visible-never-starved).
@@ -167,20 +177,28 @@ export class WorkPool {
   }
 }
 
-let shared: WorkPool | undefined;
 let panelKeySeq = 0;
 
+// The decode ceiling: Sharp holds one libuv thread per operation and libuv's pool is 4, unsettable from inside the host (docs/loading-architecture.md: pool-width-hides-latency).
+const LIBUV_WIDTH = 4;
+// Just enough extra in flight to refill a freed libuv thread across a JS round-trip; more only queues ahead of the user's image (docs/loading-architecture.md: pool-width-hides-latency).
+const DISPATCH_SLACK = 2;
+
 /**
- * The single pool every panel's image work goes through. No aging: safe only while
- * every producer stays finite — see docs/loading-architecture.md.
+ * Pool width — `clamp(parallelism - 1, 1, 4)` saturating slots plus 2 of dispatch slack (so 1..6),
+ * or an explicit positive `override`. The one width rule both products use; feed it
+ * `usableParallelism`, never a raw logical-core count.
  */
-export function sharedWorkPool(): WorkPool {
-  if (!shared) {
-    const cpus = os.cpus()?.length || 4;
-    // Latency-bound, not CPU-bound: reads are file-service RPC and Sharp decodes on its own pool, so width hides mount latency (docs/loading-architecture.md: pool-width-hides-latency).
-    shared = new WorkPool(Math.max(1, Math.min(16, cpus - 1)));
-  }
-  return shared;
+export function poolWidth(parallelism: number, override?: number): number {
+  if (override !== undefined && override > 0) return Math.max(1, Math.floor(override));
+  const saturating = Math.max(1, Math.min(LIBUV_WIDTH, parallelism - 1));
+  return saturating === 1 ? 1 : saturating + DISPATCH_SLACK;
+}
+
+/** Parallelism actually usable: the runtime's own report (os.availableParallelism / hardwareConcurrency) if any, else a logical-core count, else 4 (docs/loading-architecture.md: pool-width-hides-latency). */
+export function usableParallelism(available: number | undefined, logical: number | undefined): number {
+  if (available !== undefined && available > 0) return available;
+  return logical !== undefined && logical > 0 ? logical : LIBUV_WIDTH;
 }
 
 /** Cancellation-key prefix; the counter is process-global so keys are never reused (docs/loading-architecture.md: panel-keys-never-reused). */

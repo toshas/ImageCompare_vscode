@@ -66,6 +66,106 @@ const mutations = [
     killedBy: 'matcher key-order test (rows sorted by ref basename, asserted by index)'
   },
 
+  // ── Symlinks: FileType is a bitmask (docs/tuple-matching.md: entry-type-is-a-bitmask) ──
+  {
+    name: 'symlink: classifyUris back to strict equality',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/symlinkScan.test.ts',
+    find: '    if (((types[i] ?? 0) & vscode.FileType.Directory) !== 0) {\n      directories.push(uri);\n    } else if (((types[i] ?? 0) & vscode.FileType.File) !== 0) {',
+    replace: '    if (types[i] === vscode.FileType.Directory) {\n      directories.push(uri);\n    } else if (types[i] === vscode.FileType.File) {',
+    killedBy: 'mode 2 / mode 3 symlink tests (a symlinked dir or file passed to scanForImages is classified)'
+  },
+  {
+    name: 'symlink: scanDirectory subdir test back to strict equality',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/symlinkScan.test.ts',
+    find: '    if ((type & vscode.FileType.Directory) !== 0) {',
+    replace: '    if (type === vscode.FileType.Directory) {',
+    killedBy: 'mode 1 symlink test (a symlinked subdirectory of the root is a modality)'
+  },
+  {
+    name: 'symlink: modality file listing back to strict equality',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/symlinkScan.test.ts',
+    find: '    if ((type & vscode.FileType.File) !== 0 && isImageFile(name)) {',
+    replace: '    if (type === vscode.FileType.File && isImageFile(name)) {',
+    killedBy: 'symlinked-image test (a linked image inside a modality dir yields a tuple)'
+  },
+  {
+    name: 'symlink: broken link accepted (SymbolicLink bit treated as a file)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/symlinkScan.test.ts',
+    find: '    if ((type & vscode.FileType.File) !== 0 && isImageFile(name)) {',
+    replace: '    if ((type & (vscode.FileType.File | vscode.FileType.SymbolicLink)) !== 0 && isImageFile(name)) {',
+    killedBy: 'broken-symlink test (a dangling link, type 64, must be skipped silently)'
+  },
+
+  // ── Scan IO: the directory listings overlap in input order (docs/tuple-matching.md: dir-listings-overlap) ──
+  {
+    name: 'scan: directory listings serialized again (one worker)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: '    Array.from({ length: Math.min(DIR_LISTING_CONCURRENCY, dirs.length) }, () => worker())',
+    replace: '    Array.from({ length: 1 }, () => worker())',
+    killedBy: 'concurrency test (11 dirs must be listed in one wave, not one after another)'
+  },
+  {
+    name: 'scan: fan-out cap removed (unbounded listings)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: 'Math.min(DIR_LISTING_CONCURRENCY, dirs.length)',
+    replace: 'dirs.length',
+    killedBy: 'cap test (a 40-directory session must not list all 40 at once)'
+  },
+  {
+    name: 'scan: fan-out cap quietly halved (16 -> 11, the field case exactly)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: 'const DIR_LISTING_CONCURRENCY = 16;',
+    replace: 'const DIR_LISTING_CONCURRENCY = 11;',
+    killedBy: 'cap test (40 dirs must list exactly 16 at a time, not merely at most 16)'
+  },
+  {
+    name: 'scan: listings assembled in completion order, not input order',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: '        listings[i] = { dir: dirs[i], images: await listImagesIn(dirs[i]) };',
+    replace: '        const done = { dir: dirs[i], images: await listImagesIn(dirs[i]) }; listings[listings.reduce((n) => n + 1, 0)] = done;',
+    killedBy: 'order test (slowest-first directories must still yield the caller\'s modality order)'
+  },
+  {
+    name: 'scan: a listing failure skips the directory instead of rejecting',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: '  if (failed?.failure) {\n    throw failed.failure.error;\n  }',
+    replace: '  if (false) {\n    throw new Error("mutated");\n  }',
+    killedBy: 'listing-failure test (an unreadable modality dir must still reject the scan)'
+  },
+  {
+    name: 'scan: the rethrown failure is the last one, not the earliest in input order',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: '  const failed = listings.find(listing => listing.failure);',
+    replace: '  const failed = [...listings].reverse().find(listing => listing.failure);',
+    killedBy: 'earliest-failure test (the slow first failure, not the fast later one, reaches the user)'
+  },
+  {
+    name: 'scan: per-directory natural sort removed',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: '  images.sort((a, b) => naturalSort(a.name, b.name));',
+    replace: '  /* mutated: no per-directory sort */',
+    killedBy: 'per-directory sort test (a tied tie-break must land on the naturally-first reference)'
+  },
+  {
+    name: 'scan: an image-less directory becomes a modality',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/parallelScan.test.ts',
+    find: '    if (listing.images && listing.images.length > 0) {',
+    replace: '    if (listing.images) {',
+    killedBy: 'empty-directory test (a dir with no images is omitted from the modality list)'
+  },
+
   // ── PPMX parser: the suite imports the real source ──
   {
     name: 'ppmx: size-based flags guard weakened (empty line accepted)',
@@ -176,6 +276,38 @@ const mutations = [
     replace: 'if (best === -1) best = q;',
     killedBy: 'Test 15 (freed spec slot goes to the waiting class)'
   },
+  {
+    name: 'workPool: libuv width cap dropped (width tracks the core count again)',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/workPool.test.ts',
+    find: 'const saturating = Math.max(1, Math.min(LIBUV_WIDTH, parallelism - 1));',
+    replace: 'const saturating = Math.max(1, parallelism - 1);',
+    killedBy: 'poolWidth clamp test (poolWidth(64) must be 6, not core-derived)'
+  },
+  {
+    name: 'workPool: width floor removed (a 1-core count yields width 0)',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/workPool.test.ts',
+    find: 'const saturating = Math.max(1, Math.min(LIBUV_WIDTH, parallelism - 1));',
+    replace: 'const saturating = Math.min(LIBUV_WIDTH, parallelism - 1);',
+    killedBy: 'poolWidth clamp test (poolWidth(1) and poolWidth(0) must be 1)'
+  },
+  {
+    name: 'workPool: parallelism source flipped back to the logical-core count',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/workPool.test.ts',
+    find: '  if (available !== undefined && available > 0) return available;',
+    replace: '  if (logical !== undefined && logical > 0) return logical;',
+    killedBy: 'usable-parallelism test (a 256-core/4-usable host must size from 4)'
+  },
+  {
+    name: 'workPool: configured width override ignored',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/workPool.test.ts',
+    find: '  if (override !== undefined && override > 0) return Math.max(1, Math.floor(override));',
+    replace: '  if (false) return Math.max(1, Math.floor(override ?? 1));',
+    killedBy: 'override test (imageCompare.maxConcurrentReads=12 must win over the auto rule)'
+  },
 
   // ── Watcher logic: the suite imports the real source ──
   {
@@ -209,6 +341,78 @@ const mutations = [
     find: 'if (o < header.length || l < 0 || o + l > pack.length || out.has(e.k)) return null;',
     replace: 'if (l < 0 || out.has(e.k)) return null;',
     killedBy: 'Test 5/6 (overflowing and header-pointing entries rejected)'
+  },
+  {
+    name: 'thumbPack: dispose() drops the pending snapshot again (the pre-fix bug)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '    void this.flush();',
+    replace: '    if (this.packTimer) clearTimeout(this.packTimer);',
+    killedBy: 'dispose() test (a close inside the 30s debounce must still publish the pack)'
+  },
+  {
+    name: 'thumbPack: flush() no longer awaits the queued write (shutdown returns too early)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '    await this.queuePackSnapshot();',
+    replace: '    void this.queuePackSnapshot();',
+    killedBy: 'flush() test (files must be on disk when flush resolves)'
+  },
+  {
+    name: 'thumbPack: snapshot entries read inside the write instead of at queue time',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '    this.packWrite = this.packWrite.then(() => this.writePackSnapshot(entries));',
+    replace: '    this.packWrite = this.packWrite.then(() => this.writePackSnapshot([...this.memoryCache].map(([key, bytes]) => ({ key, bytes }))));',
+    killedBy: 'clearMemoryCache race test (an empty pack must never overwrite a good one)'
+  },
+  {
+    name: 'thumbCache: ctime dropped from the key (an mtime-preserving overwrite serves stale pixels)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheKeying.test.ts',
+    find: '    hash.update(ctime.toString());',
+    replace: '    /* mutated: ctime no longer part of the key */',
+    killedBy: 'in-place overwrite test (same mtime, same size, different pixels)'
+  },
+  {
+    name: "thumbCache: ctime taken from vscode's stat, which is birth time (the fix that fixes nothing)",
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheKeying.test.ts',
+    find: "    if (uri.scheme === 'file') {\n      const s = await fs.promises.stat(uri.fsPath);",
+    replace: "    if (false) {\n      const s = await fs.promises.stat(uri.fsPath);",
+    killedBy: 'in-place overwrite test (birthtime does not move when a file is rewritten in place)'
+  },
+  {
+    name: 'thumbCache: superseded entries no longer evicted (dead key per rewrite)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheKeying.test.ts',
+    find: '      this.evictSuperseded(uri, cacheKey);',
+    replace: '      /* mutated: superseded entries left to accumulate */',
+    killedBy: 'eviction test (one per-entry file and one pack slot after a rewrite)'
+  },
+  {
+    name: 'thumbCache: pack no longer stamped on use (an in-use pack expires at cacheMaxAgeDays)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheExpiry.test.ts',
+    find: '          if (parsed) { this.packLoadedFromDisk = true; await this.touchPack(); }',
+    replace: '          if (parsed) { this.packLoadedFromDisk = true; }',
+    killedBy: 'in-use pack test (a backdated pack serving the session survives the sweep)'
+  },
+  {
+    name: 'thumbCache: a pack deleted under a live session is never noticed (warm session republishes nothing)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheExpiry.test.ts',
+    find: '    if (!this.packDirty && this.memoryCache.size > 0 && await this.packGone()) this.packDirty = true;',
+    replace: '    /* mutated: a swept pack is never detected */',
+    killedBy: 'republish test (the close must put back a pack deleted mid-session)'
+  },
+  {
+    name: 'thumbCache: republish check keyed on nothing (a session that never loaded a pack still republishes)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheExpiry.test.ts',
+    find: '    if (!this.packLoadedFromDisk) return false;',
+    replace: '    if (this.packLoadedFromDisk) return false;',
+    killedBy: 'republish test (the vanish check must fire exactly for the session holding the pack)'
   },
   {
     name: 'modalityVisibility: insert anchor broken (new modality always lands first)',
@@ -283,6 +487,1139 @@ const mutations = [
     find: "const escapes = rels.some((r) => r.startsWith('..') || path.isAbsolute(r));",
     replace: 'const escapes = false;',
     killedBy: 'serializeSessionFile test (an escaping path must force all-absolute)'
+  },
+
+  // ── Shared pure modules (extension + standalone): the suites import the real source ──
+  {
+    name: 'resultsFile: header line changed (on-disk results.txt format drift)',
+    file: 'src/resultsFile.ts',
+    suite: 'test/unit/resultsFile.test.ts',
+    find: "'# ImageCompare Results',",
+    replace: "'## ImageCompare Results',",
+    killedBy: 'byte-pinned header test (the expected serialized bytes are committed literals)'
+  },
+  {
+    name: 'cropPlan: max-across-modality-dirs numbering degraded to min',
+    file: 'src/cropPlan.ts',
+    suite: 'test/unit/cropPlan.test.ts',
+    find: 'const cropNum = Math.max(...cropNums);',
+    replace: 'const cropNum = Math.min(...cropNums);',
+    killedBy: 'partial-crop test (a dir already at _crop03 must force _crop04 everywhere, or the lower number overwrites)'
+  },
+  {
+    name: 'pptxDeck: voted crop no longer paired with its parent',
+    file: 'src/pptxDeck.ts',
+    suite: 'test/unit/pptxDeck.test.ts',
+    find: 'const parentIdx = findParentTuple(tuple.name);',
+    replace: 'const parentIdx = -1;',
+    killedBy: 'pairing test (a voted crop slide must carry the parent callout image)'
+  },
+  {
+    name: 'initPayload: missing-slot placeholder corrupted (dense tuples must use empty name)',
+    file: 'src/initPayload.ts',
+    suite: 'test/unit/initPayload.test.ts',
+    find: "name: img?.name || '',",
+    replace: "name: img?.name || 'placeholder',",
+    killedBy: 'dense-tuple placeholder test (a missing slot is an empty name, which the webview renders as absent)'
+  },
+  {
+    name: 'initPayload: version dropped from the init message',
+    file: 'src/initPayload.ts',
+    suite: 'test/unit/initPayload.test.ts',
+    find: 'version: args.version,',
+    replace: "version: '',",
+    killedBy: 'version pass-through test (the help modal footer shows exactly what the product supplied)'
+  },
+  {
+    name: 'thumbnailPlan: scanline order reversed (items prepended instead of appended)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/thumbnailPlan.test.ts',
+    find: 'if (image) items.push({ tupleIndex, modalityIndex, image });',
+    replace: 'if (image) items.unshift({ tupleIndex, modalityIndex, image });',
+    killedBy: 'scanline-order test (items must run tuple-major, modality-minor, top-to-bottom)'
+  },
+
+  // ── Thumbnail sweep: centre-out dispatch, coverage under re-centring, the chunk bound ──
+  {
+    name: 'sweep: a moved centre never re-aims the cursor (the sweep finishes the old order first)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '    if (aim !== this.centre) {',
+    replace: '    if (this.centre < 0) {',
+    killedBy: 're-aim tests (a jump mid-walk must serve the new row next, not the old walk\'s next step)'
+  },
+  {
+    name: 'sweep: nearest-walk pick always forward (rows above the centre are swept last, not by distance)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '    if (hasUp && hasDown) row = this.up - this.centre <= this.centre - this.down ? this.up : this.down;',
+    replace: '    if (hasUp && hasDown) row = this.up;',
+    killedBy: 'centre-out order test (the distance-1 row below the centre precedes the distance-2 row above it)'
+  },
+  {
+    name: 'sweep: slot peeked instead of consumed (a slot can be dispatched twice, and the tail never)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '    return this.rows[row].shift();',
+    replace: '    return this.rows[row][0];',
+    killedBy: 'exactly-once tests (every planned slot handed out and delivered exactly one time)'
+  },
+  {
+    name: 'sweep: backward walk disabled (rows below the first centre are never swept)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '      this.down = aim - 1;',
+    replace: '      this.down = -1;',
+    killedBy: 'coverage tests (the tail must still be swept once the user stops navigating)'
+  },
+  {
+    name: 'sweep: dispatch bound removed (the whole grid is handed to the pool again)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '    while (outstanding < chunk) {',
+    replace: '    while (cursor.remaining > 0) {',
+    killedBy: 'bounded-dispatch tests (at most `chunk` slots outstanding, refilled per settle)'
+  },
+  {
+    name: 'sweep: a re-aim leaves the queued dispatches alone (the 28-deep old-centre lag is back)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '        if (outstanding > 0) io.dropQueued?.();',
+    replace: '        /* mutated: the queue is never dropped on re-aim */',
+    killedBy: 'cancel-on-re-aim test (the new centre must be served after one running batch, not 28 tiles later)'
+  },
+  {
+    name: 'sweep: a dropped slot is never returned to the cursor (permanently blank tiles)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '            cursor.putBack(item);',
+    replace: '            /* mutated: the dropped slot is lost */',
+    killedBy: 'exactly-once tests (every planned slot is still delivered after repeated re-aims)'
+  },
+  {
+    name: 'sweep: a requeued slot counted as delivered (the bar overruns and the tail hangs)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '    if (!requeued) {',
+    replace: '    if (true) {',
+    killedBy: 'progress test (exactly one tick per planned item, ending at total)'
+  },
+  {
+    name: 'sweep: putBack leaves the walks where they were (a returned row is never revisited)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '      if (item.tupleIndex < this.up) this.up = item.tupleIndex;\n    } else if (item.tupleIndex > this.down) this.down = item.tupleIndex;',
+    replace: '      /* mutated: no rewind */\n    }',
+    killedBy: 'cursor return test (a slot returned to a row both walks have passed must still be handed out)'
+  },
+  {
+    name: 'provider: the re-aim drop takes the whole panel key (export and poll work cancelled with it)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepReaimCancel.test.ts',
+    find: '          dropQueued: () => this.pool.cancel(sweepPoolKey(state))',
+    replace: '          dropQueued: () => this.pool.cancel(state.poolKey)',
+    killedBy: 'key-scope test (a queued poll task on poolKey survives a re-aim)'
+  },
+  {
+    name: 'provider: a disposed panel\'s cancellations returned to the cursor (a dead panel keeps reading)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepReaimCancel.test.ts',
+    find: '                if (error instanceof TaskCancelled) return state.disposed ? null : SWEEP_REQUEUE;',
+    replace: '                if (error instanceof TaskCancelled) return SWEEP_REQUEUE;',
+    killedBy: 'dispose test (the slots dispose cancelled must not be re-dispatched)'
+  },
+  {
+    name: 'provider: sweep given no centre (thumbnails fill top-to-bottom wherever the user is)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepProviderCentre.test.ts',
+    find: '        { centre: () => state.currentTupleIndex }',
+    replace: '        {}',
+    killedBy: 'provider order test (the sweep starts at the row the panel opened on)'
+  },
+  {
+    name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepProviderCentre.test.ts',
+    find: '        { centre: () => state.currentTupleIndex }',
+    replace: '        { centre: ((pinned: number) => () => pinned)(state.currentTupleIndex) }',
+    killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
+  },
+  {
+    name: 'pptxDeck: nextPptxName increment dropped (suggests the max, not max+1)',
+    file: 'src/pptxDeck.ts',
+    suite: 'test/unit/pptxName.test.ts',
+    find: 'if (match) pptxNum = Math.max(pptxNum, parseInt(match[1], 10) + 1);',
+    replace: 'if (match) pptxNum = Math.max(pptxNum, parseInt(match[1], 10));',
+    killedBy: 'max-existing test (comparison_05 present must suggest comparison_06, never 05 again)'
+  },
+
+  // ── Arrival planner (extension watcher arrivals + standalone crop writes) ──
+  {
+    name: 'arrival: taken-slot fallback removed (a looser match reuses the slot)',
+    file: 'src/arrivalPlan.ts',
+    suite: 'test/unit/arrivalPlan.test.ts',
+    find: '  if (!bestSlotFree) {',
+    replace: '  if (false) {',
+    killedBy: 'Test 4 (a taken slot must produce a new tuple, never a looser match)'
+  },
+  {
+    name: 'arrival: exact-basename boost removed (de-duplicated tuples stop re-grouping)',
+    file: 'src/arrivalPlan.ts',
+    suite: 'test/unit/arrivalPlan.test.ts',
+    find: '        matchLen = baseFilename.length;',
+    replace: '        matchLen = matchLen;',
+    killedBy: 'Test 2 (an exact basename must reach the "name (2)" tuple whose name is no substring)'
+  },
+  {
+    name: 'arrival: free-slot tie-break removed',
+    file: 'src/arrivalPlan.ts',
+    suite: 'test/unit/arrivalPlan.test.ts',
+    find: '    } else if (matchLen === bestMatchLen && slotFree && !bestSlotFree) {',
+    replace: '    } else if (false) {',
+    killedBy: 'Test 3 (equal scores must prefer the tuple with the free slot)'
+  },
+  {
+    name: 'arrival: name uniquification removed (two rows share a results key)',
+    file: 'src/arrivalPlan.ts',
+    suite: 'test/unit/arrivalPlan.test.ts',
+    find: '  for (let n = 2; existingNames.has(uniqueName); n++) {',
+    replace: '  for (let n = 2; false; n++) {',
+    killedBy: 'Test 5 (a colliding name must become "name (2)")'
+  },
+  {
+    name: 'arrival: winner keys not shifted by the insertion',
+    file: 'src/arrivalPlan.ts',
+    suite: 'test/unit/arrivalPlan.test.ts',
+    find: '    winners.set(t >= plan.insertIndex ? t + 1 : t, m);',
+    replace: '    winners.set(t, m);',
+    killedBy: 'Test 9 (the winner on the row after the insert must move up)'
+  },
+  {
+    name: 'arrival: current-tuple shift dropped (view strands on the wrong row)',
+    file: 'src/arrivalPlan.ts',
+    suite: 'test/unit/arrivalPlan.test.ts',
+    find: '  const shiftedCurrent = currentTupleIndex >= plan.insertIndex ? currentTupleIndex + 1 : currentTupleIndex;',
+    replace: '  const shiftedCurrent = currentTupleIndex;',
+    killedBy: 'Test 9 (the current index at/after the insert must shift with the splice)'
+  },
+
+  // ── Removal planner (the delete-message-order canon) ──
+  {
+    name: 'removal: emptied-modality indices not pre-shifted for earlier splices',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '    working.splice(idx, 1);',
+    replace: '    /* mutated: no working splice */',
+    killedBy: 'Test 2 (after "a" is spliced, "c" must be reported at index 1, not 2)'
+  },
+  {
+    name: 'removal: emptiness check inverted (a surviving modality gets removed)',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '    if (modalityHasFiles(remaining, modality)) continue;',
+    replace: '    if (!modalityHasFiles(remaining, modality)) continue;',
+    killedBy: 'Test 2 ("b" survives in t1 and must not appear among the steps)'
+  },
+  {
+    name: 'removal: tupleDeleted posted after the refresh (canon order flipped)',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '  io.post({ type: \'tupleDeleted\', tupleIndex: asTuple(tupleIndex) });\n  io.refreshCurrentTuple(current);',
+    replace: '  io.refreshCurrentTuple(current);\n  io.post({ type: \'tupleDeleted\', tupleIndex: asTuple(tupleIndex) });',
+    killedBy: 'Test 4/8 (transcript must read tupleDeleted, then refresh)'
+  },
+  {
+    name: 'removal: re-save after the tuple step dropped',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '  io.refreshCurrentTuple(current);\n  io.saveResults();',
+    replace: '  io.refreshCurrentTuple(current);',
+    killedBy: 'Test 4/8 (a save must follow the tuple step, not only the end of the plan)'
+  },
+  {
+    name: 'removal: re-save after a modality step dropped',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '  io.post({ type: \'modalityRemoved\', modalityIndex: asOriginal(modalityIndex) });\n  io.saveResults();',
+    replace: '  io.post({ type: \'modalityRemoved\', modalityIndex: asOriginal(modalityIndex) });',
+    killedBy: 'Test 6/8 (each modality removal must be followed by its own save)'
+  },
+  {
+    name: 'removal: current-index clamp dropped when the last row goes',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '  if (current >= scan.tuples.length) {\n    current = Math.max(0, scan.tuples.length - 1);\n  } else if (current > tupleIndex) {\n    current--;\n  }',
+    replace: '  /* mutated: no clamp */',
+    killedBy: 'Test 5 (removing the last, current row must clamp the refresh to the new last row)'
+  },
+  {
+    name: 'removal: winner values not shifted past the removed modality',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '    if (shifted !== null) winners.set(t, shifted);',
+    replace: '    if (shifted !== null) winners.set(t, m);',
+    killedBy: 'Test 6 (the winner at column 2 must shift to 1 when column 1 goes)'
+  },
+  {
+    name: 'cropPlan: relative rect divides y by the width (axes swapped)',
+    file: 'src/cropPlan.ts',
+    suite: 'test/unit/cropRelRect.test.ts',
+    find: '    y: rect.y / srcHeight,',
+    replace: '    y: rect.y / srcWidth,',
+    killedBy: 'Test 1 (non-square source pins each axis to its own denominator)'
+  },
+  {
+    name: 'resultsFile: unresolvable winner no longer dropped before writing',
+    file: 'src/resultsFile.ts',
+    suite: 'test/unit/winnersToNames.test.ts',
+    find: '    if (modality) named.set(tupleIndex, modality);',
+    replace: '    named.set(tupleIndex, modality);',
+    killedBy: 'Test 2 (an out-of-range winner index must be dropped, not written as undefined)'
+  },
+
+  // ── Shared session-host orchestrators (extension + standalone glue flows) ──
+  {
+    name: 'thumbnailSweep: progress tick stops counting the missing slots',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/thumbnailSweep.test.ts',
+    find: "    post({ type: 'thumbnailProgress', current: done + plan.missing.length, total: plan.total });",
+    replace: "    post({ type: 'thumbnailProgress', current: done, total: plan.total });",
+    killedBy: 'fan-out transcript test (first settle with one missing slot must tick progress:2/4, not 1/4)'
+  },
+  {
+    name: 'thumbnailSweep: zero-item terminal tick dropped (bar hangs forever)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/thumbnailSweep.test.ts',
+    find: "  if (plan.items.length === 0) {\n    post({ type: 'thumbnailProgress', current: plan.total, total: plan.total });\n    return Promise.resolve();\n  }",
+    replace: '  if (plan.items.length === 0) {\n    return Promise.resolve();\n  }',
+    killedBy: 'zero-items test (all-missing plan must still end with the terminal progress tick)'
+  },
+  {
+    name: 'resultsFile: empty-winner delete branch removed (empty stub written instead)',
+    file: 'src/resultsFile.ts',
+    suite: 'test/unit/persistResults.test.ts',
+    find: '  if (winners.size === 0) {\n    try {\n      await io.deleteFile();',
+    replace: '  if (false) {\n    try {\n      await io.deleteFile();',
+    killedBy: 'empty-winners test (no votes must delete the file, never write a stub)'
+  },
+  {
+    name: 'removalPlan: per-file deletion loop dropped from the delete flow',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/deleteFlow.test.ts',
+    find: '  for (const img of tuple.images) {\n    try {\n      await io.deleteFile(img);',
+    replace: '  for (const img of []) {\n    try {\n      await io.deleteFile(img);',
+    killedBy: 'flow transcript test (every rm:<file> entry must precede the removal steps)'
+  },
+  {
+    name: 'removalPlan: delete flow plans from the stale caller index, not the live one',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/deleteFlow.test.ts',
+    find: '  const liveIndex = scan.tuples.indexOf(tuple);',
+    replace: '  const liveIndex = tupleIndex;',
+    killedBy: 'live-index test (a row removed during the deletion awaits must shift the planned index)'
+  },
+  {
+    name: 'cropFlow: per-file arrivals dropped before cropComplete',
+    file: 'src/cropFlow.ts',
+    suite: 'test/unit/cropFlow.test.ts',
+    find: '  for (const s of saved) await io.arriveFile(s);',
+    replace: '  /* mutated: no arrivals */',
+    killedBy: 'canon transcript test (every arrive:<path> must precede the cropComplete post)'
+  },
+  {
+    name: 'cropFlow: cancelled batch still answers (silence gate weakened)',
+    file: 'src/cropFlow.ts',
+    suite: 'test/unit/cropFlow.test.ts',
+    find: '  if (io.isAborted?.() || cancelled > 0) return;',
+    replace: '  if (io.isAborted?.()) return;',
+    killedBy: 'cancellation test (a cancelled work unit must silence arrivals and both terminal posts)'
+  },
+  {
+    name: 'cropFlow: shared tEXt injection dropped (crop ships without its metadata)',
+    file: 'src/cropFlow.ts',
+    suite: 'test/unit/cropFlow.test.ts',
+    find: '          const withMeta = pngInjectText(Buffer.isBuffer(png) ? png : Buffer.from(png), CROP_RECT_KEYWORD, cropMeta);',
+    replace: '          const withMeta = Buffer.isBuffer(png) ? png : Buffer.from(png);',
+    killedBy: 'tEXt round-trip test (written bytes must read back the six-integer crop meta)'
+  },
+  {
+    name: 'exportDeck: comparison_NN numbering stage bypassed (fixed name saved)',
+    file: 'src/pptxDeck.ts',
+    suite: 'test/unit/exportDeck.test.ts',
+    find: '    const name = nextPptxName(await io.listExistingNames());',
+    replace: "    const name = (await io.listExistingNames(), 'comparison_01.pptx');",
+    killedBy: 'canon sequence test (comparison_05 present must save comparison_06)'
+  },
+  {
+    name: 'exportDeck: error answer dropped (a throw bricks the busy button)',
+    file: 'src/pptxDeck.ts',
+    suite: 'test/unit/exportDeck.test.ts',
+    find: "    io.post({ type: 'pptxError', error: errorMsg });",
+    replace: '    /* mutated: no error answer */',
+    killedBy: 'throw-at-each-stage test (exactly one pptxError per failing request)'
+  },
+  {
+    name: 'exportDeck: cancellation gate removed (a gone panel still answers)',
+    file: 'src/pptxDeck.ts',
+    suite: 'test/unit/exportDeck.test.ts',
+    find: '    if (io.isCancelled?.(err)) return;',
+    replace: '    if (false) return;',
+    killedBy: 'cancellation test (a cancelled save must post neither answer)'
+  },
+  {
+    name: 'imageServe: passthrough branch removed (original bytes never served)',
+    file: 'src/imageServe.ts',
+    suite: 'test/unit/imageServe.test.ts',
+    find: '      if (mime) {\n        const dims = await io.probePassthrough(raw.bytes, raw.ext);',
+    replace: '      if (false) {\n        const dims = await io.probePassthrough(raw.bytes, raw.ext);',
+    killedBy: 'passthrough test (.png must probe dims and never call convert)'
+  },
+  {
+    name: 'imageServe: payload normalization dropped (Buffer reaches the reply)',
+    file: 'src/imageServe.ts',
+    suite: 'test/unit/imageServe.test.ts',
+    find: "        reply = { kind: 'image', bytes: normalizeImageBytes(raw.bytes), mime, width: dims.width, height: dims.height };",
+    replace: "        reply = { kind: 'image', bytes: raw.bytes, mime, width: dims.width, height: dims.height };",
+    killedBy: 'passthrough test (a Buffer input must come back as a plain tight Uint8Array)'
+  },
+
+  // ── Poll planning: the suite imports the real pollPlan.ts ──
+  {
+    name: 'pollPlan: barren sweep budget dropped (a pinned mtime skips forever)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '    if (memo && memo.mtime === mtime && memo.sweeps < recheckSweeps) {',
+    replace: '    if (memo && memo.mtime === mtime) {',
+    killedBy: 'never-advancing-mtime test (after the budget is spent the dir must be re-listed)'
+  },
+  {
+    name: 'pollPlan: barren-memo mtime comparison dropped (an advanced mtime no longer re-lists)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '    if (memo && memo.mtime === mtime && memo.sweeps < recheckSweeps) {',
+    replace: '    if (memo && memo.sweeps < recheckSweeps) {',
+    killedBy: 'advanced-mtime test (a changed directory mtime must force a re-listing)'
+  },
+  {
+    name: 'pollPlan: missing fingerprint misread as a change',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '    const mtimeChanged = before.mtime !== undefined && entry.mtime !== undefined && before.mtime !== entry.mtime;',
+    replace: '    const mtimeChanged = before.mtime !== entry.mtime;',
+    killedBy: 'lazy-fingerprint test (a side missing its fingerprint must never report changed)'
+  },
+  {
+    name: 'pollPlan: name-set removal diff dropped (deletions vanish from the poll)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '  const removed = prev.filter(e => !nextNames.has(e.name)).map(e => e.name);',
+    replace: '  const removed = [];',
+    killedBy: 'name-set diff test (a name in prev but not next must be reported removed)'
+  },
+  {
+    name: 'pollPlan: an unlistable dir yields no candidates (a vanished column stops being noticed)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '  if (!listed) return { added: [], candidates: [...known] };',
+    replace: '  if (!listed) return { added: [], candidates: [] };',
+    killedBy: 'unlistable-dir test (every tracked name must fall back to its own check)'
+  },
+  {
+    name: 'pollPlan: an unlistable dir yields no candidates — through the real sweep',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '  if (!listed) return { added: [], candidates: [...known] };',
+    replace: '  if (!listed) return { added: [], candidates: [] };',
+    killedBy: 'deleted-modality-dir test (a directory that cannot be listed must still report its files gone)'
+  },
+  {
+    name: 'pollPlan: not-a-file listing entries treated as present (a dangling symlink stops being a deletion)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '  const files = listed.filter(e => e.isFile).map(e => ({ name: e.name }));',
+    replace: '  const files = listed.map(e => ({ name: e.name }));',
+    killedBy: 'not-a-file test (a listed non-file name must stay a deletion candidate)'
+  },
+  {
+    name: 'pollPlan: not-a-file listing entries treated as present — through the real sweep',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '  const files = listed.filter(e => e.isFile).map(e => ({ name: e.name }));',
+    replace: '  const files = listed.map(e => ({ name: e.name }));',
+    killedBy: 'dangling-symlink test (a link whose target went must still be reported gone)'
+  },
+  {
+    name: 'provider: sweep checks every tracked file again (the 7407-task-per-cycle flood)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '      const checks = [...candidates, ...strays].map(uri =>',
+    replace: '      const checks = [...[...knownByDir.values()].flatMap(k => [...k.values()]), ...strays].map(uri =>',
+    killedBy: 'cycle-cost test (a quiet cycle must submit one pooled task per directory, not per file)'
+  },
+  {
+    name: 'provider: listing-derived candidates dropped (deletions never reach the re-verify)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '      const candidates = (await Promise.all(dirChecks)).flat();',
+    replace: '      const candidates: vscode.Uri[] = (await Promise.all(dirChecks)) && [];',
+    killedBy: 'real-deletion test (a file that went must still be reported by the sweep)'
+  },
+  {
+    name: 'provider: files under no listed dir lose their own check',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '      const checks = [...candidates, ...strays].map(uri =>',
+    replace: '      const checks = [...candidates].map(uri =>',
+    killedBy: 'unwatched-dir test (a tracked file no listing covers must keep its per-file check)'
+  },
+  {
+    name: 'pollPlan: rename pairing guesses instead of using matchDeletedFile',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollPlan.test.ts',
+    find: '    const idx = matchDeletedFile(entries, add.dir, add.name, isMultiTuple);',
+    replace: '    const idx = entries.length > 0 ? 0 : -1;',
+    killedBy: 'ambiguity test (two same-dir removals must never pair with an add)'
+  },
+  {
+    name: 'pollPlan: idle pool snapshot logged unconditionally (an idle window logs forever)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollNoise.test.ts',
+    find: '  return busy || snapshot !== lastLogged;',
+    replace: '  return true;',
+    killedBy: 'idle-cycles test (three quiet cycles must leave exactly one pool line)'
+  },
+  {
+    name: 'pollPlan: busy pool silenced when its snapshot repeats (real load stops being visible)',
+    file: 'src/pollPlan.ts',
+    suite: 'test/unit/pollNoise.test.ts',
+    find: '  return busy || snapshot !== lastLogged;',
+    replace: '  return snapshot !== lastLogged;',
+    killedBy: 'busy-pool test (an occupied pool must print every cycle even unchanged)'
+  },
+  {
+    name: 'provider: poll never records what it logged (the idle gate can never latch)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollNoise.test.ts',
+    find: '        state.lastPoolSnapshot = snapshot;',
+    replace: '        /* mutated: last snapshot not recorded */',
+    killedBy: 'idle-cycles test (an unchanged idle snapshot must not be printed twice)'
+  },
+
+  // ── Slot-removal commit: the suite imports the real removalPlan.ts ──
+  {
+    name: 'commitSlotRemoval: empty-tuple branch inverted (an emptied tuple lingers as fileDeleted)',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '  if (tuple.images.length === 0) {\n    io.removeTuple(asTuple(tupleIndex));\n  } else {',
+    replace: '  if (false) {\n    io.removeTuple(asTuple(tupleIndex));\n  } else {',
+    killedBy: 'commit transcript test (a tuple losing its last image must removeTuple, never fileDeleted)'
+  },
+  {
+    name: 'commitSlotRemoval: column-empty follow-up dropped (a dead column survives)',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/removalPlan.test.ts',
+    find: '  if (stillIndex >= 0 && !modalityHasFiles(scan.tuples, modality)) {\n    io.removeModality(asOriginal(stillIndex));\n  }',
+    replace: '  /* mutated: no column-empty follow-up */',
+    killedBy: 'commit transcript test (the last file of a modality leaving must drop the column)'
+  },
+
+  // ── Modality adoption: the suite imports the real adoptionPlan.ts ──
+  {
+    name: 'adoptionPlan: dot-dir guard dropped (.git becomes an adoptable column)',
+    file: 'src/adoptionPlan.ts',
+    suite: 'test/unit/adoptionPlan.test.ts',
+    find: ".filter(e => e.isDirectory && !e.name.startsWith('.') && !modalities.includes(e.name))",
+    replace: '.filter(e => e.isDirectory && !modalities.includes(e.name))',
+    killedBy: 'candidate test (a dot dir must never qualify for adoption)'
+  },
+  {
+    name: 'adoptionPlan: already-a-column guard dropped (every cycle re-adopts every column)',
+    file: 'src/adoptionPlan.ts',
+    suite: 'test/unit/adoptionPlan.test.ts',
+    find: ".filter(e => e.isDirectory && !e.name.startsWith('.') && !modalities.includes(e.name))",
+    replace: ".filter(e => e.isDirectory && !e.name.startsWith('.'))",
+    killedBy: 'candidate tests (an existing modality dir must never re-qualify)'
+  },
+  {
+    name: 'adoptionPlan: imageful gate dropped (a text file makes a dir adoptable)',
+    file: 'src/adoptionPlan.ts',
+    suite: 'test/unit/adoptionPlan.test.ts',
+    find: '  return entries.filter(e => e.isFile && isImageFile(e.name)).map(e => e.name);',
+    replace: '  return entries.filter(e => e.isFile).map(e => e.name);',
+    killedBy: 'adoptableImages test (only image files count toward adoption)'
+  },
+  {
+    name: 'adoptionPlan: winner column shift dropped (votes silently move to the wrong column)',
+    file: 'src/adoptionPlan.ts',
+    suite: 'test/unit/adoptionPlan.test.ts',
+    find: '    winners.set(t, m >= insertIndex ? m + 1 : m);',
+    replace: '    winners.set(t, m);',
+    killedBy: 'winner-shift test (a winner at/after the insertion point must shift up)'
+  },
+  {
+    name: 'adoptionPlan: post-insert tuple re-sort dropped (sparse images stay in stale order)',
+    file: 'src/adoptionPlan.ts',
+    suite: 'test/unit/adoptionPlan.test.ts',
+    find: '    tuple.images.sort((a, b) => scan.modalities.indexOf(a.modality) - scan.modalities.indexOf(b.modality));',
+    replace: '    /* mutated: no post-insert re-sort */',
+    killedBy: 're-sort test (each tuple\'s images must follow the post-insert modality order)'
+  },
+  {
+    name: 'adoptionPlan: wire index pinned to 0 (the webview splices the column at the wrong slot)',
+    file: 'src/adoptionPlan.ts',
+    suite: 'test/unit/adoptionPlan.test.ts',
+    find: '      modalityIndex: asOriginal(insertIndex),',
+    replace: '      modalityIndex: asOriginal(0),',
+    killedBy: 'alphabetical-insert test (the message must carry the real global insert index)'
+  },
+
+  // ── Debug sink: diagnostics that must stay free when off (docs/loading-architecture.md: debug-off-costs-nothing) ──
+  {
+    name: 'debugLog: disabled short-circuit removed (the off path starts building messages)',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '  if (!enabled) return;\n  write(tag, build());',
+    replace: '  write(tag, build());',
+    killedBy: 'debug-off test (the message thunk must never be invoked while debug is off)'
+  },
+  {
+    name: 'debugLog: verbose gate removed (per-item firehose logs at plain debug level)',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '  if (!verbose) return;',
+    replace: '  if (false) return;',
+    killedBy: 'verbose-off test (a per-item thunk must not run without imageCompare.debugVerbose)'
+  },
+  {
+    name: 'debugLog: elapsed prefix dropped (a channel dump stops being a timeline)',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '  sink?.(`${formatElapsed(Date.now() - originMs)} ${tag} ${text}`);',
+    replace: '  sink?.(`${tag} ${text}`);',
+    killedBy: 'line-format test (every line starts with +<ms>ms since activation)'
+  },
+  {
+    name: 'debugLog: the open rollup swallows unattributed time (`other` always reads 0)',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '  const otherMs = totalMs - (scanMs + watchersMs + bootMs + initMs + toSweepMs);',
+    replace: '  const otherMs = 0;',
+    killedBy: 'other-span test (time no marked span claims must still be reported)'
+  },
+  {
+    name: 'debugLog: webview boot measured from the open, not from the html assignment',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '  const bootMs = m.readyAt - m.htmlAt;',
+    replace: '  const bootMs = m.readyAt - m.startedAt;',
+    killedBy: 'rollup-line test (each span is the difference between its own two marks)'
+  },
+  {
+    name: 'debugLog: the init payload size is dropped from the rollup',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '/${formatBytes(m.initBytes)}`',
+    replace: '/${formatBytes(0)}`',
+    killedBy: 'payload-size test (the rollup reports the bytes the init message actually serialized to)'
+  },
+  {
+    name: 'provider: the open trace is allocated with debug off (instrumentation stops being free)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: 'const marks = debugEnabled() ? beginOpenMarks(Date.now()) : undefined;',
+    replace: 'const marks = beginOpenMarks(Date.now());',
+    killedBy: 'source-shape gate (the trace exists only behind debugEnabled())'
+  },
+  {
+    name: 'provider: the open trace is never consumed (every later sweep re-emits the open rollup)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '      state.openMarks = undefined;\n      debug(\'[IC-OPEN]\'',
+    replace: '      debug(\'[IC-OPEN]\'',
+    killedBy: 'one-rollup-per-open test (a second sweep on the same panel must stay silent)'
+  },
+  {
+    name: 'provider: the html mark taken at the scan-end site (boot swallows the watchers and the panel construction)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '      if (marks) marks.htmlAt = Date.now();',
+    replace: '      if (marks) marks.htmlAt = marks.scanDoneAt;',
+    killedBy: 'html-mark placement test (unmarked panel construction must surface in `other`, not in boot)'
+  },
+  {
+    name: 'provider: the ready mark taken after the pending-debug flush (the flush migrates from `other` into boot)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: "        if (state.openMarks) state.openMarks.readyAt = Date.now();\n        state.webviewReady = true;\n        for (const msg of state.pendingDebugMessages) {\n          state.panel.webview.postMessage({ type: '_debug', msg });\n        }\n        state.pendingDebugMessages = [];",
+    replace: "        state.webviewReady = true;\n        for (const msg of state.pendingDebugMessages) {\n          state.panel.webview.postMessage({ type: '_debug', msg });\n        }\n        state.pendingDebugMessages = [];\n        if (state.openMarks) state.openMarks.readyAt = Date.now();",
+    killedBy: 'ready-mark placement test (the flush belongs to `other`; boot ends where the handler begins)'
+  },
+  {
+    name: 'provider: the sweep mark taken at the posted payload (the hand-off reads ~0 and the plan falls between the two rollups)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '      openMarks.sweepAt = timed ? sweepStart : Date.now();',
+    replace: '      openMarks.sweepAt = openMarks.initPostedAt;',
+    killedBy: 'sweep-mark placement test (the hand-off ends on the sweep own clock, config read and plan included)'
+  },
+  {
+    name: 'fileService: the scan reports stats with debug off (a payload nobody asked for)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '    stats: timed ? { files: scannedFiles, matchMs } : undefined',
+    replace: '    stats: { files: scannedFiles, matchMs }',
+    killedBy: 'debug-off scan test (a scan with debug off carries no stats at all)'
+  },
+  {
+    name: 'fileService: the rollup counts modality dirs instead of the files handed to the matcher',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '.reduce((n, files) => n + files.length, 0)',
+    replace: '.reduce((n) => n + 1, 0)',
+    killedBy: 'file-count test (6 images across 2 modality dirs, the .txt excluded)'
+  },
+  {
+    name: 'debugChannel: config-change refresh ignored (the cached flag never updates)',
+    file: 'src/debugChannel.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: "    if (e.affectsConfiguration('imageCompare')) applySettings();",
+    replace: '    if (false) applySettings();',
+    killedBy: 'runtime-toggle test (turning debug on mid-session must start logging)'
+  },
+  {
+    name: 'debugChannel: channel never disposed (the output channel outlives the extension)',
+    file: 'src/debugChannel.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '  channel?.dispose();',
+    replace: '  /* mutated: channel left open */',
+    killedBy: 'dispose test (disposing the subscription closes the ImageCompare channel)'
+  },
+  {
+    name: 'debugLog: formatBytes unit threshold moved (byte counts misreport by 2x)',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '  if (n < 1024) return `${Math.round(n)}B`;',
+    replace: '  if (n < 2048) return `${Math.round(n)}B`;',
+    killedBy: 'formatBytes test (1024 bytes reads as 1.0KB)'
+  },
+  {
+    name: 'debugLog: tier diff inverted (a sweep reports negative work)',
+    file: 'src/debugLog.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '      count: after[tier].count - before[tier].count,',
+    replace: '      count: before[tier].count - after[tier].count,',
+    killedBy: 'diffTierStats test (the delta is after minus before)'
+  },
+  {
+    name: 'thumbnailService: pack hits attributed to memory (the tier histogram lies)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbTierStats.test.ts',
+    find: "        if (timed) this.noteTier('pack', startedAt, waitedMs, packed.length, uri);",
+    replace: "        if (timed) this.noteTier('memory', startedAt, waitedMs, packed.length, uri);",
+    killedBy: 'pack-tier test (a pack-served thumbnail must count as pack)'
+  },
+  {
+    name: 'thumbnailService: shared pack wait booked as per-item work (one read printed N times)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbSharedWait.test.ts',
+    find: '    const ms = Math.max(0, Date.now() - startedAt - waitedMs);',
+    replace: '    const ms = Date.now() - startedAt;',
+    killedBy: 'concurrent-pack-hit tests (six items may not each report the one shared load)'
+  },
+  {
+    name: 'thumbnailService: the shared read is never reported (the wait vanishes instead of moving)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbSharedWait.test.ts',
+    find: '          this.packLoadStat.count++;',
+    replace: '          /* mutated: shared read unreported */',
+    killedBy: 'packLoad test (the one-off read must be counted once, with its bytes and ms)'
+  },
+  {
+    name: 'thumbnailService: verbose thumb line hides the shared wait (per-item ms reads as the whole cost)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbSharedWait.test.ts',
+    find: "${ms}ms${waitedMs > 0 ? ` +${waitedMs}ms packLoad wait` : ''}",
+    replace: '${ms}ms',
+    killedBy: 'verbose-line test (a thumb that queued behind the pack read must say so)'
+  },
+  {
+    name: 'provider: sweep rollup drops the packLoad term (the reader loses the shared read)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/thumbSharedWait.test.ts',
+    find: '${formatTierStats(tiers)} ${formatPackLoad(packLoad)} pool ',
+    replace: '${formatTierStats(tiers)} pool ',
+    killedBy: 'sweep-rollup test (the done line must carry packLoad=<n>x<ms> blocked=<callers>)'
+  },
+  {
+    name: 'fileService: a matcher log site un-gated (debug-off builds strings it throws away)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/debugLog.test.ts',
+    find: '          if (debugEnabled()) debugLog(`    candidate ref[${idx}]',
+    replace: '          debugLog(`    candidate ref[${idx}]',
+    killedBy: 'call-site gate test (every debugLog in fileService.ts sits behind debugEnabled())'
+  },
+  {
+    name: 'provider: prefetch wave can roll up mid-issue (a sparse tuple erases both wave lines)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/prefetchWave.test.ts',
+    find: '    if (!wave || wave.open || wave.done < wave.issued) return;',
+    replace: '    if (!wave || wave.done < wave.issued) return;',
+    killedBy: 'sparse-wave tests (a slot with no image settles synchronously, before issuing ends)'
+  },
+  {
+    name: 'provider: prefetch wave never closes issuing (the rollup never fires)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/prefetchWave.test.ts',
+    find: '      wave.open = false;',
+    replace: '      /* mutated: wave left open */',
+    killedBy: 'dense-wave test (the done rollup must land once every issued slot settles)'
+  },
+  {
+    name: 'transport: byte budget removed (speculation floods the wire again)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: '    return this.inFlight + bytes <= this.limitBytes;',
+    replace: '    return true;',
+    killedBy: 'in-flight bound test (peak speculative bytes must stay near one image, not the whole wave)'
+  },
+  {
+    name: 'transport: sweep-active check dropped (a wave head-of-line blocks the carousel)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: '    if (this.sweeping) return false;',
+    replace: '    /* mutated: sweep gate dropped */',
+    killedBy: 'sweep tests ([IC-SWEEP] done must report images=1, and thumbnails must land in <1.5 virtual s)'
+  },
+  {
+    name: 'transport: user-facing bypass lost in the decision (canSend can now refuse a user push)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportBudget.test.ts',
+    find: '    if (!speculative || this.limitBytes === Infinity) return true;',
+    replace: '    if (this.limitBytes === Infinity) return true;',
+    killedBy: 'never-withheld decision test (a user-facing push is allowed while sweeping and over budget)'
+  },
+  {
+    name: 'provider: user-facing pushes routed through the budget (the bypass stops being structural)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: '    if (speculative) {',
+    replace: '    if (true) {',
+    killedBy: 'never-withheld test (a mid-sweep user-facing image must reach the wire in the same turn)'
+  },
+  {
+    name: 'transport: over-budget push never sent alone (a 16MB image is stranded forever)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportBudget.test.ts',
+    find: '    if (this.inFlight === 0) return true;',
+    replace: '    /* mutated: no single-push escape */',
+    killedBy: 'whale test (a push larger than the budget must go when nothing is in flight)'
+  },
+  {
+    name: 'transport: budget applied locally too (a same-process wire gets throttled)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportBudget.test.ts',
+    find: '  if (remoteName === undefined) return Infinity;',
+    replace: '  /* mutated: local sessions bounded too */',
+    killedBy: 'local-session test (no remoteName means no bound, whatever the setting says)'
+  },
+  {
+    name: 'transport: parked pushes released newest-first (the wave delivers out of order)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportBudget.test.ts',
+    find: '    const first = this.parked.values().next();',
+    replace: '    const first = { done: this.parked.size === 0, value: [...this.parked.values()].pop() };',
+    killedBy: 'oldest-first parking test (A must be released before B)'
+  },
+  {
+    name: 'provider: prefetch pushes posted as user-facing (the policy never sees them)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: 'width, height }, true);',
+    replace: 'width, height }, false);',
+    killedBy: 'sweep + budget tests (an unclassified wave crosses the wire during the sweep)'
+  },
+  {
+    name: 'provider: sweep never claims the wire (speculation ignores the sweep)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: '    state.transport.setSweepActive(true);',
+    replace: '    /* mutated: sweep never claims the wire */',
+    killedBy: 'sweep tests (the wave crosses the channel while thumbnails wait)'
+  },
+  {
+    name: 'provider: parked pushes never released (deferred speculation is lost)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: '      this.postImage(state, next.item, true);',
+    replace: '      /* mutated: parked push dropped on release */',
+    killedBy: 'delivery test (all 42 deferred pushes must land once the sweep ends)'
+  },
+  {
+    name: 'provider: budget never released on ack (prefetch stops after one budget)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportFairness.test.ts',
+    find: '      state.transport.noteDelivered(bytes);',
+    replace: '      /* mutated: ack releases nothing */',
+    killedBy: 'delivery test (with no credit returned the wave never finishes crossing)'
+  },
+  {
+    name: 'transport: sweep claim leaks when the prologue throws (speculation parks for the panel life)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '      endSweep();\n      throw error;',
+    replace: '      throw error;',
+    killedBy: 'synchronous-throw test (the wire claim is released even when generateAllThumbnails throws)'
+  },
+  {
+    name: 'transport: sweep stall watchdog removed (one hung read parks speculation forever)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '      state.sweepIdleTimer = setTimeout(endSweep, TRANSPORT_SWEEP_IDLE_TIMEOUT_MS);',
+    replace: '      /* mutated: no stall watchdog */',
+    killedBy: 'stalled-sweep test (the wire is released and the park delivered after the idle timeout)'
+  },
+  {
+    name: 'transport: stall watchdog not re-armed by progress (it becomes a total-time cutoff)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '          armStallWatchdog();',
+    replace: '          /* mutated: watchdog never re-armed */',
+    killedBy: 'long-sweep test (a sweep still settling slots keeps the wire past the timeout)'
+  },
+  {
+    name: 'transport: park/hold not re-keyed when a row is inserted (a payload lands in another file\'s slot)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    this.reindexPendingImagePosts(state, t => (t >= insertIndex ? t + 1 : t));',
+    replace: '    /* mutated: wire posts left at stale indices */',
+    killedBy: 'tuple-insert test (parked and held posts shift up with loadedImages)'
+  },
+  {
+    name: 'transport: park/hold not re-keyed when a row is removed (stale slots survive the splice)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '        this.reindexPendingImagePosts(state, t => shiftIndexAfterRemoval(t, removed));',
+    replace: '        /* mutated: wire posts left at stale indices */',
+    killedBy: 'tuple-removal test (the removed row\'s posts are dropped, the ones behind it shift down)'
+  },
+  {
+    name: 'transport: park/hold survive a modality insert (every slot key now names another column)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    state.loadedImages.clear();\n    this.dropPendingImagePosts(state);',
+    replace: '    state.loadedImages.clear();\n    /* mutated: stale wire posts kept across a column splice */',
+    killedBy: 'modality-splice test (parked and held posts go the way loadedImages does)'
+  },
+  {
+    name: 'transport: park/hold survive a modality removal (same stale-column trap on the way out)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '        this.dropPendingImagePosts(state);',
+    replace: '        /* mutated: stale wire posts kept across a column splice */',
+    killedBy: 'modality-splice test (the removal half clears them too)'
+  },
+  {
+    name: 'transport: re-key moves the slot key but not the payload (the message keeps the old tuple)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    out.push([`${next}-${column}`, next === post.tupleIndex ? post : { ...post, tupleIndex: next } as T]);',
+    replace: '    out.push([`${next}-${column}`, post]);',
+    killedBy: 'tuple-insert test (the posted tupleIndex shifts with its key)'
+  },
+  {
+    name: 'transport: re-keying the park reverses it (oldest-first release order is lost)',
+    file: 'src/transportBudget.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    const entries = [...this.parked.values()];',
+    replace: '    const entries = [...this.parked.values()].reverse();',
+    killedBy: 'tuple-insert test (the park keeps its oldest-first order across a splice)'
+  },
+  {
+    name: 'transport: burst hold stops re-arming (only one held payload ever reaches the wire)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '      if (state.heldImagePosts.size > 0) this.scheduleBurstFlush(state, 32);',
+    replace: '      /* mutated: held payloads after the first are stranded */',
+    killedBy: 'hold-trickle test (a park released mid-scrub leaves one payload per ~32ms tick until it is empty)'
+  },
+  {
+    name: 'transport: ack watchdogs outlive the panel (a closed panel is retained for 30s)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/transportLifetime.test.ts',
+    find: '    for (const timer of state.ackWatchdogs ?? []) clearTimeout(timer);',
+    replace: '    /* mutated: ack watchdogs left armed */',
+    killedBy: 'dispose test (no transport timer is left armed after the panel closes)'
+  },
+  // ── Thumbnails on the binary wire (docs/loading-architecture.md: image-payload-normalized, thumb-url-owned-by-cache) ──
+  {
+    name: 'thumbnail wire: the post path skips normalizeImageBytes (a pack slice ships the whole packfile)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/thumbnailWire.test.ts',
+    find: '    const tight = normalizeImageBytes(bytes);',
+    replace: '    const tight = bytes;',
+    killedBy: 'pack-slice test (posted bytes must be a plain, offset-0, exactly-sized Uint8Array)'
+  },
+  {
+    name: 'thumbUrlCache: the incoming url is revoked instead of the superseded one',
+    file: 'src/webview/thumbUrlCache.ts',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    find: '    if (prev !== url) this.release(prev);',
+    replace: '    if (prev !== url) this.release(url);',
+    killedBy: 'supersede test (the url the tile just adopted must survive)'
+  },
+  {
+    name: 'thumbUrlCache: the superseded url is revoked before the successor is adopted',
+    file: 'src/webview/thumbUrlCache.ts',
+    find: '    if (adopt) adopt();\n    if (prev !== url) this.release(prev);',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    replace: '    if (prev !== url) this.release(prev);\n    if (adopt) adopt();',
+    killedBy: 'adopt-order test (revoking first kills a tile that is still loading the url)'
+  },
+  {
+    name: 'thumbUrlCache: clear() drops every url without revoking (one leaked blob per tile per re-init)',
+    file: 'src/webview/thumbUrlCache.ts',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    find: '    for (const url of this.urls.values()) this.release(url);',
+    replace: '    /* mutated: cleared without revoking */',
+    killedBy: 'delete/clear test (clear revokes exactly the object urls it drops)'
+  },
+  {
+    name: 'thumbUrlCache: a re-key that drops an entry leaks its url',
+    file: 'src/webview/thumbUrlCache.ts',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    find: '      if (moved === null) this.release(url);',
+    replace: '      if (moved === null) { /* mutated: dropped without revoking */ }',
+    killedBy: 'row-removal re-key test (the removed row\'s urls are revoked)'
+  },
+  {
+    name: 'thumbUrlCache: the shared placeholder data url is revoked like an object url',
+    file: 'src/webview/thumbUrlCache.ts',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    find: '    if (url === undefined || !isObjectUrl(url)) return;',
+    replace: '    if (url === undefined) return;',
+    killedBy: 'placeholder test (a data url is stored but never revoked)'
+  },
+  {
+    name: 'thumbUrlCache: the empty-slot tile src is empty (a recycled tile keeps the broken-image glyph)',
+    file: 'src/webview/thumbUrlCache.ts',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    find: "  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4AWMAAQAABQABNtCI3QAAAABJRU5ErkJggg==';",
+    replace: "  '';",
+    killedBy: 'blank-tile test (an empty slot\'s tile must hold a decodable 1x1 transparent png)'
+  },
+  {
+    name: 'thumbUrlCache: the blank tile png is opaque black (every not-yet-loaded tile is tinted)',
+    file: 'src/webview/thumbUrlCache.ts',
+    suite: 'test/unit/thumbUrlCache.test.ts',
+    find: "  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4AWMAAQAABQABNtCI3QAAAABJRU5ErkJggg==';",
+    replace: "  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWMAgv8AAQQBAP8H9UQAAAAASUVORK5CYII=';",
+    killedBy: 'blank-tile test (the one pixel must be fully transparent)'
+  },
+  {
+    name: 'thumbnailService: tier accounting runs with debug off (diagnostics stop being free)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbTierStats.test.ts',
+    find: '    const timed = debugEnabled();',
+    replace: '    const timed = true;',
+    killedBy: 'debug-off test (no counter moves while imageCompare.debug is off)'
+  },
+
+  // ── Tuple load scheduling: the arrival policy, its ordering, and who cancels what ──
+  {
+    name: 'tupleLoad: dwell gate removed (arrival asks for the whole tuple again)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: '  return { now, afterDwell: siblingLoadPlan(input) };',
+    replace: '  return { now: [...now, ...siblingLoadPlan(input)], afterDwell: [] };',
+    killedBy: 'arrival test (a navigation requests exactly the on-screen modality)'
+  },
+  {
+    name: 'tupleLoad: sibling distance ordering reversed (farthest modality first)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: '.sort((a, b) => Math.abs(a.step - here) - Math.abs(b.step - here) || b.step - a.step);',
+    replace: '.sort((a, b) => Math.abs(b.step - here) - Math.abs(a.step - here) || b.step - a.step);',
+    killedBy: 'nearest-first test (the modality `->` reaches must arrive first)'
+  },
+  {
+    name: 'tupleLoad: siblings ordered by raw modality id, not display distance',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: '.sort((a, b) => Math.abs(a.step - here) - Math.abs(b.step - here) || b.step - a.step);',
+    replace: '.sort((a, b) => modalityOrder[a.display] - modalityOrder[b.display]);',
+    killedBy: 'display-order test (a rearranged column set must not fall back to id order)'
+  },
+  {
+    name: 'tupleLoad: hidden modalities speculated on like any other',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: '    if (d === currentDisplayIndex || !isHidden(modalityOrder[d])) reachable.push(d);',
+    replace: '    reachable.push(d);',
+    killedBy: 'hidden-skip test (a hidden pill is neither a target nor a step)'
+  },
+  {
+    name: 'tupleLoad: nearest-two split removed (every sibling rides SIBLING)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: '    rank: i < NEAREST_SIBLINGS ? \'sibling\' : \'tail\'',
+    replace: '    rank: \'sibling\' as const',
+    killedBy: 'split test (only the nearest two rank above the tail, however wide the tuple)'
+  },
+  {
+    name: 'tupleLoad: an outstanding request suppresses every re-ask (no rank upgrade)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: '  return posted !== undefined && RANK_ORDER[posted] >= RANK_ORDER[wanted];',
+    replace: '  return posted !== undefined;',
+    killedBy: 'rank-upgrade test (a slot queued at tail must be re-asked when it goes on screen)'
+  },
+  {
+    name: 'tupleLoad: the rank ladder is flat (tail counts as high as visible)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: "const RANK_ORDER: Record<SlotRank, number> = { visible: 2, sibling: 1, tail: 0 };",
+    replace: "const RANK_ORDER: Record<SlotRank, number> = { visible: 0, sibling: 0, tail: 0 };",
+    killedBy: 'rank-upgrade test (visible outranks sibling outranks tail)'
+  },
+  {
+    name: 'workPool: the sibling tail competes with the sweep (fair share instead of strictly last)',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/workPool.test.ts',
+    find: '    if (p === Priority.SIBLING_TAIL && this.anyQueuedElsewhere(p)) return false;',
+    replace: '    /* mutated: the tail takes its fair share of speculative slots */',
+    killedBy: 'Test 18 (the sweep keeps every speculative slot while it has queue)'
+  },
+  {
+    name: 'provider: the tail flag is ignored (tail loads queue at SIBLING)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/tupleLoadScheduling.test.ts',
+    find: '          message.tail ? Priority.SIBLING_TAIL : message.sibling ? Priority.SIBLING : Priority.VISIBLE,',
+    replace: '          message.sibling ? Priority.SIBLING : Priority.VISIBLE,',
+    killedBy: 'tail-class test (tail requests queue in their own class, never as siblings)'
+  },
+  {
+    name: 'provider: image loads keyed by panel again (nothing to cancel per tuple)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/tupleLoadScheduling.test.ts',
+    find: '      await this.pool.submit(() => serveImage(imageFile, io, deliver), { priority, key: loadKey });',
+    replace: '      await this.pool.submit(() => serveImage(imageFile, io, deliver), { priority, key: state.poolKey });',
+    killedBy: 'browse test (only the current tuple stays queued after six navigations)'
+  },
+  {
+    name: 'provider: navigating away cancels nothing',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/tupleLoadScheduling.test.ts',
+    find: '        this.cancelImageLoads(state, message.tupleIndex);',
+    replace: '        /* mutated: the tuple left behind keeps its queued loads */',
+    killedBy: 'browse test (the tuple you left must not keep nine queued reads)'
+  },
+  {
+    name: 'provider: dispose leaves per-tuple loads queued',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/tupleLoadScheduling.test.ts',
+    find: '    this.cancelImageLoads(state); // per-tuple keys outlive poolKey',
+    replace: '    /* mutated: only poolKey is cancelled */ // per-tuple keys outlive poolKey',
+    killedBy: 'dispose test (a closed panel leaves nothing queued)'
   }
 ];
 

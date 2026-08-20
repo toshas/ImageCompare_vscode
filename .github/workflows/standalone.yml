@@ -1,0 +1,52 @@
+name: Standalone
+
+# Regenerates the single-file standalone comparer from the extension's own code on every main push
+# and publishes it to toshas/ImageCompare_standalone (docs/standalone.md). The push step is a no-op
+# until the STANDALONE_DEPLOY_KEY secret (a deploy key with write access on the artifact repo) is
+# configured; the built page is always uploaded as a run artifact regardless.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm run build:standalone
+      - uses: actions/upload-artifact@v6
+        with:
+          name: standalone-html
+          path: dist/standalone/image_compare.html
+      - name: Push to the artifact repository
+        env:
+          DEPLOY_KEY: ${{ secrets.STANDALONE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::notice::STANDALONE_DEPLOY_KEY not configured - built page uploaded as artifact only."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/standalone_deploy
+          chmod 600 ~/.ssh/standalone_deploy
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/standalone_deploy -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:toshas/ImageCompare_standalone.git artifact-repo
+          cp dist/standalone/image_compare.html artifact-repo/image_compare.html
+          cp standalone/README.artifact.md artifact-repo/README.md
+          cd artifact-repo
+          git add image_compare.html README.md
+          if git diff --cached --quiet; then
+            echo "Artifact unchanged - nothing to push."
+            exit 0
+          fi
+          git -c user.name="ImageCompare CI" -c user.email="actions@github.com" \
+            commit -m "Regenerate from toshas/ImageCompare_vscode@${GITHUB_SHA}"
+          git push

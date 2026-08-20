@@ -254,6 +254,7 @@ test('crop', async ({ page }) => {
   // the FIRST saved file posts a sparse tupleAdded (only its own modality named), each further file
   // posts fileRestored with imageInfo, then cropComplete; thumbnails land after that synchronous
   // batch (async pool), and full images only ever arrive on webview request after navigation.
+  // Canon sequence for all three producers (docs/crop-and-pptx.md: post-crop-message-order).
   const cropName = `${PHOTO_TUPLES[cropMsg.tupleIndex]}_crop01`;
   const insertIndex = tupleInsertIndex(PHOTO_TUPLES, cropName);
   await page.evaluate((m) => (window as any).__ic_send(m), {
