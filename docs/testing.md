@@ -471,6 +471,33 @@ the fix, the docs, and the CI check.
   cancellations settling instead of re-dispatching), with six mutations in
   `scripts/mutation-check.mjs`.
 
+- **A closed panel's sweep read the rest of the grid, and a non-idempotent `centre()` livelocked the
+  pump** *(fixed, one round — both were `pump()` mishandling host state)* — after a dispose (or a
+  standalone re-open) the host cancelled the sweep's queue and every settle came back `null`, but
+  `pump()` kept pulling from the cursor and dispatching: on the maintainer's remote NFS sessions,
+  746×10 warm from the pack was ~34.4 MB and ~21 s of pool time after the close, and a cold 115×9
+  closed a minute in left ~5 more minutes of reads running behind a window that was gone. Measured
+  on the pure runner over a real `WorkPool` (120×4 grid, width 5): **448 of 480 slots read after the
+  close, now 0**; on the real provider (30×2 at the field's pool width, where dispose cancels the 28
+  queued dispatches itself) **28 further reads after the dispose, now 0**. Fixed by a second host predicate beside `centre` — `abandoned()`, `state.disposed` /
+  `s.closed` — that stops the pump at a batch boundary, plus the two exits that keep an early stop
+  from hanging the sweep promise (docs/loading-architecture.md: sweep-stops-when-host-abandons; the
+  coverage invariant `sweep-covers-every-slot-once` now says out loud that coverage holds for a
+  *live* host only). The second defect was latent: `pump()` read `centre()` inside its `while`, so a
+  centre computed on read (the backlogged viewport-derived one) both dropped the slots the same pass
+  had just dispatched and turned every requeue-settle into a fresh drop — a microtask cascade that
+  never yields, reproduced as `timeout 25 node` → exit 124 with only 4 reads ever started. The
+  one-line hoist the backlog proposed is **not sufficient** — measured, not assumed: hoisted-only
+  still hung (exit 124). The requeue must also decline to re-aim (`pump(requeued ? aimed :
+  centre())`), after which the same grid finishes in 83 ms with every slot delivered once
+  (docs/loading-architecture.md: sweep-aims-once-per-pass). Guarded by
+  `test/unit/sweepAbandon.test.ts` (reads counted across the close, the sweep promise resolving, the
+  abandon path held apart from the re-aim path), `test/unit/sweepAim.test.ts` (the first chunk as one
+  centre-out band on one centre read; a livelock case that trips a `dropQueued` circuit breaker
+  instead of hanging the runner), `test/unit/sweepReaimCancel.test.ts` (the real provider's dispose)
+  and `test/unit/transportLifetime.test.ts` (exactly one `[IC-SWEEP] done`, the wire claim released,
+  nothing left parked), with five mutations in `scripts/mutation-check.mjs`.
+
 - **The open scanned the modality directories one at a time** *(fixed)* — found in the field on a
   remote/NFS session: three opens logged `scan=2431ms/7398f` over 11 dirs, `3890ms/1390f` over 11,
   and `3640ms/984f` over 10 — 7x fewer files taking 50% *longer*: 221 ms per directory warm against

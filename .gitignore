@@ -41,3 +41,6 @@ test/dashboard/results/
 
 # Local list of terms the pre-commit guard blocks — personal, never versioned
 .words-to-check.txt
+
+# Overnight run notes — local scratch, read then delete
+NIGHT-RUN-NOTES.md

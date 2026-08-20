@@ -592,9 +592,49 @@ const mutations = [
     name: 'sweep: a re-aim leaves the queued dispatches alone (the 28-deep old-centre lag is back)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '        if (outstanding > 0) io.dropQueued?.();',
+    find: '      if (outstanding > 0) io.dropQueued?.();',
     replace: '        /* mutated: the queue is never dropped on re-aim */',
     killedBy: 'cancel-on-re-aim test (the new centre must be served after one running batch, not 28 tiles later)'
+  },
+  {
+    name: 'sweep: the early stop removed (a closed panel is swept to completion again)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepAbandon.test.ts',
+    find: '    if (abandoned()) return;',
+    replace: '    /* mutated: a dead host keeps being read for */',
+    killedBy: 'abandon tests (no thumbnail read may START after the host is gone)'
+  },
+  {
+    name: 'sweep: an abandoned sweep has no exit (the promise hangs and the wire claim with it)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepAbandon.test.ts',
+    find: '    if (outstanding === 0 && (cursor.remaining === 0 || abandoned())) resolveSweep();',
+    replace: '    if (outstanding === 0 && cursor.remaining === 0) resolveSweep();',
+    killedBy: 'abandon tests (the sweep promise must resolve with slots still in the cursor)'
+  },
+  {
+    name: 'sweep: the centre re-read per dispatch (one pass no longer aims at one centre)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepAim.test.ts',
+    find: '      const item = cursor.next(aim);',
+    replace: '      aim = centre();\n      if (aim !== aimed) { aimed = aim; if (outstanding > 0) io.dropQueued?.(); }\n      const item = cursor.next(aim);',
+    killedBy: 'first-chunk band test (a chunk dispatched as one centre-out band, on one centre read)'
+  },
+  {
+    name: 'sweep: a requeue takes a fresh centre reading (the drop\'s own fallout re-triggers the drop)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepAim.test.ts',
+    find: '      pump(requeued ? aimed : centre());',
+    replace: '      pump(centre());',
+    killedBy: 'livelock test (a centre that moves on every read must not stall the pump in a microtask cascade)'
+  },
+  {
+    name: 'provider: the sweep is never told its panel is gone (the dead-panel read storm is back)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepReaimCancel.test.ts',
+    find: '        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }',
+    replace: '        { centre: () => state.currentTupleIndex }',
+    killedBy: 'dispose test (a disposed panel reads not one more thumbnail)'
   },
   {
     name: 'sweep: a dropped slot is never returned to the cursor (permanently blank tiles)',
@@ -629,27 +669,27 @@ const mutations = [
     killedBy: 'key-scope test (a queued poll task on poolKey survives a re-aim)'
   },
   {
-    name: 'provider: a disposed panel\'s cancellations returned to the cursor (a dead panel keeps reading)',
+    name: 'provider: the disposed/live cancellation discriminator inverted (a live panel loses every dropped slot)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepReaimCancel.test.ts',
     find: '                if (error instanceof TaskCancelled) return state.disposed ? null : SWEEP_REQUEUE;',
-    replace: '                if (error instanceof TaskCancelled) return SWEEP_REQUEUE;',
-    killedBy: 'dispose test (the slots dispose cancelled must not be re-dispatched)'
+    replace: '                if (error instanceof TaskCancelled) return state.disposed ? SWEEP_REQUEUE : null;',
+    killedBy: 're-aim test (every one of the 60 slots is still delivered after the jump dropped 28)'
   },
   {
     name: 'provider: sweep given no centre (thumbnails fill top-to-bottom wherever the user is)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '        { centre: () => state.currentTupleIndex }',
-    replace: '        {}',
+    find: '        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }',
+    replace: '        { abandoned: () => state.disposed }',
     killedBy: 'provider order test (the sweep starts at the row the panel opened on)'
   },
   {
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '        { centre: () => state.currentTupleIndex }',
-    replace: '        { centre: ((pinned: number) => () => pinned)(state.currentTupleIndex) }',
+    find: '        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }',
+    replace: '        { centre: ((pinned: number) => () => pinned)(state.currentTupleIndex), abandoned: () => state.disposed }',
     killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
   },
   {

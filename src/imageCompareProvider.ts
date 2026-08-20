@@ -916,8 +916,9 @@ ${lead}
   /**
    * One-shot open-time sweep of every slot, dispatched outward from the current tuple. Not
    * visibility-gated: every slot is swept, so skipping one leaves a blank thumbnail for the
-   * session. Queued dispatches are cancelled on re-aim and returned to the cursor, never dropped
-   * (docs/loading-architecture.md: sweep-covers-every-slot-once).
+   * session. Queued dispatches are cancelled on re-aim and returned to the cursor, never dropped;
+   * a dispose abandons the rest instead (docs/loading-architecture.md: sweep-covers-every-slot-once,
+   * sweep-stops-when-host-abandons).
    */
   private generateAllThumbnails(state: PanelState): void {
     const config = vscode.workspace.getConfiguration('imageCompare');
@@ -1028,8 +1029,8 @@ ${lead}
             this.sendThumbnailMessage(state, slot.tupleIndex, slot.modalityIndex, msg.bytes, msg.mime);
           } else this.sendThumbnailErrorMessage(state, slot.tupleIndex, slot.modalityIndex, msg.error);
         },
-        // The host supplies only where the user is; the ordering it implies is the shared module's (docs/loading-architecture.md: thumbnails-centre-out).
-        { centre: () => state.currentTupleIndex }
+        // The host supplies only where the user is and whether it is still there; both orderings are the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons).
+        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }
       );
     } catch (error) {
       // The prologue posts before it returns a promise, so a synchronous throw would strand the claim.

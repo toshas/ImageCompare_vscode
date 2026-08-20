@@ -174,6 +174,8 @@ function generateAllThumbnails(s: StandaloneState): Promise<void> {
   }, post, {
     // The host supplies only where the user is; the ordering it implies is the shared module's (docs/loading-architecture.md: thumbnails-centre-out).
     centre: () => s.currentTupleIndex,
+    // A re-opened root abandons this session's sweep: the rest of the grid is never decoded (docs/loading-architecture.md: sweep-stops-when-host-abandons).
+    abandoned: () => s.closed === true,
   });
 }
 

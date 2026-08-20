@@ -2,8 +2,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { Uri, __resetConfig, __setConfig, __setRemoteName } from '../mocks/vscode';
+import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, __setRemoteName } from '../mocks/vscode';
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 
 // Lifetime half of the transport policy, on the REAL provider: the sweep flag parks every
@@ -55,6 +56,8 @@ interface RigOptions {
   holdAcks?: boolean;
   /** Budget in MB; the default is the shipped 8. */
   budgetMB?: number;
+  /** Rows in the grid; over 11 the sweep's plan outgrows one SWEEP_CHUNK, which is what an early stop can be seen against. */
+  tuples?: number;
 }
 
 interface Rig {
@@ -91,10 +94,11 @@ function makeRig(opts: RigOptions = {}): Rig {
       pack: { count: 0, ms: 0, bytes: 0 },
       disk: { count: 0, ms: 0, bytes: 0 },
       generated: { count: 0, ms: 0, bytes: 0 }
-    })
+    }),
+    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
   };
 
-  const tuples = Array.from({ length: TUPLES }, (_, t) => ({
+  const tuples = Array.from({ length: opts.tuples ?? TUPLES }, (_, t) => ({
     name: `frame${String(t).padStart(2, '0')}`,
     images: MODALITIES
       .filter(m => !(opts.missingSlot && t === 0 && m === 'baseline'))
@@ -214,6 +218,48 @@ describe('the sweep never keeps the wire past its own life', () => {
     expect(rig.state.transport.sweepActive).toBe(false);
     expect(rig.state.transport.deferredCount).toBe(0);
     expect(rig.imagePosts().length).toBe(1);
+  });
+
+  it('ends once when a dispose abandons it: one rollup, the claim released, nothing left parked', async () => {
+    __setRemoteName('ssh-remote');
+    __setConfig('prefetchCount', 3);
+    // The `[IC-SWEEP] done` rollup is what marks the sweep promise as having settled; a sweep that
+    // never resolves logs none, and one that ends twice logs two.
+    __setConfig('debug', true);
+    __resetChannels();
+    disposeDebugLog();
+    initDebugLog();
+    try {
+      // 20 rows x 3 modalities = 60 slots, comfortably more than one SWEEP_CHUNK.
+      const rig = makeRig({ hangThumbnails: true, tuples: 20 });
+      rig.provider.generateAllThumbnails(rig.state);
+      await settle();
+      park(rig, [[CENTER + 1, 0]]);
+      expect(rig.state.transport.sweepActive).toBe(true);
+      expect(rig.state.transport.deferredCount).toBe(1);
+      const startedAtDispose = rig.thumbResolvers.length;
+
+      rig.provider.disposePanel(rig.state, []);
+      await settle();
+      // Only the reads already running are left to finish; nothing is dispatched behind them.
+      let guard = 0;
+      let released = 0;
+      while (rig.thumbResolvers.length && guard++ < 200) {
+        let resolve;
+        while ((resolve = rig.thumbResolvers.shift())) { resolve(Buffer.alloc(4)); released++; }
+        await settle(4);
+      }
+
+      expect(released).toBe(startedAtDispose);
+      expect(rig.thumbResolvers.length).toBe(0);
+      expect(__channelLines('ImageCompare').filter(l => l.includes('[IC-SWEEP] done'))).toHaveLength(1);
+      expect(rig.state.transport.sweepActive).toBe(false);
+      expect(rig.state.transport.deferredCount).toBe(0);
+      expect(rig.state.heldImagePosts.size).toBe(0);
+    } finally {
+      disposeDebugLog();
+      __resetChannels();
+    }
   });
 
   it('does not cut short a sweep that is still settling slots', async () => {

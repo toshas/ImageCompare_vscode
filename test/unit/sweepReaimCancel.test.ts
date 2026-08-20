@@ -200,6 +200,28 @@ describe('a re-aimed provider sweep drops the work it has already queued', () =>
     expect(new Set(slots).size).toBe(TUPLES * MODALITIES.length);
   });
 
+  it('stops reading the grid the moment the panel is disposed, instead of sweeping it for a dead window', async () => {
+    const rig = makeRig();
+    rig.provider.generateAllThumbnails(rig.state);
+    await settle();
+    expect(rig.asked.length).toBe(BULK_SLOTS);
+
+    // The user closes the comparison with 4 reads running and 28 queued behind them.
+    rig.provider.disposePanel(rig.state, []);
+    const readsAtDispose = rig.asked.length;
+    await settle(10);
+    let guard = 0;
+    while (rig.resolvers.length && guard++ < 500) await releaseBatch(rig);
+    await settle(20);
+
+    // Not one more read: the remaining 56 slots stay in the cursor, unread and unrequested. Before
+    // this, every one of them was read — ~5 minutes of NFS traffic behind a window that is gone.
+    expect(rig.asked.length - readsAtDispose).toBe(0);
+    expect(rig.asked.length).toBe(BULK_SLOTS);
+    expect((rig.provider as any).pool.pending).toBe(0);
+    expect((rig.provider as any).pool.running).toBe(0);
+  });
+
   it('settles a disposed panel\'s cancellations instead of returning them to the cursor forever', async () => {
     const rig = makeRig();
     rig.provider.generateAllThumbnails(rig.state);

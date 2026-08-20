@@ -284,6 +284,14 @@ blank for the life of the panel.
 
 ### The sweep is centre-out, and fed to the pool in chunks
 
+The centre is the tuple the user has **selected**, not where the carousel is scrolled to. Scrolling
+somewhere unloaded therefore prioritises nothing until a click lands there. That is a decision, not
+an omission: the maintainer was offered a viewport-derived centre (the webview reporting its visible
+row range) and declined it — *"click-first behavior will not annoy, scrolling alone should not alter
+the behavior"* — once cancel-on-re-aim had cut post-click latency from ~13 s to ~1.6 s. Anyone
+tempted to wire a computed centre in later should read `sweep-aims-once-per-pass` first: a `centre()`
+that returns a fresh value on every call is exactly the shape that used to livelock the pump.
+
 Scanline order is fine at 90 slots and wrong at 7 460. A field log of a 746×10 session on remote SSH
 over NFS: `[IC-SWEEP] start slots=7460 items=7398 missing=62`, then `[IC-POOL] sweeping 2022ms …
 queued=[0,0,0,0,0,7293,0,4]`, then `[IC-SWEEP] done 21184ms … pack=7398/34.4MB disk=0 generated=0`.
@@ -419,6 +427,34 @@ queue would outlive them. And the host must distinguish *its own* cancellation f
 `PanelState.disposed` (and the adapter's `closed`, set before the re-open cancel so the rejections it
 delivers read it) means "settle silently", anything else means "put it back". Get that backwards and
 a dead panel's sweep re-dispatches forever.
+
+### Stopping when the host is gone
+
+Settling those slots silently kept the sweep *terminating*; it did not stop it *working*. Until the
+early stop landed, `pump()` went on pulling from the cursor and dispatching after a dispose, so the
+whole remaining grid was read for a window nobody was watching: on the maintainer's remote NFS
+sessions, 746×10 warm from the pack was ~34.4 MB and ~21 s of pool time after the close, and a 115×9
+genuinely cold comparison closed a minute in left ~5 more minutes of reads and decodes running —
+competing with whatever the user opened next, which is usually why the first one was closed.
+
+So the runner takes a second host predicate beside `centre`: `abandoned()` — `state.disposed` for the
+provider, `s.closed` for the adapter, the same flags the `TaskCancelled` mapping already reads. A
+`pump()` that sees it returns before dispatching, which stops the sweep at a **batch boundary**
+rather than mid-dispatch: whatever the pool had already started finishes and settles normally, and
+whatever the cursor still holds is simply never handed out. That is the abandon path, and it is the
+exact opposite of the re-aim path on the same `pool.cancel`: a re-aim *returns* its dropped slots
+(`putBack`) and hands them out again, an abandon keeps them. The cursor's consume-once property is
+what makes abandoning safe — an item that was handed out and never returned is gone, which is right
+for a panel that no longer exists and would be a permanently blank tile for one that does.
+
+Termination is the whole trap, and three things have to stay true. The sweep must still **resolve**:
+`outstanding === 0` with slots left in the cursor is now an exit, and a host already gone when the
+sweep starts dispatches nothing at all, so the initial `pump()` resolves it directly — without that
+line no settle ever fires and the promise hangs, taking `endSweep` with it. The wire claim must still
+be released exactly once, which it is, because `endSweep` is reached the same way it always was, off
+the sweep promise (`speculation-yields-the-wire`). And the grid is genuinely **not covered** after an
+early stop; the progress bar stops below `total` and no terminal tick is posted, which is correct —
+the panel is gone, and in the standalone a terminal tick would land on the *next* session's bar.
 
 ### Thumbnails ship as bytes, and the webview owns their urls
 
@@ -854,9 +890,13 @@ mount latency — but the same shape applies, so neither product can quietly div
   host feeds it (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that stops passing its
   live current tuple silently restores the 746×10 pathology, since the sweep still works, just in
   the order the user is least likely to want.
-- **`sweep-covers-every-slot-once`** — re-centring is an ordering change and nothing else: every
-  planned slot is **delivered and counted exactly once**, however often the centre moves and whenever
-  it moves, and the tail is still swept when the user stops navigating. This is
+- **`sweep-covers-every-slot-once`** — re-centring is an ordering change and nothing else: for a
+  host that is still there, every planned slot is **delivered and counted exactly once**, however
+  often the centre moves and whenever it moves, and the tail is still swept when the user stops
+  navigating. Coverage is conditional on that host, and on nothing else: once it abandons the sweep
+  (`sweep-stops-when-host-abandons`) the grid is deliberately left uncovered and the bar deliberately
+  short of `total` — no slot is ever delivered twice, but the ones the cursor still held are never
+  delivered at all. Nothing may weaken the guarantee for a *live* host. This is
   the property that made the sweep blind in the first place — nothing re-enqueues a slot the sweep
   drops, so a lost slot is blank for the life of the panel, and a duplicated one is a wasted decode
   plus a second post for a tile already shown. The cursor is what enforces it (an item is `shift`ed
@@ -873,8 +913,32 @@ mount latency — but the same shape applies, so neither product can quietly div
   the sweep alone* (`${poolKey}-sweep`), or a jump also cancels the panel's queued export and poll
   work; that key must therefore be cancelled on dispose/re-open as well, or the sweep's queue outlives
   its panel. And a cancellation the host itself caused (`disposed`/`closed`) settles the slot
-  silently, while any other one returns it to the cursor — swap those and a dead panel's sweep
-  re-dispatches forever, or a live panel loses every dropped slot.
+  silently, while any other one returns it to the cursor — invert that and a live panel loses every
+  dropped slot. The dead-panel direction is now belt-and-braces: the early stop
+  (`sweep-stops-when-host-abandons`) already prevents the re-dispatch loop that half existed for, so
+  only the live direction is still observable, and only that half is mutation-pinned.
+- **`sweep-stops-when-host-abandons`** — once the host reports the sweep abandoned (the provider's
+  disposed panel, the adapter's re-opened root) the pump dispatches nothing more: the rest of the
+  grid stays in the cursor instead of being read for a window that is gone, and the sweep ends at the
+  batch boundary the pool is already past. Two halves, and each fails in its own direction. Without
+  the stop it is pure waste — ~5 minutes of cold NFS reads behind a closed comparison, competing with
+  whatever the user opened instead. Without the matching **exit** it is a hang: an abandoned sweep
+  leaves `cursor.remaining > 0` forever, so `outstanding === 0` has to resolve it too, and a host
+  already gone at sweep start never dispatches at all, so the initial pump must resolve it directly
+  — otherwise `endSweep` never runs and the wire claim is held for the life of the extension host
+  (`speculation-yields-the-wire`). Five sites: the stop and both exits in `thumbnailPlan.ts`, and the
+  flag each host feeds it (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that stops
+  feeding it silently restores the waste, since the sweep still works.
+- **`sweep-aims-once-per-pass`** — one pump pass aims at one centre, and a requeue re-uses the aim it
+  was dropped *for* rather than taking a fresh reading. Both hosts pass a plain field today, so
+  neither half can be observed to matter in production — this is a guard on the seam, not on current
+  behaviour, and it is here because the shape that breaks it (a viewport-derived centre computed on
+  read, scroll offset → row) is a backlogged feature. A centre that returns a different value on
+  every call makes an in-loop read drop the slots the very same pass just handed out, and makes every
+  requeue-settle buy another drop, which produces more requeue-settles: a self-sustaining microtask
+  cascade that never yields, so only the pool's running batch ever starts and no timer ever fires
+  again. Verified, not assumed — the hoist alone does not stop it; the requeue must decline to
+  re-aim as well.
 - **`sweep-dispatch-bounded`** — the sweep keeps at most `SWEEP_CHUNK` (32) dispatches outstanding
   and refills on every settle, rather than handing the pool the whole grid. Both halves are
   load-bearing: the bound is what keeps re-centring *cheap* (the pool never re-orders or promotes a

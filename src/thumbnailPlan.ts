@@ -53,8 +53,10 @@ export interface ThumbnailSweepIo<T> {
 export const SWEEP_CHUNK = 32;
 
 export interface ThumbnailSweepOptions {
-  /** Where the user is now, as a tuple index; read at every dispatch, so a jump re-aims the remaining work (docs/loading-architecture.md: thumbnails-centre-out). */
+  /** Where the user is now, as a tuple index; read once per pump pass, so a jump re-aims the remaining work (docs/loading-architecture.md: thumbnails-centre-out, sweep-aims-once-per-pass). */
   centre?: () => number;
+  /** True once the host has abandoned this sweep — panel disposed, session re-opened; the pump then stops at the batch boundary and the cursor keeps the rest (docs/loading-architecture.md: sweep-stops-when-host-abandons). */
+  abandoned?: () => boolean;
   /** Dispatch bound; defaults to SWEEP_CHUNK (docs/loading-architecture.md: sweep-dispatch-bounded). */
   chunk?: number;
 }
@@ -119,7 +121,7 @@ export class SweepCursor<T> {
   }
 }
 
-/** Run the sweep: missing-slot errors first, then items dispatched centre-out, at most `chunk` outstanding and refilled per settle, each settle posting its result and a progress tick (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded). */
+/** Run the sweep: missing-slot errors first, then items dispatched centre-out, at most `chunk` outstanding and refilled per settle, each settle posting its result and a progress tick; an abandoned host ends it early with the grid uncovered (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded, sweep-stops-when-host-abandons). */
 export function runThumbnailSweep<T extends { modality: string }>(
   plan: ThumbnailPlan<T>,
   io: ThumbnailSweepIo<T>,
@@ -138,6 +140,8 @@ export function runThumbnailSweep<T extends { modality: string }>(
 
   // No centre supplied is a centre pinned at 0 — scanline order, the old behaviour (docs/loading-architecture.md: thumbnails-centre-out).
   const centre = options.centre ?? (() => 0);
+  // A host that never abandons is the old behaviour: the sweep runs to full coverage (docs/loading-architecture.md: sweep-stops-when-host-abandons).
+  const abandoned = options.abandoned ?? (() => false);
   const chunk = Math.max(1, options.chunk ?? SWEEP_CHUNK);
   const cursor = new SweepCursor(plan.items);
   let done = 0;
@@ -158,12 +162,14 @@ export function runThumbnailSweep<T extends { modality: string }>(
     }
     outstanding--;
     try {
-      pump();
+      // A requeue re-uses the aim it was dropped for; re-reading here lets a drop's own fallout buy another drop, forever (docs/loading-architecture.md: sweep-aims-once-per-pass).
+      pump(requeued ? aimed : centre());
     } catch (error) {
       rejectSweep(error);
       return;
     }
-    if (outstanding === 0 && cursor.remaining === 0) resolveSweep();
+    // An abandoned sweep leaves slots in the cursor, so the last outstanding settle is its exit (docs/loading-architecture.md: sweep-stops-when-host-abandons).
+    if (outstanding === 0 && (cursor.remaining === 0 || abandoned())) resolveSweep();
   };
 
   const dispatch = (item: ThumbnailSlot & { image: T }): void => {
@@ -195,20 +201,24 @@ export function runThumbnailSweep<T extends { modality: string }>(
   };
 
   // Refilled on every settle, so the pool always has queued work behind its running slots (docs/loading-architecture.md: sweep-dispatch-bounded).
-  function pump(): void {
+  function pump(aim: number): void {
+    // Nobody is watching: the rest of the grid stays in the cursor instead of being read for a window that is gone (docs/loading-architecture.md: sweep-stops-when-host-abandons).
+    if (abandoned()) return;
+    // The outstanding dispatches ARE the lag: drop the ones that never started so the new centre is next (docs/loading-architecture.md: sweep-cancels-on-reaim).
+    if (aim !== aimed) {
+      aimed = aim;
+      if (outstanding > 0) io.dropQueued?.();
+    }
+    // One pass, one aim: a centre re-read per dispatch drops the slots this very pass just handed out (docs/loading-architecture.md: sweep-aims-once-per-pass).
     while (outstanding < chunk) {
-      const aim = centre();
-      // The outstanding dispatches ARE the lag: drop the ones that never started so the new centre is next (docs/loading-architecture.md: sweep-cancels-on-reaim).
-      if (aim !== aimed) {
-        aimed = aim;
-        if (outstanding > 0) io.dropQueued?.();
-      }
       const item = cursor.next(aim);
       if (!item) return;
       dispatch(item);
     }
   }
 
-  pump();
+  pump(centre());
+  // A host already gone at sweep start dispatches nothing, so no settle can ever fire: this is then the only exit (docs/loading-architecture.md: sweep-stops-when-host-abandons).
+  if (outstanding === 0) resolveSweep();
   return finished;
 }

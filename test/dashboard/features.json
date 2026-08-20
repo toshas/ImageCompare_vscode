@@ -1329,6 +1329,10 @@
             {
               "suite": "unit",
               "match": "does not cut short a sweep that is still settling slots"
+            },
+            {
+              "suite": "unit",
+              "match": "ends once when a dispose abandons it"
             }
           ]
         },
@@ -1570,12 +1574,20 @@
             {
               "suite": "unit",
               "match": "drops only the sweep's own queue"
+            },
+            {
+              "suite": "unit",
+              "match": "dispatches its first chunk as one centre-out band, reading the centre once"
+            },
+            {
+              "suite": "unit",
+              "match": "finishes a grid under a centre that moves on every read, instead of livelocking"
             }
           ]
         },
         {
           "id": "sweep-covers-every-slot",
-          "name": "Re-centring never loses, duplicates or strands a sweep slot",
+          "name": "Re-centring never loses, duplicates or strands a sweep slot; an abandoned host stops it dead",
           "tests": [
             {
               "suite": "unit",
@@ -1592,6 +1604,26 @@
             {
               "suite": "unit",
               "match": "settles a disposed panel's cancellations instead of returning them"
+            },
+            {
+              "suite": "unit",
+              "match": "stops reading the grid the moment the panel is disposed"
+            },
+            {
+              "suite": "unit",
+              "match": "reads nothing new after the close, where it used to read the rest of the grid"
+            },
+            {
+              "suite": "unit",
+              "match": "a host that does not cancel its own queue still stops within one chunk"
+            },
+            {
+              "suite": "unit",
+              "match": "resolves without dispatching anything when the host was already gone at sweep start"
+            },
+            {
+              "suite": "unit",
+              "match": "abandons what the cursor still holds, where a re-aim returns what it dropped"
             },
             {
               "suite": "unit",
