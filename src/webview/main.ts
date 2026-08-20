@@ -691,10 +691,7 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; b
 
       const allLoaded = images.every(img => img !== undefined);
       if (allLoaded) {
-        vscode.postMessage({
-          type: 'tupleFullyLoaded',
-          tupleIndex: currentTupleIndex
-        });
+        postTupleFullyLoaded(currentTupleIndex);
       }
     }
   };
@@ -742,10 +739,7 @@ function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: numb
     // A fully-loaded tuple (missing slots included) unblocks prefetch.
     const allLoaded = images.every(img => img !== undefined);
     if (allLoaded) {
-      vscode.postMessage({
-        type: 'tupleFullyLoaded',
-        tupleIndex: currentTupleIndex
-      });
+      postTupleFullyLoaded(currentTupleIndex);
     }
   }
 }
@@ -1234,7 +1228,7 @@ function loadTuple(index: TupleIndex) {
   const allCached = !!cachedSlots &&
     tuples[index].images.every((_, i) => cachedSlots[i] !== undefined);
   if (allCached) {
-    vscode.postMessage({ type: 'tupleFullyLoaded', tupleIndex: index });
+    postTupleFullyLoaded(index);
     return;
   }
 
@@ -1271,6 +1265,17 @@ function loadTuple(index: TupleIndex) {
     siblingDwellTimer = null;
     post(planFor().afterDwell);
   }, LOAD_DEBOUNCE_MS);
+}
+
+/** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column). */
+function postTupleFullyLoaded(tupleIndex: TupleIndex) {
+  vscode.postMessage({
+    type: 'tupleFullyLoaded',
+    tupleIndex,
+    modalityOrder: modalityOrder.slice(),
+    currentDisplayIndex: currentModalityIndex,
+    hiddenModalities: Array.from(hiddenModalities)
+  });
 }
 
 function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: number) {

@@ -17,6 +17,7 @@ import { ImageServeIo, ImageServeReply, refreshTupleImages, serveImage } from '.
 import { performCrop } from './cropFlow';
 import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE } from './thumbnailPlan';
 import { buildInitPayload } from './initPayload';
+import { PrefetchScope, prefetchWavePlan } from './prefetchPlan';
 import { nextPanelKey, poolWidth, Priority, TaskCancelled, usableParallelism, WorkPool } from './workPool';
 import { TransportBudget, reindexSlotKeyedPosts, resolveTransportBudgetBytes } from './transportBudget';
 import { beginOpenMarks, debug, debugEnabled, debugVerbose, diffPackLoadStat, diffTierStats, formatBytes, formatOpenRollup, formatPackLoad, formatTierStats, itemsPerSecond, OpenMarks } from './debugLog';
@@ -433,7 +434,13 @@ export class ImageCompareProvider {
 
       case 'tupleFullyLoaded':
         if (message.tupleIndex === state.currentTupleIndex) {
-          await this.prefetchAround(state, message.tupleIndex);
+          const hidden = new Set<number>(message.hiddenModalities);
+          // The strip as displayed is the wave's whole scope (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
+          await this.prefetchAround(state, message.tupleIndex, {
+            modalityOrder: message.modalityOrder,
+            currentDisplayIndex: message.currentDisplayIndex,
+            isHidden: o => hidden.has(o)
+          });
         }
         break;
 
@@ -1348,10 +1355,10 @@ ${lead}
   }
 
   /**
-   * Load `centerIndex ± prefetchCount` × all modalities at PREFETCH priority, superseding
-   * the previous wave (docs/loading-architecture.md, "Prefetch").
+   * Load `centerIndex ± prefetchCount` × the columns `scope` puts on or beside the screen, at
+   * PREFETCH priority, superseding the previous wave (docs/loading-architecture.md, "Prefetch").
    */
-  private async prefetchAround(state: PanelState, centerIndex: TupleIndex): Promise<void> {
+  private async prefetchAround(state: PanelState, centerIndex: TupleIndex, scope: PrefetchScope): Promise<void> {
     if (state.disposed) return;
 
     // Supersede first, even if we bail below: stale neighbours would delay the new ones.
@@ -1364,26 +1371,22 @@ ${lead}
     const prefetchCount = config.get<number>('prefetchCount', 3);
     // Re-read once per wave, never per message (docs/loading-architecture.md: wire-budget-remote-only).
     state.transport.setLimit(resolveTransportBudgetBytes(config.get<number>('prefetchTransportBudgetMB'), vscode.env.remoteName));
-    const allModalities = state.scanResult.modalities;
+    // Which slots, and in what order, is the pure plan's call alone (docs/loading-architecture.md: prefetch-visible-column-first).
+    const plan = prefetchWavePlan({
+      centerIndex,
+      tupleCount: state.scanResult.tuples.length,
+      prefetchCount,
+      scope,
+      isCached: (t, m) => state.loadedImages.has(`${t}-${m}`)
+    });
 
     const waveKey = state.prefetchWaveKey;
     // Registered `open` before the loop: a slot with no image settles synchronously, and a wave that could roll up mid-issue would report nothing at all.
     if (debugEnabled()) state.prefetchWaves.set(waveKey, { center: centerIndex, issued: 0, done: 0, bytes: 0, startedAt: Date.now(), open: true });
     let issued = 0;
-    for (let offset = 0; offset <= prefetchCount; offset++) {
-      const indices = offset === 0 ? [centerIndex] : [asTuple(centerIndex + offset), asTuple(centerIndex - offset)];
-
-      for (const tupleIndex of indices) {
-        if (tupleIndex >= 0 && tupleIndex < state.scanResult.tuples.length) {
-          for (let modalityIndex = 0; modalityIndex < allModalities.length; modalityIndex++) {
-            const cacheKey = `${tupleIndex}-${modalityIndex}`;
-            if (!state.loadedImages.has(cacheKey)) {
-              issued++;
-              void this.loadImageToCache(state, tupleIndex, modalityIndex, waveKey);
-            }
-          }
-        }
-      }
+    for (const slot of plan) {
+      issued++;
+      void this.loadImageToCache(state, asTuple(slot.tupleIndex), slot.modalityIndex, waveKey);
     }
 
     const wave = state.prefetchWaves.get(waveKey);

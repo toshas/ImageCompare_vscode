@@ -384,6 +384,29 @@ the fix, the docs, and the CI check.
   this) and ends on the payoff: with every per-entry `.jpg` deleted, a fresh service still serves
   byte-identical thumbnails from the pack alone.
 
+- **Prefetch was slower than no prefetch at the one thing it exists for** *(fixed)* — a wave loaded
+  `center ± prefetchCount` × *all* modalities, tuple-major. Measured on the field's shape (10
+  modalities, `prefetchCount 3`, a 5-slot pool, 2.5 MB images at 740 ms each), that is 69 slots /
+  164.5 MB / 13.3 s per wave, and a five-tuple browsing trace read 242.5 MB to display 10 MB — 4 %
+  useful. The order was the worse half: the `+1` tuple's on-screen column sat behind the centre
+  tuple's other nine, so stepping to the neighbour 1.2 s into the wave *missed* the cache and cost
+  1022 ms, against a 741 ms idle cold load and the 1021 ms the same step cost with
+  `prefetchCount: 0`. Fixed by scoping the wave to the on-screen column plus the nearest two
+  siblings and issuing it column-major (`prefetchPlan.ts`, reusing the current tuple's own
+  `siblingLoadPlan` so the two policies cannot drift)
+  (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column, prefetch-visible-column-first).
+  After: 20 slots / 47.7 MB / 3.7 s per wave, 95.0 MB per trace, and both neighbour steps are cache
+  hits at 0 ms. What it does **not** fix, and the measurement says so: a navigation issued mid-wave
+  still waits up to one in-flight decode (1221 ms vs a 741 ms baseline) — the pool always hands a
+  `VISIBLE` load a slot (`active=4/5` throughout), so the queue is not the constraint; the host's
+  four decode threads are, and running tasks are never preempted. Narrowing shrinks the *window* in
+  which a navigation can hit that, from ~13 s to ~3.5 s. Pinned by `test/unit/prefetchPlan.test.ts`
+  (the pure policy), `test/unit/prefetchWave.test.ts` (the real provider on a 10-modality grid) and
+  a webview spec for the strip the webview must report; seven mutations. The webview half — that
+  `tupleFullyLoaded` carries the display order, the current column and the hidden set — is pinned
+  only by Playwright, which the mutation harness cannot run (it is Vitest-only), so it was broken by
+  hand instead.
+
 - **A prefetch wave head-of-line blocked the carousel on remote sessions** *(fixed)* — the work pool
   ordered host-side reads but nothing bounded the extension→webview channel, so on a remote window
   one wave (~60-106 MB, one image 16.7 MB) queued ahead of a 1.2 MB thumbnail sweep and the image the
@@ -647,7 +670,9 @@ calibration: its `posted=1.4MB(b64)` is 2.7× its own tier histogram (`pack=117/
 `generated=1/4.4KB`), which no version of the code can produce — both figures derive from the same
 buffers — so one of the two was mis-transcribed when the sample was captured. It also predates the
 shared-load split, so its `pack=117/512.9KB/486ms` is 117 copies of one pack read; today the same
-open prints a much smaller `pack=…ms` plus a `packLoad=1x…ms/… blocked=117/…ms` term:
+open prints a much smaller `pack=…ms` plus a `packLoad=1x…ms/… blocked=117/…ms` term. It predates
+prefetch scoping too: a wave then covered every modality of every neighbour, where today it covers
+the on-screen column and its nearest two siblings, so a comparable session's `slots=` is smaller:
 
 ```
 +412ms [IC-MATCH] === TUPLE MATCHING START ===

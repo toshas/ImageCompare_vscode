@@ -141,6 +141,41 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(!!requests[0].tail).toBe(false);
   });
 
+  // The extension knows nothing about the display order or the hidden set, so a wave can only be
+  // scoped to the column on screen if `tupleFullyLoaded` carries the strip. A silent drop here
+  // speculates on the wrong column and nothing on the host side can notice.
+  // (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column)
+  test('tupleFullyLoaded reports the strip as displayed, so prefetch can scope to it', async ({ page }) => {
+    await loadPartial(page);
+    const first = await page.evaluate(() =>
+      (window as any).__ic_outbound.filter((m: any) => m && m.type === 'tupleFullyLoaded').at(-1));
+    expect(first.tupleIndex).toBe(0);
+    expect(first.modalityOrder).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(first.currentDisplayIndex).toBe(0);
+    expect(first.hiddenModalities).toEqual([]);
+
+    // Move the strip under the extension's feet: hide a pill, reorder, land on a different column.
+    await page.evaluate(() => (window as any).__ic_send({ type: 'toggleModalityHidden', modalityIndex: 4 }));
+    await pressAndCapture(page, ['Digit3']);
+    await pressAndCapture(page, ['BracketLeft']);
+    // Leave and come back: tuple 0 is fully cached, so returning re-posts the report.
+    await pressAndCapture(page, ['ArrowDown']);
+    await page.waitForTimeout(PAST_DWELL_MS);
+    await pressAndCapture(page, ['ArrowUp']);
+    await page.waitForTimeout(PAST_DWELL_MS);
+
+    const report = await page.evaluate(() =>
+      (window as any).__ic_outbound.filter((m: any) => m && m.type === 'tupleFullyLoaded').at(-1));
+    const state = await page.evaluate(() => (window as any).__ic_test.getState());
+    expect(report.tupleIndex).toBe(0);
+    // Every field is the live strip, not a stale or default one.
+    expect(report.modalityOrder).toEqual(state.modalityOrder);
+    expect(report.currentDisplayIndex).toBe(state.currentModalityIndex);
+    expect(report.hiddenModalities).toEqual(state.hiddenModalities);
+    expect(report.hiddenModalities).toEqual([4]);
+    expect(report.modalityOrder).not.toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
   test('flipping to a sibling inside the dwell window loads it at once', async ({ page }) => {
     await loadPartial(page);
     const start = await outboundLength(page);

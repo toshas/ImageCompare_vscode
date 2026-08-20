@@ -1400,7 +1400,7 @@ const mutations = [
     suite: 'test/unit/transportFairness.test.ts',
     find: '      this.postImage(state, next.item, true);',
     replace: '      /* mutated: parked push dropped on release */',
-    killedBy: 'delivery test (all 42 deferred pushes must land once the sweep ends)'
+    killedBy: 'delivery test (all 21 deferred pushes must land once the sweep ends)'
   },
   {
     name: 'provider: budget never released on ack (prefetch stops after one budget)',
@@ -1709,6 +1709,63 @@ const mutations = [
     find: "const RANK_ORDER: Record<SlotRank, number> = { visible: 2, sibling: 1, tail: 0 };",
     replace: "const RANK_ORDER: Record<SlotRank, number> = { visible: 0, sibling: 0, tail: 0 };",
     killedBy: 'rank-upgrade test (visible outranks sibling outranks tail)'
+  },
+  // ── Prefetch scope: which columns a wave speculates on, and in what order ──
+  {
+    name: 'prefetchPlan: the wave widens back to every modality of every neighbour',
+    file: 'src/prefetchPlan.ts',
+    suite: 'test/unit/prefetchPlan.test.ts',
+    find: '  for (const modalityIndex of prefetchColumns(input.scope)) {',
+    replace: '  for (const modalityIndex of input.scope.modalityOrder) {',
+    killedBy: 'field-shape test (7 tuples x 3 columns, never 7 x 10)'
+  },
+  {
+    name: 'prefetchPlan: the on-screen column is dropped from the wave',
+    file: 'src/prefetchPlan.ts',
+    suite: 'test/unit/prefetchPlan.test.ts',
+    find: '  return shown === undefined ? nearest : [shown, ...nearest];',
+    replace: '  return nearest;',
+    killedBy: 'column test (the wave leads with the column on screen)'
+  },
+  {
+    name: 'prefetchPlan: the nearest-two filter is dropped (every sibling column speculated on)',
+    file: 'src/prefetchPlan.ts',
+    suite: 'test/unit/prefetchPlan.test.ts',
+    find: "    .filter(s => s.rank === 'sibling')",
+    replace: '    .filter(() => true)',
+    killedBy: 'width test (never more than three columns, however wide the tuple)'
+  },
+  {
+    name: 'prefetchPlan: hidden columns speculated on like any other',
+    file: 'src/prefetchPlan.ts',
+    suite: 'test/unit/prefetchPlan.test.ts',
+    find: '  const nearest = siblingLoadPlan({ ...scope, isCached: () => false })',
+    replace: '  const nearest = siblingLoadPlan({ ...scope, isHidden: () => false, isCached: () => false })',
+    killedBy: 'hidden-column test (no key can reach a hidden pill)'
+  },
+  {
+    name: 'prefetchPlan: wave issued tuple-major (the neighbour visible column queues behind the centre siblings)',
+    file: 'src/prefetchPlan.ts',
+    suite: 'test/unit/prefetchPlan.test.ts',
+    find: '  for (const modalityIndex of prefetchColumns(input.scope)) {\n    for (const tupleIndex of tuples) {',
+    replace: '  for (const tupleIndex of tuples) {\n    for (const modalityIndex of prefetchColumns(input.scope)) {',
+    killedBy: 'column-major test (every neighbour on-screen column before any sibling column)'
+  },
+  {
+    name: 'prefetchPlan: the band walks forward only (behind the user is never prefetched)',
+    file: 'src/prefetchPlan.ts',
+    suite: 'test/unit/prefetchPlan.test.ts',
+    find: '    for (const t of offset === 0 ? [centerIndex] : [centerIndex + offset, centerIndex - offset]) {',
+    replace: '    for (const t of offset === 0 ? [centerIndex] : [centerIndex + offset]) {',
+    killedBy: 'band test (prefetchCount still means ahead AND behind)'
+  },
+  {
+    name: 'provider: the reported strip is ignored (the wave re-reads the modality list itself)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/prefetchWave.test.ts',
+    find: '      scope,\n      isCached: (t, m) => state.loadedImages.has(`${t}-${m}`)',
+    replace: '      scope: { modalityOrder: state.scanResult.modalities.map((_, i) => i), currentDisplayIndex: 0, isHidden: () => false },\n      isCached: (t, m) => state.loadedImages.has(`${t}-${m}`)',
+    killedBy: 'wide-wave test (the wave follows the display order the webview reported)'
   },
   {
     name: 'workPool: the sibling tail competes with the sweep (fair share instead of strictly last)',

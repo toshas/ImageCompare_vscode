@@ -9,7 +9,7 @@ import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transpor
 
 // The head-of-line blocking a Chrome renderer trace of a remote-SSH session showed, reproduced on
 // the REAL provider: an open-time thumbnail sweep (120 tiles, ~700KB) draining while one prefetch
-// wave (42 full images, ~60MB, one 16MB whale) is issued, over a *serialized* channel whose cost is
+// wave (21 full images, ~45.5MB, one 16MB whale) is issued, over a *serialized* channel whose cost is
 // bytes. The wire below is that channel: strict FIFO, virtual clock advanced by bytes/rate, and a
 // postMessage promise that resolves only when the payload has drained — the same ack the provider
 // releases budget on. No real time is consumed, so the numbers are deterministic.
@@ -31,6 +31,8 @@ const WHALE_SLOT = `${CENTER}-gt`;
 const USER_IMAGE_BYTES = 3_000_000;
 const USER_TUPLE = 18;
 const BUDGET_MB = 8;
+/** The on-screen column plus its nearest two siblings — the whole breadth of a wave (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column). */
+const PREFETCH_COLUMNS = 3;
 const BUDGET_BYTES = BUDGET_MB * 1024 * 1024;
 
 const tmpRoots: string[] = [];
@@ -165,14 +167,19 @@ async function runScenario(remote: boolean): Promise<Scenario> {
 
   const inner = provider as unknown as {
     generateAllThumbnails(s: unknown): void;
-    prefetchAround(s: unknown, i: number): Promise<void>;
+    prefetchAround(s: unknown, i: number, scope: unknown): Promise<void>;
     sendImage(s: unknown, t: number, m: number): Promise<void>;
   };
 
   // The trace's shape: a wave is issued while the open-time sweep is still draining.
   inner.generateAllThumbnails(state);
   await tick();
-  await inner.prefetchAround(state, CENTER);
+  // `gt` on screen, so the wave's three columns (gt, ours, baseline) still carry the trace's 16MB whale.
+  await inner.prefetchAround(state, CENTER, {
+    modalityOrder: MODALITIES.map((_, i) => i),
+    currentDisplayIndex: 0,
+    isHidden: () => false
+  });
   await settle();
 
   let queuedDeltaOnUserPost = -1;
@@ -269,7 +276,9 @@ describe('transport fairness on a serialized wire (real ImageCompareProvider)', 
   });
 
   it('deferred speculation is delivered, not dropped, once the sweep ends', () => {
-    expect(s.speculativeDelivered).toBe((PREFETCH_COUNT * 2 + 1) * MODALITIES.length);
+    // 7 tuples x 3 columns: the wave is scoped to the on-screen column and its nearest two
+    // siblings, not all six modalities (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
+    expect(s.speculativeDelivered).toBe((PREFETCH_COUNT * 2 + 1) * PREFETCH_COLUMNS);
   });
 });
 
@@ -284,12 +293,14 @@ describe('control: with the budget off (local session) the wave still head-of-li
   }, 120000);
 
   it('the whole prefetch wave crosses the wire while the sweep drains', () => {
-    expect(s.sweepDoneLine).toMatch(/wire thumbs=120\/\S+ images=43\/59\.6MB/);
+    expect(s.sweepDoneLine).toMatch(/wire thumbs=120\/\S+ images=22\/46\.3MB/);
   });
 
   it('thumbnails and the user-facing image finish an order of magnitude later', () => {
-    expect(s.lastThumbnailAt).toBeGreaterThan(10000);
-    expect(s.userSentAt).toBeGreaterThan(10000);
-    expect(s.speculativeAheadOfUser).toBeGreaterThan(50_000_000);
+    // Six times the treated run, not the old sixty: a scoped wave is 45MB of speculation on this
+    // wire rather than 59MB, and unbounded it still buries a 515KB sweep.
+    expect(s.lastThumbnailAt).toBeGreaterThan(8000);
+    expect(s.userSentAt).toBeGreaterThan(8000);
+    expect(s.speculativeAheadOfUser).toBeGreaterThan(40_000_000);
   });
 });

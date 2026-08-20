@@ -1245,6 +1245,10 @@
             {
               "suite": "unit",
               "match": "a wave with a hole in the middle still logs both lines"
+            },
+            {
+              "suite": "unit",
+              "match": "still rolls the wave up on the debug channel"
             }
           ]
         },
@@ -1480,6 +1484,54 @@
             {
               "suite": "unit",
               "match": "requests exactly the on-screen modality and defers every sibling"
+            }
+          ]
+        },
+        {
+          "id": "prefetch-scope-visible-column",
+          "name": "A prefetch wave takes the on-screen column and its nearest siblings, not the whole tuple",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "leads with the on-screen column, then the nearest sibling either side"
+            },
+            {
+              "suite": "unit",
+              "match": "never widens past three columns, however wide the tuple"
+            },
+            {
+              "suite": "unit",
+              "match": "never speculates on a hidden column"
+            },
+            {
+              "suite": "unit",
+              "match": "issues the visible column and its nearest siblings, not every modality of every neighbour"
+            },
+            {
+              "suite": "unit",
+              "match": "never speculates on a neighbour column the user is nowhere near"
+            },
+            {
+              "suite": "webview",
+              "match": "tupleFullyLoaded reports the strip as displayed"
+            }
+          ]
+        },
+        {
+          "id": "prefetch-column-major",
+          "name": "A wave fetches every neighbour's on-screen column before any sibling column",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "issues every neighbour's on-screen column before any sibling column"
+            },
+            {
+              "suite": "unit",
+              "match": "is three columns per tuple at the field shape, not ten"
+            },
+            {
+              "suite": "unit",
+              "match": "caches the on-screen column of both neighbours"
             }
           ]
         },

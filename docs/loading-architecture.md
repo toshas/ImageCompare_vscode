@@ -217,8 +217,43 @@ So the extension sends no dimensions for these formats; the webview reads
 
 ## Prefetch
 
-Triggered by `tupleFullyLoaded`; loads `center ± prefetchCount` × all modalities at `PREFETCH`
-priority and pushes each into the webview cache so stepping to a neighbour is instant.
+Triggered by `tupleFullyLoaded`; loads `center ± prefetchCount` × the **column on screen and its
+nearest two siblings** at `PREFETCH` priority (`prefetchPlan.ts`, from the strip the message
+carries), pushing each into the webview cache so stepping to a neighbour is instant.
+
+It used to be `center ± prefetchCount` × **all** modalities, and that was measured, on the field's
+shape (10 modalities, `prefetchCount 3`, a 5-slot pool, 2.5 MB images at 740 ms of read+decode each),
+to be wrong in both directions at once:
+
+| | all columns | on-screen column + nearest two |
+|---|---|---|
+| one wave | 69 slots, 164.5 MB, 13.3 s | 20 slots, 47.7 MB, 3.7 s |
+| pool held at 4 of 5 slots | 13.3 s after the user stops | 3.5 s |
+| browsing five tuples | 97 images / 242.5 MB loaded, 10 MB displayed | 38 / 95.0 MB loaded, 10 MB displayed |
+| step to the neighbour 1.2 s into the wave | cache **miss**, 1022 ms | cache **hit**, 0 ms |
+| cold click elsewhere during the wave | 1222 ms (idle baseline 741 ms) | 1221 ms, but only for the wave's 3.5 s |
+
+The cold-click row is *sampled*, not stable: repeats range 773-1161 ms with the wave's phase. The
+claim it supports is unaffected — narrowing does not improve the per-navigation worst case, only how
+long the window lasts, because the binding constraint is the four-wide decode resource beneath the
+pool and running tasks are never preempted.
+
+Two things in that table decide the design. The **breadth** is the byte cost: a browsing trace
+displayed 4 % of what the wave read. The **order** is the latency cost, and it was the larger
+surprise — column-major means every neighbour's on-screen column is fetched before any sibling
+column, where tuple-major buried the `+1` tuple's visible column behind the centre tuple's other
+nine, so the first step to a neighbour missed the cache and prefetch was *slower than no prefetch at
+the one thing it exists for*. `prefetchCount` still counts tuples, exactly as its setting
+description says; only the columns within each tuple narrowed.
+
+The cold-click row is the one number the change does **not** improve, and it says where the residual
+cost lives: the pool's `visible-never-starved` reservation always hands a `VISIBLE` load a slot
+(measured `active=4/5` throughout a wave), so the pool is not what a navigation waits on — with the
+host's read/decode parallelism modelled away the same probe costs 0 ms. What it waits on is the
+resource *below* the pool: four concurrent full-resolution reads occupy libuv's four threads, and a
+running task is never preempted (`pool-width-hides-latency`), so a navigation issued mid-wave pays up
+to one in-flight decode. Narrowing the wave cannot change that per-navigation worst case; it shrinks
+the **window** in which a navigation can hit it, from ~13 s to ~3.5 s.
 
 Note what `siblings-dwell-gated` did to that trigger: a tuple is "fully loaded" only once its dwell
 has expired *and* its `SIBLING_TAIL` slots have landed, and the tail waits for every other class. So
@@ -493,7 +528,8 @@ A Chrome renderer trace of a remote-SSH session (230 tiles, 71.8 s) found the we
 0.7 % busy and no task over 50 ms: the renderer was not the bottleneck and neither was the host. The
 1.24 MB of thumbnails trickled over 35 s, of which **28.6 s was nine gaps longer than a second**, and
 **106 MB of the session's 115 MB of full-resolution images arrived inside those gaps** — one prefetch
-wave (`prefetchCount 3` → ~7 tuples × ~6 modalities ≈ 44 images, largest 16.71 MB) against a 1.2 MB
+wave (`prefetchCount 3` → ~7 tuples × ~6 modalities ≈ 44 images, largest 16.71 MB — the pre-scoping
+wave shape; the same session's wave is now ~7 × 3) against a 1.2 MB
 thumbnail sweep. On a remote window the extension→webview channel is one serialized link, so this is
 textbook head-of-line blocking: `visible-never-starved` and `background-trickle` hold on the pool and
 say nothing about the wire.
@@ -1005,6 +1041,27 @@ mount latency — but the same shape applies, so neither product can quietly div
   would hand the tail half the sweep's slots — which is the starvation this whole policy exists to
   end. Both hosts map the wire's `tail` flag onto it (provider and standalone adapter); dropping the
   flag on either side silently restores `SIBLING`.
+- **`prefetch-scoped-to-the-visible-column`** — a prefetch wave speculates only on the modality
+  column on screen plus the nearest siblings `sibling-order-by-display-distance` names — never a
+  hidden column, and never the whole tuple. The breadth is *derived*, not restated: `prefetchPlan.ts`
+  calls the current tuple's own `siblingLoadPlan` and keeps the entries it ranks `sibling`, so the
+  two policies cannot drift into two different ideas of "nearest". Both halves are load-bearing and
+  each fails quietly: the webview must report the strip it is displaying with every
+  `tupleFullyLoaded` (order, current display index, hidden set — the extension has none of it, and a
+  wrong or missing report silently speculates on the wrong column), and the provider must let the
+  plan pick the slots rather than looping the modality array. The pathology it removes, measured at
+  the field's shape: 69 slots and 164.5 MB per wave, of which a five-tuple browsing trace displayed
+  4 %.
+- **`prefetch-visible-column-first`** — the wave is issued **column-major**: every tuple in the band
+  at the on-screen column, then every tuple at the first sibling column, and so on. Tuple-major
+  ordering is what made prefetch *slower than no prefetch* for the step it exists to serve — the `+1`
+  tuple's visible column queued behind the centre tuple's other nine, so the first neighbour step was
+  a cache miss at 1022 ms against a 741 ms idle cold load. Ordering is not a nicety here: a wave
+  holds `concurrency - 1` slots for seconds, so what it issues *first* is the only part that lands
+  before the user moves. A wave is re-scoped only by `tupleFullyLoaded`, so a modality switch does not
+  re-aim it: a neighbour's non-adjacent columns are never pre-warmed, and the first tuple-step after a
+  column change pays one cold `VISIBLE` load (measured 740 ms against 0 ms before). Bounded to a
+  single image at top priority, and the dwell policy still warms the current tuple.
 - **`stale-tuple-loads-cancelled`** — image loads are keyed by tuple (`<poolKey>-image-<tupleIndex>`)
   and leaving a tuple cancels its queued ones; running tasks finish, as everywhere. Prefetch waves
   were keyed and cancelled from the start and the current-tuple loads were not, which is how a panel

@@ -84,7 +84,8 @@ export type WebViewMessage =
   // sibling: off-screen modality. tail: sibling past the nearest two (docs/loading-architecture.md: sibling-tail-never-competes). forceReload: bypass cached bytes so a failed decode can retry.
   | { type: 'requestImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; sibling?: boolean; tail?: boolean; forceReload?: boolean }
   | { type: 'setCurrentTuple'; tupleIndex: TupleIndex }
-  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex }
+  // Carries the modality strip as displayed: prefetch speculates on the column on screen, not the whole tuple (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
+  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[] }
   | { type: 'setWinner'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null } // null = clear winner
   | { type: 'cropImages'; tupleIndex: TupleIndex; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
   | { type: 'deleteTuple'; tupleIndex: TupleIndex }

@@ -72,6 +72,9 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`cropPlan.ts`** - Pure (no vscode dependency): `_cropNN` output naming and crop-rect scale/clamp → `docs/crop-and-pptx.md`, `docs/standalone.md`
 - **`cropFlow.ts`** - Pure (no vscode dependency): the whole crop sequence (`performCrop` — one name, relative rect, per-modality render/inject/write, arrivals, `cropComplete`, thumbnails) over per-product IO, shared with the standalone build → `docs/crop-and-pptx.md`, `docs/standalone.md`
 - **`pptxDeck.ts`** - Pure (no vscode dependency): PPTX slide selection, parent/crop pairing and layout over an injected IO, `comparison_NN` export-file numbering, and the export flow (`exportDeck` — name, build, save, exactly one answer) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`prefetchPlan.ts`** - Pure (extension-only, no vscode): what a prefetch wave speculates on — the
+  tuple band `prefetchCount` names, the on-screen modality column plus the nearest siblings (reusing
+  `tupleLoadPlan`'s own rule), and the column-major issue order → `docs/loading-architecture.md`
 - **`thumbnailPlan.ts`** - Pure (no vscode dependency): open-time thumbnail-sweep planning and running (slot order, missing slots, progress ticks, sweep wire traffic over injected IO), shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
 - **`imageServe.ts`** - Pure (no vscode dependency): full-image serving — passthrough-vs-convert branch, payload normalization, the single terminal reply, and the current-tuple refresh loop — shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
 - **`initPayload.ts`** - Pure (no vscode dependency): `init`-message assembly (dense tuples, positional color defaults, winners record, product version for the help modal), shared with the standalone build → `docs/standalone.md`
