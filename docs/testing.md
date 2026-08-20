@@ -154,6 +154,23 @@ with several of its rules deliberately broken. When you add a test, pin a value
 from *outside* the implementation (a spec constant, a hand-computed expectation); code compared to
 itself proves nothing.
 
+**The harness never writes the working tree.** It copies `src/`, `test/`, `package.json` and the
+tsconfigs into an `imagecompare-mutation-*` sandbox under the OS temp dir, mirrors `node_modules`
+entry by entry as symlinks (so the sandbox gets its own empty Vite cache rather than sharing the
+repo's), runs every suite with the sandbox as cwd, and deletes it on the way out. Mutating in place
+cost a whole benchmark run once: an interrupt that was neither `SIGINT` nor `SIGTERM` left
+`this.down = -1` in `src/thumbnailPlan.ts` and every later build served it. `SIGHUP`, `SIGQUIT`, an
+uncaught exception, an unhandled rejection and the exit hook now all restore, verify a SHA-256
+manifest of every file the run touched, and drop the sandbox; `SIGKILL` and OOM cannot be handled at
+all, which is the point of the copy — what they leave behind is a stale temp dir, not stale source.
+The manifest separates the two changes it can see: a working-tree file that turned into *this run's*
+mutation is a poisoning and fails the run by name, while any other change is someone editing during
+the run and is only noted, so an edit landing mid-run neither breaks the run nor is broken by it.
+`test/unit/mutationHarness.test.ts` drives the real script and signals it for each of those exits.
+It narrows the run through the `MUTATION_CHECK_TEST` env seam (JSON: `only` or `mutations`,
+`pauseMs`, `throwAfterApply`), which is unset in every real run — with it unset the script takes
+exactly the path CI gates, all 195 mutations against the whole list.
+
 ## Adding a feature, fix, or test — the one workflow
 
 Every change lands the same way, so it can't silently regress:
@@ -195,6 +212,16 @@ the fix, the docs, and the CI check.
   and silent.
 
 ## Findings (caught by this testbed)
+
+- **The mutation harness poisoned the working tree** *(fixed)* — `scripts/mutation-check.mjs` wrote
+  each mutation over the real source file and restored it in a `finally`. A `pkill -f mutation-check`
+  whose pattern also matched the calling shell orphaned node, which then took `SIGHUP` — not one of
+  the two handled signals — and `src/thumbnailPlan.ts` was left carrying `this.down = -1`, serving a
+  whole benchmark run before anyone noticed. Fixed by mutating a temp-dir copy of the tree instead
+  (a `SIGKILL` now leaves a stale sandbox, not stale source), plus restore handlers for `SIGHUP`,
+  `SIGQUIT`, `uncaughtException`, `unhandledRejection` and `exit`, and a checksum manifest that fails
+  the run naming any file that moved. Guarded by `test/unit/mutationHarness.test.ts`, which spawns the
+  real harness and kills it mid-mutation with each of those signals.
 
 - **Every tuple visited queued its whole tuple, and nothing ever cancelled it** *(fixed)* — found in
   the field, not by a test: a 746×10 panel sat six minutes at `run=[0,15,0,0,0,1,0]

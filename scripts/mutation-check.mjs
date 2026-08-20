@@ -5,12 +5,18 @@
  * For each fixed mutation, apply it to a source file, run the suite that should
  * catch it, and assert the suite now FAILS. A mutation that leaves the suite
  * green "survived" — a real coverage gap. The baseline (no mutation) must be
- * green first. Every file is restored from its original bytes in a finally,
- * even on throw or interrupt, so no mutated source is ever left behind.
+ * green first. Mutations are applied to a throwaway copy of the tree, never to
+ * the working tree, so no exit path — SIGKILL included — can leave mutated
+ * source behind; a checksum manifest verifies that at exit and names any file
+ * that moved. See docs/testing.md (the harness runs in a sandbox).
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -1623,6 +1629,110 @@ const mutations = [
   }
 ];
 
+// ── Sandbox: every mutation is applied to a throwaway copy of the tree ──
+// The working tree is never written, so even SIGKILL leaves src/ byte-identical (docs/testing.md).
+function copyList() {
+  const roots = ['src', 'test', 'package.json'];
+  for (const entry of readdirSync(repoRoot)) {
+    if (/^tsconfig.*\.json$/.test(entry)) roots.push(entry);
+  }
+  return roots;
+}
+
+let sandbox = null;
+let sandboxRemoved = false;
+
+function createSandbox() {
+  const box = mkdtempSync(join(tmpdir(), 'imagecompare-mutation-'));
+  for (const rel of copyList()) cpSync(join(repoRoot, rel), join(box, rel), { recursive: true });
+  const modules = join(box, 'node_modules');
+  mkdirSync(modules);
+  // Per-entry links rather than one link to node_modules: the sandbox gets its own empty .vite cache.
+  for (const entry of readdirSync(join(repoRoot, 'node_modules'))) {
+    if (entry === '.vite' || entry === '.cache') continue;
+    const from = join(repoRoot, 'node_modules', entry);
+    let isDir;
+    try {
+      isDir = statSync(from).isDirectory();
+    } catch {
+      continue;
+    }
+    if (isDir) {
+      symlinkSync(from, join(modules, entry), process.platform === 'win32' ? 'junction' : 'dir');
+    } else {
+      copyFileSync(from, join(modules, entry));
+    }
+  }
+  return box;
+}
+
+function removeSandbox() {
+  if (!sandbox || sandboxRemoved) return;
+  sandboxRemoved = true;
+  try {
+    rmSync(sandbox, { recursive: true, force: true });
+  } catch {
+    console.error(`Could not remove the sandbox: ${sandbox}`);
+  }
+}
+
+// ── Checksum manifest: turn a silent poisoning into a message naming the file ──
+const manifest = [];
+const applied = new Map();
+const manifestFailures = [];
+const manifestNotices = [];
+let manifestChecked = false;
+
+function hashFile(p) {
+  return createHash('sha256').update(readFileSync(p)).digest('hex');
+}
+
+function recordManifest(files) {
+  for (const rel of files) {
+    for (const side of ['repo', 'sandbox']) {
+      const p = join(side === 'repo' ? repoRoot : sandbox, rel);
+      try {
+        manifest.push({ p, rel, side, hash: hashFile(p), text: readFileSync(p, 'utf8') });
+      } catch {
+        // A file that cannot be read is reported by the find-string check below.
+      }
+    }
+  }
+}
+
+function verifyManifest() {
+  if (manifestChecked) return manifestFailures.length > 0;
+  manifestChecked = true;
+  for (const entry of manifest) {
+    let hash = null;
+    let text = null;
+    try {
+      hash = hashFile(entry.p);
+      text = readFileSync(entry.p, 'utf8');
+    } catch {
+      hash = null;
+    }
+    if (hash === entry.hash) continue;
+    // A working-tree file that turned into one of this run's mutations was poisoned by the run;
+    // any other change is someone editing while the harness ran, which the sandbox makes harmless.
+    const poisoned = text !== null && (applied.get(entry.rel) ?? []).some((m) => entry.text.replace(m.find, m.replace) === text);
+    if (entry.side === 'repo' && !poisoned) {
+      manifestNotices.push(entry.p);
+      continue;
+    }
+    manifestFailures.push(entry.p);
+  }
+  if (manifestFailures.length) {
+    console.error('\nMANIFEST MISMATCH — a file the run touched is not back to its original bytes:');
+    for (const p of manifestFailures) console.error(`  - ${p}`);
+  }
+  if (manifestNotices.length) {
+    console.error('\nNOTE — changed while the run was in progress, not by it (the run mutates its sandbox copy):');
+    for (const p of manifestNotices) console.error(`  - ${p}`);
+  }
+  return manifestFailures.length > 0;
+}
+
 // Restore-on-interrupt: track the file currently mutated so a signal cannot leave it dirty.
 let inFlight = null; // { path, original: Buffer }
 function restoreInFlight() {
@@ -1631,17 +1741,60 @@ function restoreInFlight() {
     inFlight = null;
   }
 }
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    restoreInFlight();
-    process.exit(130);
-  });
+
+// Every handleable exit path restores, verifies the manifest, then drops the sandbox.
+function finish(code) {
+  restoreInFlight();
+  const dirty = verifyManifest();
+  removeSandbox();
+  process.exit(dirty ? 1 : code);
+}
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
+  process.on(sig, () => finish(130));
+}
+process.on('uncaughtException', (err) => {
+  console.error(err);
+  finish(1);
+});
+process.on('unhandledRejection', (err) => {
+  console.error(err);
+  finish(1);
+});
+process.on('exit', () => {
+  restoreInFlight();
+  if (verifyManifest()) process.exitCode = 1;
+  removeSandbox();
+});
+
+// Test seam (docs/testing.md): unset in every real run, so the default path is the old one.
+const seam = process.env.MUTATION_CHECK_TEST ? JSON.parse(process.env.MUTATION_CHECK_TEST) : null;
+const selected = seam?.mutations ?? (seam?.only ? mutations.filter((m) => m.name.includes(seam.only)) : mutations);
+if (selected.length === 0) {
+  console.error('MUTATION_CHECK_TEST selected no mutations.');
+  process.exit(1);
 }
 
+// spawnSync blocks the loop: yield between suites so a pending signal handler actually runs.
+const yieldToLoop = () => new Promise((resolve) => setImmediate(resolve));
+
+async function seamHook(m) {
+  console.log(`##MC applied ${m.file}`);
+  if (seam.throwAfterApply) {
+    setTimeout(() => {
+      throw new Error('MUTATION_CHECK_TEST injected failure');
+    }, 10);
+  }
+  if (seam.pauseMs) await new Promise((resolve) => setTimeout(resolve, seam.pauseMs));
+}
+
+sandbox = createSandbox();
+recordManifest([...new Set(selected.map((m) => m.file))]);
+console.log(`Sandbox: ${sandbox} (mutations are applied here; the working tree is never written)`);
+
 function runSuite(suite) {
-  // Every suite is a Vitest suite under test/unit/.
+  // Every suite is a Vitest suite under test/unit/, run against the sandbox copy.
   const args = ['vitest', 'run', suite, '--config', 'test/vitest.config.ts'];
-  return spawnSync('npx', args, { cwd: repoRoot, encoding: 'utf8' });
+  return spawnSync('npx', args, { cwd: sandbox, encoding: 'utf8' });
 }
 
 function fail(msg, res) {
@@ -1653,10 +1806,11 @@ function fail(msg, res) {
 }
 
 // ── Baseline: every referenced suite must be green before we trust a kill ──
-const suites = [...new Set(mutations.map((m) => m.suite))];
+const suites = [...new Set(selected.map((m) => m.suite))];
 console.log('Baseline (no mutation) — every suite must be green:');
 let baselineGreen = true;
 for (const suite of suites) {
+  await yieldToLoop();
   const res = runSuite(suite);
   if (res.status === 0) {
     console.log(`  green  ${suite}`);
@@ -1674,8 +1828,9 @@ if (!baselineGreen) {
 console.log('\nMutations — each must be killed (suite must fail):');
 const survivors = [];
 const harnessErrors = [];
-for (const m of mutations) {
-  const path = join(repoRoot, m.file);
+for (const m of selected) {
+  await yieldToLoop();
+  const path = join(sandbox, m.file);
   const original = readFileSync(path);
   const text = original.toString('utf8');
 
@@ -1697,9 +1852,12 @@ for (const m of mutations) {
   }
 
   inFlight = { path, original };
+  if (!applied.has(m.file)) applied.set(m.file, []);
+  applied.get(m.file).push({ find: m.find, replace: m.replace });
   let res;
   try {
     writeFileSync(path, mutated);
+    if (seam) await seamHook(m);
     res = runSuite(m.suite);
   } finally {
     writeFileSync(path, original);
@@ -1722,8 +1880,8 @@ for (const m of mutations) {
 
 // ── Summary ──
 console.log(`\n${'='.repeat(60)}`);
-const killed = mutations.length - survivors.length - harnessErrors.length;
-console.log(`Mutations: ${mutations.length}  killed: ${killed}  survived: ${survivors.length}  errors: ${harnessErrors.length}`);
+const killed = selected.length - survivors.length - harnessErrors.length;
+console.log(`Mutations: ${selected.length}  killed: ${killed}  survived: ${survivors.length}  errors: ${harnessErrors.length}`);
 if (survivors.length) {
   console.error('\nSURVIVORS (real coverage gaps — the test owner must add coverage):');
   for (const m of survivors) {
@@ -1734,7 +1892,8 @@ if (harnessErrors.length) {
   console.error('\nHARNESS ERRORS:');
   for (const e of harnessErrors) console.error(`  - ${e}`);
 }
-if (survivors.length || harnessErrors.length) {
+const manifestDirty = verifyManifest();
+if (survivors.length || harnessErrors.length || manifestDirty) {
   process.exit(1);
 }
 console.log('\nAll mutations killed. The suites pin the rules they claim to.');

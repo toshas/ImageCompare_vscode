@@ -1743,6 +1743,21 @@
           ]
         }
       ]
+    },
+    {
+      "area": "Test tooling",
+      "features": [
+        {
+          "id": "mutation-harness-isolation",
+          "name": "Mutation harness mutates a sandbox copy, never the working tree (every handleable exit restores; SIGKILL leaves a stale temp dir)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "mutation harness isolation"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
