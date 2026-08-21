@@ -557,6 +557,14 @@ const mutations = [
     killedBy: 're-aim tests (a jump mid-walk must serve the new row next, not the old walk\'s next step)'
   },
   {
+    name: 'sweep: the centre is used unnormalized (a NaN or fractional centre aims at no row at all)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepCentre.test.ts',
+    find: '    const wanted = Number.isFinite(centre) ? Math.trunc(centre) : 0;',
+    replace: '    const wanted = centre;',
+    killedBy: 'seeded fuzz (NaN, +-Infinity and fractional centres must still hand out every slot)'
+  },
+  {
     name: 'sweep: nearest-walk pick always forward (rows above the centre are swept last, not by distance)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
@@ -1119,6 +1127,24 @@ const mutations = [
     find: '      modalityIndex: asOriginal(insertIndex),',
     replace: '      modalityIndex: asOriginal(0),',
     killedBy: 'alphabetical-insert test (the message must carry the real global insert index)'
+  },
+
+  // ── Panel dispose: the OS handles an open created die with the panel (docs/file-watching.md: watched-dirs-have-watchers) ──
+  {
+    name: 'provider: the fs.watch handles are left open when the panel closes',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '    state.nodeWatchers.forEach(w => w.close());',
+    replace: '    /* mutated: node watchers outlive the panel */',
+    killedBy: 'handle census (node reports no watcher handle left after the close)'
+  },
+  {
+    name: 'provider: the delete-poll interval keeps running after the panel closes',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/openRollup.test.ts',
+    find: '    if (state.deleteCheckTimer) clearInterval(state.deleteCheckTimer);',
+    replace: '    /* mutated: the existence poll outlives the panel */',
+    killedBy: 'timer census (every 10s interval the open started is cleared by the close)'
   },
 
   // ── Debug sink: diagnostics that must stay free when off (docs/loading-architecture.md: debug-off-costs-nothing) ──

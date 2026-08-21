@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { FileType, Uri, workspace } from '../mocks/vscode';
 import { scanForImages } from '../../src/fileService';
+import { buildInitPayload } from '../../src/initPayload';
 
 // The open path's cost over NFS is per-DIRECTORY latency, not per-file work: 11 modality dirs
 // x ~350 ms of cold round trip is the ~20 s blank window this suite exists to keep closed. The
@@ -207,5 +208,78 @@ describe('scanForImages: the listing loop behaves as it did when it was serial',
     });
 
     await expect(scanForImages(dirs as never)).rejects.toThrow(/EACCES: slowbroken/);
+  });
+});
+
+// The columns the user sees are `modalities` positionally: the palette is indexed by column, and
+// every dense tuple's slot i is modalities[i]. A reshuffle under concurrency is therefore silent —
+// same tiles, different colours, different columns — so the order is pinned through the payload the
+// webview is actually handed, not only through the scan result.
+// (docs/tuple-matching.md: modality-order-is-callers, dir-listings-overlap)
+describe('scanForImages: the caller order reaches the init payload, not just the scan result', () => {
+  /** Deterministic distinct delays: the completion order is scrambled but reproducible. */
+  function seededDelays(dirNames: readonly string[], seed: number): Record<string, number> {
+    const delays: Record<string, number> = {};
+    let s = seed;
+    for (const name of dirNames) {
+      s = (s * 1103515245 + 12345) % 2147483648;
+      delays[name] = 5 + (s % 37) * 2;
+    }
+    return delays;
+  }
+
+  it('survives a scrambled completion order over 12 directories, colours and slots included', async () => {
+    const dirNames = names(12);
+    const dirs = makeDirs(dirNames, ['img_001.png', 'img_002.png']);
+    const delays = seededDelays(dirNames, 7);
+    const probe = instrument({ delayMs: (name) => delays[name] });
+
+    const result = await scanForImages(dirs as never);
+
+    // Non-vacuous: the listings really did land in an order other than the caller's.
+    expect(probe.completionOrder).not.toEqual(dirNames);
+    expect([...probe.completionOrder].sort()).toEqual([...dirNames].sort());
+    expect(result.modalities).toEqual(dirNames);
+
+    const message = buildInitPayload({
+      tuples: result.tuples,
+      modalities: result.modalities,
+      modalityPaths: result.modalities.map((m) => `/x/${m}`),
+      winners: new Map<number, number>(),
+      config: { thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false },
+      votingEnabled: false,
+      labelsExplicit: false,
+      version: '0.0.0',
+    });
+    if (message.type !== 'init') throw new Error('expected an init message');
+
+    expect(message.modalities).toEqual(dirNames);
+    // External literals from the documented palette, wrapping after eight: column i owns slot i, so
+    // any reshuffle recolours every column past the first moved one.
+    expect(message.modalityColors).toEqual([
+      '#0f0', '#f60', '#0af', '#f0f', '#ff0', '#f44', '#4f4', '#44f',
+      '#0f0', '#f60', '#0af', '#f0f',
+    ]);
+    expect(message.tuples.length).toBe(2);
+    for (const tuple of message.tuples) {
+      expect(tuple.images.map((i) => i.modality)).toEqual(dirNames);
+      expect(tuple.images.map((i) => i.modalityIndex)).toEqual(dirNames.map((_, i) => i));
+      // Every slot is a real image, so a mis-slotted column would show as a blank tile, not a shift.
+      expect(tuple.images.every((i) => i.name !== '')).toBe(true);
+    }
+  });
+
+  it('one very slow directory in the middle finishes last without moving the survivors', async () => {
+    const dirNames = names(7);
+    const dirs = makeDirs(dirNames, ['img_001.png']);
+    const probe = instrument({ delayMs: (name) => (name === 'mod03' ? 120 : 2) });
+
+    const result = await scanForImages(dirs as never);
+
+    expect(probe.completionOrder[probe.completionOrder.length - 1]).toBe('mod03');
+    expect(result.modalities).toEqual(dirNames);
+    for (const tuple of result.tuples) {
+      expect(tuple.images.map((i) => i.modality)).toEqual(dirNames);
+    }
   });
 });

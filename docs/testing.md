@@ -19,7 +19,7 @@ so the suite runs identically on any OS.
 | Layer | Runner | What it covers | In CI |
 |-------|--------|----------------|-------|
 | **1 — Unit** | Vitest | Pure logic on the **real** exported code — tuple matching, PNG tEXt chunks, crop math, the work pool, watcher helpers | 3 OSes |
-| **2 — Integration** | `@vscode/test-cli` (headless VSCode) | The real extension activating — directory scanning, commands, results.txt I/O on temp fixtures | 3 OSes |
+| **2 — Integration** | `@vscode/test-cli` (headless VSCode) | The real extension activating — directory scanning, commands, results.txt I/O on temp fixtures, and the entry types the **real** `workspace.fs` reports (a dangling symlink is `Unknown\|SymbolicLink`, never `File`) | 3 OSes |
 | **3 — Webview** | Playwright (headless Chromium) | The real `dist/webview.js` in a harness, driven by canned messages; deterministic state-hook assertions | 3 OSes |
 
 ```bash
@@ -104,8 +104,9 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `thumbSharedWait` | real source | What a tier's `ms` means when N requests share one pack read (the read is slowed through the mock): the tiers report per-item work only, the shared read is counted once with the callers it blocked, and the sweep rollup prints both terms |
 | `pollNoise` | real source | The existence poll's pool line: quiet cycles print once and then go silent, a busy pool prints every cycle even unchanged, and a cycle that finds a deletion still reports it |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
-| `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order) |
+| `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
+| `openRollup` | real source | The open-path rollup: the pure formatter's spans against hand-computed marks, the real provider emitting exactly one `[IC-OPEN]` line ahead of the sweep, where each mark is *taken* (burnt wall time must surface in `other`, never in a neighbour), what debug costs when off (the init payload is handed to `JSON.stringify` exactly once with debug on and never with it off, measured on a real open), and the handle census — node's own resource list shows the three `fs.watch` handles an open creates gone after the close, and every 10 s poll interval it started cleared |
 
 Two more suites sit in the same directory and import the real shipped code via the `vscode` mock
 alias: `test/unit/tupleMatching.test.ts` pins trie matching end to end (crop
@@ -174,10 +175,10 @@ moment someone is reading the log.
 `test/unit/mutationHarness.test.ts` drives the real script and signals it for each of those exits.
 It narrows the run through the `MUTATION_CHECK_TEST` env seam (JSON: `only` or `mutations`,
 `pauseMs`, `throwAfterApply`, `rejectAfterApply`), which is unset in every real run — with it unset
-the script takes exactly the path CI gates, all 195 mutations against the whole list.
+the script takes exactly the path CI gates, the whole mutation list.
 
 **Only a full run can exit 0.** A seam-narrowed run opens with a `SUBSET RUN - NOT THE GATE` banner,
-closes with a `NOT A GATE - subset run: N of 195` trailer instead of the all-killed line, and exits
+closes with a `NOT A GATE - subset run: N of <total>` trailer instead of the all-killed line, and exits
 **2** — never 0, and never 1 either, which stays reserved for a genuine survivor/error/manifest
 failure so the spec can still tell a healthy subset from a broken one. Exit 0 is the only status
 automation reads: a banner is invisible to `&&`, to `set -e` and to a green CI step, so a subset that
@@ -216,10 +217,15 @@ the fix, the docs, and the CI check.
   why a real test is awkward: the `Unsupported CPU` path needs a CPU no CI runner has, so it would
   have to be simulated, and the wasm32 tier it falls back to is absent from any normal install.
 - **Most of `imageCompareProvider.ts`** (the largest file). The integration layer covers
-  activation, command registration, real-fs scanning, and results.txt I/O, but the provider's
+  activation, command registration, real-fs scanning, results.txt I/O, and the real API's entry
+  types (the dangling-symlink premise every `type & FileType.File` gate rests on), but the provider's
   message loop, watcher wiring, and PPTX export run untested — only their pure helpers
   (`watcherLogic`, `workPool`, `pngText`, …) are extracted and pinned. Prefer that shape for new
-  logic.
+  logic. **No mutation covers that entry-type case**: it is pinned only by the integration layer,
+  which the mutation harness cannot run (it is Vitest-only), so its premise was confirmed by hand
+  against the shipped VS Code source instead. What stands in for a mutation on the code side: the
+  rule the premise protects — the `type & FileType.File` gate in `listImagesIn` — stays covered by
+  the `symlink: broken link accepted` mutation.
 - **The webview's pixels.** The Playwright layer drives the real bundle but asserts logic through
   the state hook — no pixel snapshots — so canvas rendering and visual layout are verified by eye
   (the demo gallery and the manual checks below).
@@ -480,8 +486,14 @@ the fix, the docs, and the CI check.
   21 184 ms wall), the current row ±1 after a jump to row 500 lands in 174 ms instead of 12 256 ms,
   total sweep time is unchanged, and peak queued `THUMBNAIL_BULK` falls from 7 394 to 28. Guarded by
   `test/unit/sweepCentre.test.ts` (the cursor's order and its exactly-once coverage under repeated
-  jumps) and `test/unit/sweepProviderCentre.test.ts` (the real provider's dispatch order, its live
-  re-aim on `setCurrentTuple`, and the bound), with seven mutations in `scripts/mutation-check.mjs`.
+  jumps, plus a seeded fuzz — 350 LCG-generated schedules of `NaN`/`±Infinity`/out-of-range/fractional
+  centres over the cursor, and 24 runs of the whole runner with rejections, null settles and a centre
+  that moves on every dispatch) and `test/unit/sweepProviderCentre.test.ts` (the real provider's
+  dispatch order, its live re-aim on `setCurrentTuple`, and the bound), with eight mutations in
+  `scripts/mutation-check.mjs`. The fuzz is seeded, not random: an unseeded failure that reproduces
+  once in fifty runs gets deleted by whoever hits it — and the runner fuzz counts what it generated
+  (dispatches, rejections of both shapes, silent drops, missing slots) against floors well under the
+  measured run, so a re-seed or a resize cannot quietly turn it into a fuzz over nothing.
   What it does *not* fix, measured in the same harness: when the extension can produce tiles faster
   than the channel drains them, the backlog sits on the wire queue, which no scheduler here re-orders.
 
@@ -542,8 +554,9 @@ the fix, the docs, and the CI check.
   *is* the column order (docs/tuple-matching.md: modality-order-is-callers). On the model the fix
   targets (11 dirs, 350 ms injected per-listing latency, the real `scanForImages`): 3900 ms → ~385 ms.
   Guarded by `test/unit/parallelScan.test.ts` (max listings in flight, caller order under
-  slowest-first completion, the cap, and the preserved empty-dir/sort/failure behaviour), with eight
-  mutations in `scripts/mutation-check.mjs`. The cap is pinned *exactly* (40 dirs must list 16 at a
+  slowest-first completion, the cap, the preserved empty-dir/sort/failure behaviour, the caller order
+  as it reaches the init payload), with
+  eight mutations in `scripts/mutation-check.mjs`. The cap is pinned *exactly* (40 dirs must list 16 at a
   time, not "at most 16"): an upper bound alone left `DIR_LISTING_CONCURRENCY` free to fall to 11
   — a silent halving of the open-path parallelism — with every test and every mutation still green.
 

@@ -215,7 +215,8 @@ describe('a re-aimed provider sweep drops the work it has already queued', () =>
     await settle(20);
 
     // Not one more read: the remaining 56 slots stay in the cursor, unread and unrequested. Before
-    // this, every one of them was read — ~5 minutes of NFS traffic behind a window that is gone.
+    // this, the 28 dispatches already queued behind the running batch were still read for a window
+    // that is gone; the full scale of that is the pure suite's 448-of-480.
     expect(rig.asked.length - readsAtDispose).toBe(0);
     expect(rig.asked.length).toBe(BULK_SLOTS);
     expect((rig.provider as any).pool.pending).toBe(0);

@@ -846,6 +846,10 @@
             {
               "suite": "unit",
               "match": "scanForImages follows symlinks"
+            },
+            {
+              "suite": "integration",
+              "match": "a dangling symlink types as SymbolicLink and never as File"
             }
           ]
         },
@@ -880,6 +884,14 @@
             {
               "suite": "unit",
               "match": "sorts each directory naturally, whatever order the listing returns"
+            },
+            {
+              "suite": "unit",
+              "match": "survives a scrambled completion order over 12 directories"
+            },
+            {
+              "suite": "unit",
+              "match": "one very slow directory in the middle finishes last"
             }
           ]
         },
@@ -1227,6 +1239,10 @@
             {
               "suite": "unit",
               "match": "no debugLog call in fileService.ts runs without a debugEnabled() guard"
+            },
+            {
+              "suite": "unit",
+              "match": "serializes the init payload exactly once with debug on, and never with it off"
             }
           ]
         },
@@ -1413,6 +1429,20 @@
             {
               "suite": "unit",
               "match": "dispose clears the outstanding ack watchdogs"
+            }
+          ]
+        },
+        {
+          "id": "panel-close-releases-handles",
+          "name": "A closed panel leaves no fs.watch handle and no existence-poll interval behind",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "every fs.watch handle the open created is closed with the panel"
+            },
+            {
+              "suite": "unit",
+              "match": "the delete-poll interval is cleared with the panel"
             }
           ]
         },
@@ -1726,6 +1756,14 @@
             {
               "suite": "unit",
               "match": "a centre past the ends is clamped to the grid"
+            },
+            {
+              "suite": "unit",
+              "match": "hands out every planned slot exactly once across 350 seeded schedules"
+            },
+            {
+              "suite": "unit",
+              "match": "settles every slot exactly once and ends, across 24 seeded runs"
             }
           ]
         },

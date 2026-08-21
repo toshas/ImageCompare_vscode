@@ -42,8 +42,7 @@ interface Rig {
   drain: (rounds?: number) => Promise<void>;
 }
 
-/** `hostSettles`: what the host maps a TaskCancelled to once closed — null (both products) or SWEEP_REQUEUE (the pre-fix mapping). */
-function poolRig(hostSettles: 'null' | 'requeue' = 'null'): Rig {
+function poolRig(): Rig {
   const pool = new WorkPool(5);
   const key = 'abandon-rig';
   const release: Array<() => void> = [];
@@ -81,7 +80,7 @@ function poolRig(hostSettles: 'null' | 'requeue' = 'null'): Rig {
           )
           .catch(error => {
             // Both hosts: a cancellation they caused settles the slot silently, any other returns it.
-            if (error instanceof TaskCancelled) return rig.closed && hostSettles === 'null' ? null : SWEEP_REQUEUE;
+            if (error instanceof TaskCancelled) return rig.closed ? null : SWEEP_REQUEUE;
             throw error;
           }),
       dropQueued: () => pool.cancel(key),

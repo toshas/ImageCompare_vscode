@@ -484,3 +484,168 @@ describe('the open trace is created and used only behind the debug flag', () => 
     expect(offenders, 'ungated open-mark writes').toEqual([]);
   });
 });
+
+// What the instrumentation COSTS when it is off, rather than where its call site sits. The source
+// shape above cannot tell "gated" from "gated and then run anyway"; these count the work itself, on
+// the real open path. (docs/loading-architecture.md: debug-off-costs-nothing)
+describe('the open trace costs nothing measurable when debug is off', () => {
+  beforeEach(() => {
+    __resetConfig();
+    __resetChannels();
+    disposeDebugLog();
+  });
+
+  afterEach(() => {
+    disposeDebugLog();
+    __resetConfig();
+    __resetChannels();
+  });
+
+  /** Runs one real open and reports how many times the init payload was handed to JSON.stringify. */
+  async function initSerializations(debug: boolean): Promise<number> {
+    __setConfig('debug', debug);
+    initDebugLog();
+    const realStringify = JSON.stringify;
+    let passes = 0;
+    JSON.stringify = ((value: unknown, ...rest: unknown[]) => {
+      if (value && typeof value === 'object' && (value as { type?: unknown }).type === 'init') passes++;
+      return (realStringify as (...a: unknown[]) => string)(value, ...rest);
+    }) as typeof JSON.stringify;
+    const p = fakePanel([], 0);
+    try {
+      await makeProvider().openCompare([Uri.file(imageFixture())] as never, p.panel);
+      await p.ready();
+    } finally {
+      JSON.stringify = realStringify;
+      p.close();
+    }
+    return passes;
+  }
+
+  it('serializes the init payload exactly once with debug on, and never with it off', async () => {
+    // Non-vacuous: the probe does see the sizing pass when the trace is alive.
+    expect(await initSerializations(true)).toBe(1);
+    // The reason the gate exists: on a 746x10 open this pass is megabytes of JSON.
+    expect(await initSerializations(false)).toBe(0);
+  });
+});
+
+// A panel that is closed must leave nothing running behind it: the delete-poll interval and one
+// fs.watch per local leaf dir are real OS handles, and a leaked one keeps polling a directory for a
+// window nobody is looking at. Counted through node's own resource census and the real timer calls,
+// not through the provider's own bookkeeping.
+// (docs/file-watching.md: watched-dirs-have-watchers)
+describe('open and close leave no handles behind (src/imageCompareProvider.ts)', () => {
+  beforeEach(() => {
+    __resetConfig();
+    __resetChannels();
+    disposeDebugLog();
+  });
+
+  afterEach(() => {
+    disposeDebugLog();
+    __resetConfig();
+    __resetChannels();
+  });
+
+  // `FSEventWrap` is node's own name for an fs.watch handle, on every platform this suite runs on.
+  // An ALLOWLIST, deliberately: a denylist of the runner's noise (timers, fs requests, the worker's
+  // sockets) silently counts any resource kind a different platform or node version reports and that
+  // nobody anticipated, which turns an exact count below into a false leak on somebody else's box.
+  const WATCH_HANDLE = 'FSEventWrap';
+
+  /** The fs.watch handles alive right now, from node's own resource census. */
+  function watcherHandles(): number {
+    return process.getActiveResourcesInfo().filter(h => h === WATCH_HANDLE).length;
+  }
+
+  /**
+   * Polls the census until it reads `want`, or the deadline passes; returns what it last read, so
+   * the caller's own expect is still what fails. Not a fixed sleep: macOS tears FSEvents streams
+   * down on the CoreFoundation run-loop thread, so a loaded runner can miss any interval picked here.
+   */
+  async function handlesReach(want: number): Promise<number> {
+    // Strictly below Vitest's 5s default: a poll that outlives the test kills it by timeout, and a
+    // bare timeout is indistinguishable from a hang — worse than the fixed sleep this replaced.
+    const deadline = Date.now() + 1500;
+    let live = watcherHandles();
+    while (live !== want && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 10));
+      live = watcherHandles();
+    }
+    return live;
+  }
+
+  async function openPanel(): Promise<ReturnType<typeof fakePanel>> {
+    const p = fakePanel([], 0);
+    await makeProvider().openCompare([Uri.file(imageFixture())] as never, p.panel);
+    await p.ready();
+    return p;
+  }
+
+  // Three 1500ms polls worst case (4500ms) inside Vitest's 5s default — thin, but a failing run can
+  // only burn one, since each poll is followed immediately by an assertion on its own result.
+  // A poll that outlived the test would die as a bare timeout, indistinguishable from a hang.
+  it('every fs.watch handle the open created is closed with the panel, and none before', async () => {
+    // Whatever an earlier test left watching drains first; the counts below are relative to it.
+    // Poll the leftovers of earlier tests down to a known zero. Settling on whatever happened to be
+    // there instead is a real flake: a base that locked onto three draining handles reads the open's
+    // own three as zero, indistinguishable from a regression.
+    const base = await handlesReach(0);
+    // Every earlier test in this file closed its panel, so a non-zero count here is already the
+    // leak this test is about — it just surfaced one test sooner.
+    expect(base, 'no watcher handles are live before the open (closing leaks if this fails)').toBe(0);
+
+    const closed = await openPanel();
+    // Direct, not polled: fs.watch enters the census synchronously and setupFileWatcher runs inside
+    // the awaited openCompare, so this is the true current count — an open that created four reads four.
+    expect(watcherHandles() - base, 'the open really did create watcher handles').toBe(3);
+
+    closed.close();
+    // Only the teardown is polled — that is the side the run-loop can delay.
+    expect(await handlesReach(base), 'every fs.watch was closed with the panel').toBe(base);
+
+    // The other half of the census: a panel nobody closed holds its handles open, so the assertion
+    // above is about the close and not about an open that created nothing.
+    const leaked = await openPanel();
+    try {
+      expect(watcherHandles() - base, 'a live panel keeps watching').toBe(3);
+    } finally {
+      leaked.close();
+    }
+    expect(await handlesReach(base)).toBe(base);
+  });
+
+  it('the delete-poll interval is cleared with the panel', async () => {
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const live = new Set<unknown>();
+    let created = 0;
+    // Only the 10 s existence poll (docs/file-watching.md): anything else the runner schedules
+    // inside this window is not this panel's to clear.
+    globalThis.setInterval = ((handler: never, ms?: number, ...rest: never[]) => {
+      const id = realSetInterval(handler, ms, ...rest);
+      if (ms === 10000) { live.add(id); created++; }
+      return id;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((id: never) => {
+      live.delete(id);
+      return realClearInterval(id);
+    }) as typeof clearInterval;
+
+    let panel: ReturnType<typeof fakePanel> | undefined;
+    try {
+      panel = await openPanel();
+      // Non-vacuous: a poll cadence that moved off 10 s would leave nothing to clear and pass silently.
+      expect(created, 'the open started the existence poll').toBeGreaterThanOrEqual(1);
+      expect(live.size, 'and it is running').toBe(created);
+      panel.close();
+      expect(live.size, 'every poll interval the open started was cleared').toBe(0);
+    } finally {
+      panel?.close();
+      for (const id of live) realClearInterval(id as ReturnType<typeof setInterval>);
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+    }
+  });
+});
