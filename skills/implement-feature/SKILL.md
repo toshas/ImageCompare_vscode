@@ -69,3 +69,11 @@ Create a run directory (`.agent-runs/feature-<slug>/`, gitignored). Then:
 - If the contract said yes to a demo: add the `demos.json` entry (caption is single-sourced there)
   and the recording script, re-record, and check the clip shows what its caption claims.
 - Report: the contract, the verifier's verdicts, what shipped gray and why, and the demo decision.
+
+### Overlapping rounds (worktrees)
+
+Same protocol as `fix-issue` → "Overlapping rounds": verify(N) runs against the main checkout while
+implement(N+1) runs with `isolation: "worktree"` off the last commit; merge onto the new HEAD before
+N+1's verifier, which must see the merged tree. `scripts/mutation-check.mjs` and
+`test/dashboard/features.json` collide every time and are merged by hand. Do not overlap when the two
+rounds touch the same `src/` module, or when N is a REJECT fixup.

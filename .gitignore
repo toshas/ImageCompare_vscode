@@ -44,3 +44,6 @@ test/dashboard/results/
 
 # Overnight run notes — local scratch, read then delete
 NIGHT-RUN-NOTES.md
+
+# Working notes on iteration speed — local, read then fold into CLAUDE.md if kept
+ITERATION-TIPS.md
