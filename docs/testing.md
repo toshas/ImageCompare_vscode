@@ -354,6 +354,15 @@ the fix, the docs, and the CI check.
 
 ## Findings (caught by this testbed)
 
+- **Two comparison tabs shared one FIFO, so the second one indexed nothing for a chunk** *(fixed)* —
+  on the real pool and the real sweep runner, a second 746x10 tab joining a running sweep waited 28
+  reads (8 batches, ~11 s at the field's cold cost) for its first slot and then took 12 % of the next
+  32; the pool now rotates between per-panel groups (50 %), and a *hidden* tab's sweep pauses
+  outright (0 reads over 20 batches, against 40 before). `test/unit/poolFairness.test.ts` and
+  `test/unit/sweepHiddenPanel.test.ts`, with twelve mutations — including the two that hang rather
+  than starve: a pause with nothing outstanding has no settle left to end the sweep, so the host's
+  repump on dispose is the only exit, and a sweep paused at start must not take the empty-grid exit.
+
 - **A test raced a deliberately unawaited cache write** *(fixed)* — `thumbTierStats`'s disk-tier test
   read the tier counter before `saveToDiskCache`'s fire-and-forget write had landed, so it failed 2 of
   15 full `npm test` runs under whole-suite IO contention (and deterministically with 25 ms injected

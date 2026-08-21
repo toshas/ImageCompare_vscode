@@ -45,7 +45,7 @@ export const SWEEP_REQUEUE: unique symbol = Symbol('sweep-requeue');
 export interface ThumbnailSweepIo<T> {
   /** Resolve one slot's encoded bytes; null settles the slot with no per-slot post (provider: disposed panel), SWEEP_REQUEUE returns it unsettled. */
   makeThumbnail(item: ThumbnailSlot & { image: T }): Promise<ThumbnailBytes | null | typeof SWEEP_REQUEUE>;
-  /** Drop the host's queued-but-unstarted sweep work; called when the centre moves, and every dropped slot must then resolve SWEEP_REQUEUE (docs/loading-architecture.md: sweep-cancels-on-reaim). */
+  /** Drop the host's queued-but-unstarted sweep work; called when the centre moves and when the host pauses, and every dropped slot must then resolve SWEEP_REQUEUE (docs/loading-architecture.md: sweep-cancels-on-reaim, hidden-sweep-pauses-not-cancels). */
   dropQueued?(): void;
 }
 
@@ -59,6 +59,10 @@ export interface ThumbnailSweepOptions {
   abandoned?: () => boolean;
   /** Dispatch bound; defaults to SWEEP_CHUNK (docs/loading-architecture.md: sweep-dispatch-bounded). */
   chunk?: number;
+  /** True while the host is not on screen: the pump returns its queued dispatches and hands out nothing until the host repumps (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels). */
+  paused?: () => boolean;
+  /** Called once with the callback that re-enters the pump; the host must invoke it whenever its own `paused`/`abandoned` answer changes, or a pause takes effect only at the next settle and a sweep paused with nothing outstanding never ends at all (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels). */
+  onRepump?: (repump: () => void) => void;
 }
 
 /** The sweep's dispatch order: two walks out from the centre over the plan's rows, forward first on a tie, each item leaving its row exactly once (docs/loading-architecture.md: sweep-covers-every-slot-once). */
@@ -121,7 +125,7 @@ export class SweepCursor<T> {
   }
 }
 
-/** Run the sweep: missing-slot errors first, then items dispatched centre-out, at most `chunk` outstanding and refilled per settle, each settle posting its result and a progress tick; an abandoned host ends it early with the grid uncovered (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded, sweep-stops-when-host-abandons). */
+/** Run the sweep: missing-slot errors first, then items dispatched centre-out, at most `chunk` outstanding and refilled per settle, each settle posting its result and a progress tick; a paused host suspends dispatch until it resumes, an abandoned one ends it early with the grid uncovered (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels). */
 export function runThumbnailSweep<T extends { modality: string }>(
   plan: ThumbnailPlan<T>,
   io: ThumbnailSweepIo<T>,
@@ -142,11 +146,14 @@ export function runThumbnailSweep<T extends { modality: string }>(
   const centre = options.centre ?? (() => 0);
   // A host that never abandons is the old behaviour: the sweep runs to full coverage (docs/loading-architecture.md: sweep-stops-when-host-abandons).
   const abandoned = options.abandoned ?? (() => false);
+  // A host that never pauses is the old behaviour too: it sweeps whether anyone is looking or not (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels).
+  const paused = options.paused ?? (() => false);
   const chunk = Math.max(1, options.chunk ?? SWEEP_CHUNK);
   const cursor = new SweepCursor(plan.items);
   let done = 0;
   let outstanding = 0;
   let aimed = Number.NaN;
+  let pauseDropped = false;
   let resolveSweep!: () => void;
   let rejectSweep!: (error: unknown) => void;
   const finished = new Promise<void>((resolve, reject) => {
@@ -204,6 +211,15 @@ export function runThumbnailSweep<T extends { modality: string }>(
   function pump(aim: number): void {
     // Nobody is watching: the rest of the grid stays in the cursor instead of being read for a window that is gone (docs/loading-architecture.md: sweep-stops-when-host-abandons).
     if (abandoned()) return;
+    // Hidden, not gone: the queued dispatches go back to the cursor so the tab in focus gets those slots, and the grid is still owed (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels).
+    if (paused()) {
+      if (outstanding > 0 && !pauseDropped) {
+        pauseDropped = true;
+        io.dropQueued?.();
+      }
+      return;
+    }
+    pauseDropped = false;
     // The outstanding dispatches ARE the lag: drop the ones that never started so the new centre is next (docs/loading-architecture.md: sweep-cancels-on-reaim).
     if (aim !== aimed) {
       aimed = aim;
@@ -217,8 +233,14 @@ export function runThumbnailSweep<T extends { modality: string }>(
     }
   }
 
+  // The runner's own re-entry point: a pause acts at once, and a sweep paused with nothing outstanding still has an exit (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels).
+  options.onRepump?.(() => {
+    pump(centre());
+    if (outstanding === 0 && (abandoned() || cursor.remaining === 0)) resolveSweep();
+  });
+
   pump(centre());
-  // A host already gone at sweep start dispatches nothing, so no settle can ever fire: this is then the only exit (docs/loading-architecture.md: sweep-stops-when-host-abandons).
-  if (outstanding === 0) resolveSweep();
+  // Nothing dispatched means no settle can ever fire, so this is the only exit — unless a pause still owes the grid, and then the repump is (docs/loading-architecture.md: sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels).
+  if (outstanding === 0 && (abandoned() || !paused())) resolveSweep();
   return finished;
 }

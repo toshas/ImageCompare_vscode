@@ -1792,6 +1792,74 @@
               "match": "keeps at most SWEEP_CHUNK slots in flight, not the whole grid"
             }
           ]
+        },
+        {
+          "id": "sweep-cross-panel-fairness",
+          "name": "Two comparison tabs sweeping at once take turns in the pool instead of one draining first",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "alternates between two groups where a single FIFO drained the first group whole"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps plain FIFO within a group"
+            },
+            {
+              "suite": "unit",
+              "match": "a group that joins late enters the rotation"
+            },
+            {
+              "suite": "unit",
+              "match": "cancelling one group leaves the other group's order and the rotation intact"
+            },
+            {
+              "suite": "unit",
+              "match": "serves the second tab within one batch instead of after the first tab's whole queued chunk"
+            },
+            {
+              "suite": "unit",
+              "match": "splits the bulk slots roughly evenly once both tabs are sweeping"
+            },
+            {
+              "suite": "unit",
+              "match": "gives a second comparison tab a slot in the first batch"
+            }
+          ]
+        },
+        {
+          "id": "sweep-hidden-panel-pauses",
+          "name": "A hidden comparison pauses its thumbnail sweep and resumes it, owing every slot, when shown",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "stops taking bulk slots within one running batch"
+            },
+            {
+              "suite": "unit",
+              "match": "delivers every owed slot exactly once when the panel comes back"
+            },
+            {
+              "suite": "unit",
+              "match": "a sweep paused before its first dispatch waits for the resume"
+            },
+            {
+              "suite": "unit",
+              "match": "a dispose while paused still ends the sweep"
+            },
+            {
+              "suite": "unit",
+              "match": "reads nothing more while hidden and finishes every slot exactly once when shown again"
+            },
+            {
+              "suite": "unit",
+              "match": "gives the wire claim back when a hidden panel is disposed"
+            },
+            {
+              "suite": "unit",
+              "match": "the sweep's chunk is the whole cost of hiding"
+            }
+          ]
         }
       ]
     },

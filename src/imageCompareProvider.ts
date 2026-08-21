@@ -113,6 +113,8 @@ interface PanelState {
   /** Debug-only prefetch-wave rollups, keyed by wave key; `open` until issuing finishes, then deleted as the wave drains. */
   prefetchWaves: Map<string, { center: number; issued: number; done: number; bytes: number; startedAt: number; open: boolean }>;
   sweepStatsTimer?: ReturnType<typeof setInterval>; // debug-only; cleared at sweep end and on dispose
+  /** Re-enters the running sweep's pump; called whenever this panel's visible/disposed answer changes (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels). */
+  sweepRepump?: () => void;
   /** Debug-only open trace; absent when debug was off at open, and cleared once the rollup is emitted (docs/loading-architecture.md: open-spans-account-for-the-whole-open). */
   openMarks?: OpenMarks;
 }
@@ -336,13 +338,7 @@ export class ImageCompareProvider {
         (message: WebViewMessage) => this.handlePanelMessage(panelState, message)
       ));
 
-      // Only the prefetch wave may be dropped on hide (docs/loading-architecture.md: hidden-keeps-work).
-      panelSubscriptions.push(panel.onDidChangeViewState(() => {
-        panelState.visible = panel.visible;
-        if (!panel.visible) {
-          this.pool.cancel(panelState.prefetchWaveKey);
-        }
-      }));
+      panelSubscriptions.push(panel.onDidChangeViewState(() => this.setPanelVisible(panelState, panel.visible)));
 
       // Triggers the webview JS to run and post 'ready'.
       if (marks) marks.htmlAt = Date.now();
@@ -362,6 +358,18 @@ export class ImageCompareProvider {
 
 
   /**
+   * React to this panel being shown or hidden: nothing is cancelled but the speculative prefetch
+   * wave, and the open-time sweep is paused while hidden and resumed on re-show
+   * (docs/loading-architecture.md: hidden-keeps-work, hidden-sweep-pauses-not-cancels).
+   */
+  private setPanelVisible(state: PanelState, visible: boolean): void {
+    state.visible = visible;
+    if (!visible) this.pool.cancel(state.prefetchWaveKey);
+    // Both directions: hiding must reach the pump to take effect at all, showing to restart it.
+    state.sweepRepump?.();
+  }
+
+  /**
    * Tear a panel down: cancel its work, drop its caches and clear every timer it armed
    * (docs/loading-architecture.md, "Lifecycle").
    */
@@ -372,6 +380,7 @@ export class ImageCompareProvider {
     this.pool.cancel(sweepPoolKey(state)); // the sweep's queue hangs off its own key (docs/loading-architecture.md: sweep-cancels-on-reaim)
     this.pool.cancel(state.prefetchWaveKey);
     this.cancelImageLoads(state); // per-tuple keys outlive poolKey's cancel (docs/loading-architecture.md: stale-tuple-loads-cancelled)
+    state.sweepRepump?.(); // a sweep paused with nothing outstanding has no settle left to end it (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels)
     state.loadedImages.clear();
     state.heldImagePosts.clear();
     state.transport.reset(); // parked speculation dies with the panel (docs/loading-architecture.md: speculation-yields-the-wire)
@@ -1003,7 +1012,9 @@ ${lead}
               .submit(() => this.thumbnailService.getThumbnail(item.image.uri, thumbnailSize * 2), {
                 // Ranks below on-demand THUMBNAIL so scrolling can't queue behind the sweep.
                 priority: Priority.THUMBNAIL_BULK,
-                key: sweepPoolKey(state)
+                key: sweepPoolKey(state),
+                // The panel is the fair-share bucket, so a second tab's sweep interleaves with this one (docs/loading-architecture.md: bulk-sweeps-share-the-pool).
+                group: state.poolKey
               })
               .then(bytes => ({ bytes, mime: THUMBNAIL_MIME }))
               .catch(error => {
@@ -1036,8 +1047,13 @@ ${lead}
             this.sendThumbnailMessage(state, slot.tupleIndex, slot.modalityIndex, msg.bytes, msg.mime);
           } else this.sendThumbnailErrorMessage(state, slot.tupleIndex, slot.modalityIndex, msg.error);
         },
-        // The host supplies only where the user is and whether it is still there; both orderings are the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons).
-        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }
+        // The host supplies only where the user is, whether it is still there and whether anyone is looking; every ordering decision is the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels).
+        {
+          centre: () => state.currentTupleIndex,
+          abandoned: () => state.disposed,
+          paused: () => !state.visible,
+          onRepump: repump => { state.sweepRepump = repump; }
+        }
       );
     } catch (error) {
       // The prologue posts before it returns a promise, so a synchronous throw would strand the claim.

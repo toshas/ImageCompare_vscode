@@ -83,10 +83,15 @@ is libuv's, not the core count's — see `pool-width-hides-latency` below), over
   handler requests loading work. `requestThumbnails` is posted on tuple add (that row) and on modality add/remove (every
   row) — not on visibility, and not on tuple delete, where the webview re-indexes its own thumbnail
   map instead and the extension re-sends nothing.
-- **FIFO within a priority** — load-bearing: the sweep submits its slots in the order it dispatches
+- **FIFO within a priority and group; round-robin between the groups of one priority.** The FIFO
+  half is load-bearing: the sweep submits its slots in the order it dispatches
   them (nearest row to the user first, modality-minor within a row — "The sweep is centre-out"
   below), so thumbnails *start* where the user is looking, below every foreground
-  priority (only the existence sweep's `POLL` ranks lower). It is
+  priority (only the existence sweep's `POLL` ranks lower). The rotation half is what keeps *two*
+  panels' sweeps from starving one another ("Two panels sweeping at once" below): `submit`'s optional
+  `group` is a fair-share bucket, work that names no group shares one bucket, and a class with a
+  single bucket is therefore plain FIFO — the pre-rotation behaviour, exactly. Only the bulk sweep
+  names a group today (the panel's `poolKey`), so every other class is still one FIFO. It is
   FIFO *start* order — with any concurrency above 1 and varying decode times a later item can finish
   first, so the fill is approximate, skew bounded by the sweep's running-slot window: `concurrency - 1`
   (the speculative-rank cap above, waived at concurrency 1), where the pool's concurrency is
@@ -171,6 +176,8 @@ outrank anything.
 - **The nearest two rank as `SIBLING`, the remainder as `SIBLING_TAIL`.** Ten modalities at ~2.25 MB
   is ~20 MB per lingered tuple; nearest-first makes the first few load-bearing and the rest genuinely
   speculative, so the tail is the one class that must never take a slot the sweep could use.
+  `NEAREST_SIBLINGS` (2, in `tupleLoadPlan.ts`) is **unmeasured on its benefit side and left alone
+  deliberately** — see "What two nearest siblings cost" below before changing it.
 - The accepted regression, knowingly: **flipping to a sibling inside the dwell window costs one
   `VISIBLE` load** instead of a cache hit — one image's latency, against the old scheme's N images per
   tuple passed. `render()` issues that load itself when the current slot is empty, so the flip is
@@ -278,6 +285,34 @@ intent, not a regression: the wire budget already parked speculative pushes for 
   centre before any of this wave's bytes land, so what it drops is the previous wave's leftovers, never
   what this one is about to fetch.
 
+### What two nearest siblings cost
+
+`NEAREST_SIBLINGS = 2` was a starting point, not a measurement, and half of it can be measured and
+half of it cannot. What is measurable is the **cost**, and it is larger than the constant's name
+suggests, because the same number sets two things: the dwell split (how many siblings rank `SIBLING`
+rather than `SIBLING_TAIL`) *and* the breadth of every prefetch wave, which derives its columns from
+this very plan (`prefetch-scoped-to-the-visible-column`). At the field's shape — 10 modalities,
+`prefetchCount 3`, ~2.25 MB per image — read off the real planners:
+
+| | `SIBLING` / `SIBLING_TAIL` per lingered tuple | prefetch columns | wave slots | wave bytes |
+|---|---|---|---|---|
+| k = 1 | 1 / 8 | 2 | 14 | 31.5 MB |
+| **k = 2 (shipped)** | **2 / 7** | **3** | **21** | **47.3 MB** |
+| k = 3 | 3 / 6 | 4 | 28 | 63.0 MB |
+
+(The k = 2 row is the real `prefetchWavePlan` output; it reproduces the measured 20 slots / 47.7 MB
+in the prefetch table above, which counts the already-cached on-screen slot out.) So each extra
+nearest sibling costs a third more speculative bytes and slots per wave — 15.7 MB per wave at this
+shape — and one fewer modality on the tail's "only when nothing else is queued" rule.
+
+What is **not** measurable here is the benefit: it depends on how far from the current pill the
+user's modality flips actually land, which is a property of their browsing, not of this code. A
+synthetic distribution would decide the constant by assuming its answer. So the honest close is that
+the cost of moving it is known, the payoff is not, and it stays at 2 until a real session says
+otherwise. If one ever does, the number to collect is the *distance distribution of modality
+switches*: the fraction of flips that land within one, two or three display steps of the pill the
+user arrived on.
+
 ### Two caches, two eviction bounds
 
 `state.loadedImages` (extension) and `loadedTuples` (webview) are evicted independently, by distance
@@ -307,8 +342,9 @@ total`. It can never queue ahead of a `VISIBLE` load, and above concurrency 1 th
 sweep items run, so a `VISIBLE` arrival finds a slot free unless other non-speculative work (anything
 ranked above `PREFETCH`) holds the rest of the pool; only at concurrency 1, where the reservation is
 waived, can the one running sweep item impose a wait by itself, since running tasks are never
-preempted. It is *not* visibility-gated — a one-shot fire from
-`sendInitData`, and cancelling or skipping it leaves blank thumbnails until something re-requests them.
+preempted. It is a one-shot fire from `sendInitData` that is never *skipped* for a hidden panel, only
+paused while it is hidden — cancelling or skipping it leaves blank thumbnails until something
+re-requests them.
 Two things re-request: `requestThumbnails`, which the webview posts on tuple add (that row) and on
 modality add/remove (every tuple); and `regenerateThumbnail`, which the watcher fires for a single slot
 whose file changed, was restored, renamed, or newly placed — and which the existence sweep fires too,
@@ -396,8 +432,10 @@ posts are handed to `postMessage` FIFO and the transport budget covers only spec
 pushes. Re-centring still helps (9.5 s → 7.3 s) but cannot beat a queue it does not own. Pacing or
 re-ordering the thumbnail wire is a separate lever, and a separate round.
 
-Two things it deliberately does **not** do. It does not gate on visibility — every slot is still
-swept, including rows the user never looks at, which is what keeps the guarantee simple. And it does
+Two things it deliberately does **not** do. It does not gate on *scroll* visibility — every slot is
+still swept, including rows the user never looks at, which is what keeps the guarantee simple (a
+hidden *panel* is a different matter: it pauses, and resumes with the same slots owed — "Two panels
+sweeping at once"). And it does
 not touch the prefetch band, which is a separate resource with a separate problem. Chunking does not make a hung `makeThumbnail` worse:
 the pool's effective bulk width (4 here) is narrower than the 32-slot chunk, so the same 4 hangs jam
 the chunked and un-chunked sweeps identically. The wire claim is protected against that by the idle
@@ -491,6 +529,86 @@ the sweep promise (`speculation-yields-the-wire`). And the grid is genuinely **n
 early stop; the progress bar stops below `total` and no terminal tick is posted, which is correct —
 the panel is gone, and in the standalone a terminal tick would land on the *next* session's bar.
 
+### Two panels sweeping at once
+
+One pool serves every comparison tab, and until the group rotation landed it served them through one
+FIFO per priority. A tab that opens while another is sweeping has already lost: the first tab holds
+`SWEEP_CHUNK` dispatches, so the second tab's first slot queues behind 28 of them and every refill it
+makes goes to the back again. Measured on the real pool and the real runner, two 746x10 tabs at width
+5 (4 bulk slots), the second tab joining mid-sweep:
+
+| | one FIFO | group rotation |
+|---|---|---|
+| reads of the first tab before the second gets one | 28 | 0 |
+| batches (4 reads each) before the second tab reads at all | 8 | 1 |
+| second tab's share of the next 32 reads | 12.5 % | 50 % |
+
+At the field's cold cost (1 586 ms per thumbnail, four bulk slots) those 28 reads are ~11 s in which
+the tab the user just opened shows nothing, and a 50/50 split afterwards. The field report was
+stronger than that — *"when one imagecompare tab is doing its loading, and I switch to or open
+another ic tab, the indexing does not begin until the old tab is switched to and let finish, or
+closed"* — and the rest of the gap is the second half of this change: the reported case always has
+the old tab *hidden*, and an even split with a tab nobody is watching still halves the rate of the
+one in front for the whole grid. Same two tabs, counted over the 20 batches after the switch:
+
+| | sweeping while hidden | paused while hidden |
+|---|---|---|
+| hidden tab's reads | 40 | 0 |
+| focused tab's reads | 40 | 80 |
+
+**The fair-share key is the panel, not the sweep.** They are the same thing today — a panel runs one
+open-time sweep — so the choice is about what may not become a lever. A key that a producer can
+multiply is a key a producer can use to take a larger share: keying on the sweep would give any panel
+that runs two (a standalone re-open, or any future re-sweep) two thirds of the pool against a panel
+with one. A panel cannot be multiplied without the user opening a tab, and a tab the user opened is
+exactly the thing that *deserves* a share. So the group is `state.poolKey` — already unique for the
+process lifetime (`panel-keys-never-reused`), already on the state, and never reused after a close.
+The cancellation key stays separate (`${poolKey}-sweep`): cancellation scopes *what dies together*,
+the group scopes *who takes turns*, and merging them would make a re-aim's drop a fairness event.
+
+**A hidden tab pauses instead of sweeping.** Rotation splits the pool evenly between two tabs; it has
+no opinion about whether anyone is looking at either. The maintainer's rule is that they are not
+equal — *"if a user navigated away from a tab, it is ok to put all those jobs on hold and give way to
+the tab in focus"* — so the runner takes a `paused()` predicate beside `centre()` and `abandoned()`,
+and the provider feeds it `!state.visible`. A paused pump hands out nothing and returns the
+dispatches it has already queued to the cursor (`io.dropQueued`, the same call a re-aim makes), so
+the hidden tab is out of the pool within one running batch rather than one chunk. This is a
+*deferral*: the slots go back to the cursor, not into the bin, and the panel finishes its grid when
+the user returns to it. The two halves are not substitutes — rotation is what saves two tabs the user
+has side by side in split editor groups, where neither is hidden and neither may starve; pausing is
+what saves the common case of one tab in front and one behind. Neither covers the other's case.
+
+Three things a pause must not break, and each of them hangs something if it does.
+
+- **The sweep must still end.** A paused sweep with nothing outstanding has no settle left to run its
+  exit, so the runner hands the host a `repump` callback and the host calls it whenever its own
+  `paused`/`abandoned` answer changes: on hide (or the pause never reaches the pump until the next
+  slot settles), on show, and on **dispose** — where it is the only exit there is. Without that call
+  the sweep promise never settles, `endSweep` never runs, and the wire claim is held for the life of
+  the extension host (`speculation-yields-the-wire`), with the whole plan retained behind it.
+- **A pause at sweep start is not an empty sweep.** The runner's start-time exit (`outstanding === 0`
+  after the first pump) exists for a host that was already gone; a paused host reaches it too, with
+  the entire grid still in the cursor, so the exit is taken only when the host is abandoned or not
+  paused.
+- **The wire claim is released by the idle watchdog, not held for the pause.** A paused sweep settles
+  nothing, so the existing 30 s idle watchdog ends it and unparks speculation — degrading to "no rule
+  2", the pre-backpressure behaviour, which is cheap and which a hidden panel does not exercise
+  anyway (it issues no prefetch waves). `endSweep` is idempotent, so the resumed sweep's real
+  completion changes nothing; what it costs is the `[IC-SWEEP] done` rollup being printed at the
+  watchdog rather than at the end of the grid.
+
+**Does the fairness reach the user?** The pool orders work; the thumbnail *wire* is still FIFO and
+`TransportBudget` does not govern it (it bounds speculative image pushes only, and the sweep's own
+tiles are not speculative). That limit is real but it does not eat this change, because the order the
+wire sees is the order the pool produces: tiles are posted one at a time as slots settle, so
+interleaving the reads interleaves the posts. What the rotation cannot do is create bandwidth — with
+two tabs sweeping over one serialized remote link, each tab's grid takes about twice as long as it
+would alone, and no re-ordering changes that. What it changes is that the second tab starts filling
+immediately at half rate instead of showing nothing for a chunk and then filling at half rate; the
+pause takes it further, to full rate for the tab in focus and nothing for the one behind it. Pacing
+or re-ordering the thumbnail wire itself remains a separate, un-taken lever (see the last row of the
+centre-out table above).
+
 ### Thumbnails ship as bytes, and the webview owns their urls
 
 A `thumbnail` message carries `{bytes, mime}`, exactly like `image` — not a
@@ -556,7 +674,9 @@ Three rules, in the order they are applied to an `image` push:
    is attached — raise the flag outside that guard and the panel spends its life with speculation
    parked, silently. The watchdog is **idle**, not total: every settled slot re-arms it, so a sweep
    that is merely slow (thousands of tiles on a cold mount) is never cut short, while one read that
-   never settles costs 30 s of parked speculation instead of the panel's life. Releasing early is
+   never settles costs 30 s of parked speculation instead of the panel's life. A sweep *paused*
+   because its panel is hidden settles nothing either, so the same watchdog is what ends its claim —
+   which is right, since a hidden panel speculates on nothing anyway ("Two panels sweeping at once"). Releasing early is
    cheap — it degrades to "no rule 2", which is the pre-backpressure behaviour — so the timeout is
    sized to be obviously pathological rather than tight.
 3. **Outside a sweep, speculation is capped in bytes in flight**, not in messages — one 16 MB image
@@ -767,8 +887,10 @@ mechanism reports what, and what each event mutates, is `docs/file-watching.md`.
 ## Lifecycle
 
 `PanelState.disposed` stops all in-flight work. `visible` gates *starting* new background work —
-specifically the **existence sweep** and prefetch waves. It does **not** gate the open-time thumbnail
-sweep, which is a one-shot fire and must run to completion (see "Thumbnails").
+the **existence sweep** and prefetch waves — and, since cross-panel fairness landed, *continuing* the
+open-time thumbnail sweep, which pauses while hidden and resumes on re-show (see "Two panels sweeping
+at once"). It is still a one-shot fire that must reach full coverage; a pause defers it, and only a
+dispose ends it early.
 
 Hiding a panel deliberately does not cancel its image or thumbnail work. The custom editor uses
 `retainContextWhenHidden`, so a hidden webview keeps its DOM, cache and spinner and nothing re-requests
@@ -777,6 +899,14 @@ on re-show — cancelling would strand it permanently. Queued background work is
 on hide, and nothing restarts it on re-show: it restarts on the next `tupleFullyLoaded` that arrives
 *while visible*. One arriving while still hidden is consumed for nothing, because the wave-key bump
 happens before the visibility bail.
+
+The open-time sweep is the one thing hiding *suspends* — and suspending is not cancelling: its slots
+go back to the cursor and are handed out again when the panel is shown ("Two panels sweeping at
+once"). Nothing else about hide changed, and nothing may: a hidden panel's queued image loads, its
+cached bytes and its held payloads all stay exactly where they were. `visible` therefore has three
+jobs now — it gates *starting* the existence sweep and prefetch waves, and it gates *continuing* the
+thumbnail sweep — and the transition itself is a call, not just a flag write: `setPanelVisible` must
+reach the sweep's pump in **both** directions.
 
 Closing a panel cancels everything (`poolKey`, the sweep's own `${poolKey}-sweep` **and**
 `prefetchWaveKey` — `cancel` is exact-match; see `sweep-cancels-on-reaim` for why the sweep has a key
@@ -999,13 +1129,46 @@ mount latency — but the same shape applies, so neither product can quietly div
   move — `sweep-cancels-on-reaim`), and the per-settle refill
   is what keeps it from costing throughput (the pool's 1..6 slots always have queued work behind
   them until the tail). A field log showed the un-bounded version: `queued=[0,0,0,0,0,7293,0,4]`.
+- **`bulk-sweeps-share-the-pool`** — two panels sweeping at once take turns: within one priority the
+  pool serves its groups round-robin (`WorkPool.takeNext`), each group keeping its own FIFO, and work
+  that names no group shares a single bucket so an ungrouped class is byte-for-byte the old FIFO.
+  Both halves are load-bearing and each fails silently. Drop the rotation and the tab that opened
+  first drains a whole chunk before the second reads anything (measured: 28 reads, ~11 s at the
+  field's cold cost, then a 50/50 split anyway) — the starvation the field reported. Drop the FIFO
+  *inside* a bucket and the sweep's centre-out submit order stops being its dispatch order, which is
+  the whole of `thumbnails-centre-out` on the pool's side. The fair-share key is the **panel**
+  (`state.poolKey`), never the sweep: a key a
+  producer can multiply is a lever for taking a larger share, and a panel is exactly the unit that
+  earns one. A provider that stops naming its group silently rejoins the shared bucket and starves
+  whoever is in it; the adapter names its session key for symmetry only — one page is one session, so
+  it has nothing to share the pool with, and only the provider half is observable.
+- **`hidden-sweep-pauses-not-cancels`** — a hidden panel's open-time sweep is **suspended**, never
+  cancelled: the pump hands out nothing, returns its queued dispatches to the cursor (`io.dropQueued`,
+  the re-aim mechanism), and the panel resumes owing exactly the slots it owed before, delivering each
+  once (`sweep-covers-every-slot-once`). The failure directions are opposite, and every site below is
+  one of them. The pause itself (`thumbnailPlan.ts`, plus the `paused` predicate the provider feeds
+  it — a provider that stops feeding it silently restores the even split with a tab nobody is
+  watching) is what gives the tab in focus the whole bulk budget instead of half of it. The
+  **repump** is what keeps it from hanging: a paused sweep with nothing outstanding has no settle left to reach its exit, so the host
+  must re-enter the pump whenever its `paused`/`abandoned` answer changes — on hide (or the pause
+  waits for a settle that may never come), on show (or the grid is never finished), and on dispose
+  (or the promise never resolves, `endSweep` never runs and the wire claim is held for the life of
+  the extension host — `speculation-yields-the-wire`). And the runner's start-time exit must decline
+  to fire for a paused host, or a panel that opens hidden resolves its sweep instantly with a blank
+  grid. The standalone passes neither predicate: a browser tab is the session, so it has nothing to
+  pause for.
 - **`no-sync-blocking`** — no unbounded synchronous CPU/FS work on the extension-host thread. The pool
   bounds *concurrency*, not event-loop time: PPTX export base64s every full-res image synchronously
   inside its pooled task, and deflates the zip outside it, so a large export is still felt on the
   host thread.
 - **`hidden-keeps-work`** — hiding a panel must not cancel its image or thumbnail work; only the
   speculative prefetch wave may be dropped. "Free resources when hidden" looks obviously right and is
-  the exact bug.
+  the exact bug: the webview is retained across a hide, nothing re-requests on re-show, and a
+  cancelled load is therefore a spinner nobody ever clears. The one thing hiding may do is **defer**:
+  the open-time sweep pauses and resumes with every owed slot still owed
+  (`hidden-sweep-pauses-not-cancels`), which is the opposite of dropping work — no slot leaves the
+  cursor, no request goes unanswered, and the panel's cached bytes, queued image loads and held
+  payloads are untouched either way.
 - **`debounce-leading-edge`** — the navigation debounce stays leading-edge; a trailing one still
   coalesces rapid stepping but taxes every isolated navigation 150ms.
 - **`siblings-dwell-gated`** — a tuple arrival requests **only the modality on screen**. Every other

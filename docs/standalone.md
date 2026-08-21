@@ -85,7 +85,9 @@ version shown on the landing page is injected from `package.json` at build time.
 written as the PNG tEXt chunk only — the browser has no EXIF writer — which the extension's reader
 still accepts (its tEXt fallback). The adapter schedules every image read/decode through the
 extension's own `WorkPool` — width from `navigator.hardwareConcurrency` through the same
-`poolWidth` rule the provider feeds `os.availableParallelism()` — at the provider's priority classes
+`poolWidth` rule the provider feeds `os.availableParallelism()`, a rule whose ceiling is the
+extension host's libuv pool and which the browser has no libuv for (measured below) — at the
+provider's priority classes
 (`VISIBLE`/`SIBLING`/`SIBLING_TAIL` for `requestImage`, mapped from the same wire flags the
 provider reads, `THUMBNAIL_BULK` for the open-time sweep, `THUMBNAIL`
 for re-requests, `EXPORT` for crop and deck IO). It keys image loads per tuple and cancels the
@@ -100,6 +102,31 @@ External changes on a writable root — file arrivals, removals, renames, and mo
 appearing or vanishing under the root (a dir rename executes as remove-then-adopt) — reach the
 view through the poll loop described in `docs/file-watching.md` ("The standalone poll");
 read-only roots never poll.
+
+**Pool width in a browser.** The width the `poolWidth` rule produces here was measured once, and left
+alone. In headless Chromium on a **4-vCPU** box (`navigator.hardwareConcurrency` 4, so the shipped
+width is 5), 120 thumbnail units of a 3000x2000 JPEG through the real `WorkPool` —
+`createImageBitmap`, `drawImage` to a scaled canvas, `toBlob`, i.e. the adapter's own
+`thumbnailBytes` pipeline — with one full-resolution
+`VISIBLE` decode injected 250 ms in, three runs:
+
+| width | 1 | 2 | 3 | 4 | **5** | 6 | 8 | 12 | 16 |
+|---|---|---|---|---|---|---|---|---|---|
+| sweep wall (ms) | 1 943 | 1 921 | 1 069 | 799 | **732** | 725 | 711 | 728 | 728 |
+| foreground decode (ms) | 25 | 17 | 19 | 20 | **22** | 34 | 31 | 68 | 80 |
+
+The shape is the same one the extension host showed, for a different reason: throughput plateaus at
+about the core count (widths 5-12 are flat to within run-to-run noise — a rerun inverts their
+order by a few per cent — and width 16 is no faster at all) while the
+latency a user waits on grows past it — 22 ms at width 5 against 68-80 ms at 12-16 — because the
+unit is only half off-thread (the decode is, the draw and the re-encode are not) and over-dispatch
+just interleaves them. Width 5 sits at the knee, so nothing here justifies changing the rule.
+
+The limit is explicit: this measures **one 4-vCPU machine**, which is the width regime where the
+libuv-derived rule and the browser happen to agree. It says nothing about the case the rule was
+questioned for — a wide browser machine, where `poolWidth` caps at 6 and the plateau may sit higher —
+and no measurement taken here can. Measured on 4 vCPUs (where the rule gives 5), inconclusive for
+wide machines, cap left at 6.
 
 Appending `?debug` (or `#debug`) to the page URL turns on the shared modules' debug logging — the
 standalone counterpart of the `imageCompare.debug` setting. The adapter configures the shared

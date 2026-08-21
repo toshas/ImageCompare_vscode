@@ -1,8 +1,9 @@
 /**
  * Bounded, prioritized, cancellable async work pool; ordered by priority (lower
- * first), FIFO within a priority. No aging: safe only while every producer
- * stays finite. Browser-safe on purpose — the standalone adapter bundles this
- * module, so no node imports. See docs/loading-architecture.md.
+ * first), FIFO within a priority and group, round-robin between the groups of one
+ * priority. No aging: safe only while every producer stays finite. Browser-safe on
+ * purpose — the standalone adapter bundles this module, so no node imports.
+ * See docs/loading-architecture.md.
  */
 
 // This order is what keeps the visible image ahead of thumbnails/prefetch/polling (docs/loading-architecture.md: visible-never-starved).
@@ -37,16 +38,24 @@ export interface SubmitOptions {
   priority: Priority;
   /** Groups tasks so they can be cancelled/bumped together (e.g. a prefetch wave). */
   key?: string;
+  /** Fair-share bucket within the priority; omitted work shares one bucket (docs/loading-architecture.md: bulk-sweeps-share-the-pool). */
+  group?: string;
 }
 
 const PRIORITY_COUNT = 8;
+
+/** The bucket ungrouped work shares, so a pool nobody groups is plain FIFO. */
+const DEFAULT_GROUP = '';
 
 export class WorkPool {
   private readonly concurrency: number;
   private active = 0;
   private activeByPrio: number[] = new Array(PRIORITY_COUNT).fill(0);
-  // One FIFO per priority: class order is the loop in pump(), submit order is array order.
-  private queues: QueueItem<unknown>[][] = Array.from({ length: PRIORITY_COUNT }, () => []);
+  // One FIFO per (priority, group): class order is the loop in pump(), submit order is array order, and the groups of a class take turns (docs/loading-architecture.md: bulk-sweeps-share-the-pool).
+  private queues: Array<Map<string, QueueItem<unknown>[]>> = Array.from({ length: PRIORITY_COUNT }, () => new Map());
+  private queued: number[] = new Array(PRIORITY_COUNT).fill(0);
+  // Where each priority's rotation stands; a group that empties is deleted, so the key — not an index — is what survives it.
+  private lastGroup: Array<string | undefined> = new Array(PRIORITY_COUNT).fill(undefined);
 
   constructor(concurrency: number) {
     this.concurrency = Math.max(1, concurrency);
@@ -66,7 +75,12 @@ export class WorkPool {
         resolve,
         reject
       };
-      this.queues[opts.priority].push(item as QueueItem<unknown>);
+      const group = opts.group ?? DEFAULT_GROUP; // ungrouped work shares one bucket, so a class nobody groups stays plain FIFO (docs/loading-architecture.md: bulk-sweeps-share-the-pool)
+      const fifo = this.queues[opts.priority].get(group);
+      if (fifo) fifo.push(item as QueueItem<unknown>);
+      // A new group joins at the end of the rotation, so it waits at most one turn per group already in it.
+      else this.queues[opts.priority].set(group, [item as QueueItem<unknown>]);
+      this.queued[opts.priority]++;
       this.pump();
     });
   }
@@ -74,21 +88,25 @@ export class WorkPool {
   /** Drop all queued (not-yet-started) tasks with this key; they reject with TaskCancelled. */
   cancel(key: string): void {
     for (let p = 0; p < PRIORITY_COUNT; p++) {
-      const remaining: QueueItem<unknown>[] = [];
-      for (const item of this.queues[p]) {
-        if (item.key === key) {
-          item.reject(new TaskCancelled());
-        } else {
-          remaining.push(item);
+      for (const [group, fifo] of this.queues[p]) {
+        const remaining: QueueItem<unknown>[] = [];
+        for (const item of fifo) {
+          if (item.key === key) {
+            this.queued[p]--;
+            item.reject(new TaskCancelled());
+          } else {
+            remaining.push(item);
+          }
         }
+        if (remaining.length === 0) this.queues[p].delete(group);
+        else this.queues[p].set(group, remaining);
       }
-      this.queues[p] = remaining;
     }
   }
 
   /** Number of queued (not yet started) tasks — for tests/diagnostics. */
   get pending(): number {
-    return this.queues.reduce((sum, q) => sum + q.length, 0);
+    return this.queued.reduce((sum, n) => sum + n, 0);
   }
 
   /** Number of currently running tasks — for tests/diagnostics. */
@@ -98,14 +116,14 @@ export class WorkPool {
 
   private anyQueuedBelow(p: number): boolean {
     for (let q = p + 1; q < PRIORITY_COUNT; q++) {
-      if (this.queues[q].length > 0) return true;
+      if (this.queued[q] > 0) return true;
     }
     return false;
   }
 
   private anyQueuedElsewhere(p: number): boolean {
     for (let q = 0; q < PRIORITY_COUNT; q++) {
-      if (q !== p && this.queues[q].length > 0) return true;
+      if (q !== p && this.queued[q] > 0) return true;
     }
     return false;
   }
@@ -132,15 +150,30 @@ export class WorkPool {
   private pickSpeculative(): number {
     let best = -1;
     for (let q = Priority.PREFETCH; q < PRIORITY_COUNT; q++) {
-      if (this.queues[q].length === 0 || !this.canStart(q)) continue;
+      if (this.queued[q] === 0 || !this.canStart(q)) continue;
       // Max-min fair share: the emptiest running class goes first; ties fall to priority, so at spec width 1 this is strict priority (docs/loading-architecture.md: background-trickle).
       if (best === -1 || this.activeByPrio[q] < this.activeByPrio[best]) best = q;
     }
     return best;
   }
 
+  /** The next item of this priority: the group after the one served last, so two sweeps take turns instead of one draining first (docs/loading-architecture.md: bulk-sweeps-share-the-pool). */
+  private takeNext(p: number): QueueItem<unknown> | undefined {
+    const groups = [...this.queues[p].keys()];
+    if (groups.length === 0) return undefined;
+    const last = this.lastGroup[p];
+    const at = last === undefined ? -1 : groups.indexOf(last);
+    const group = groups[(at + 1) % groups.length];
+    const fifo = this.queues[p].get(group)!;
+    const item = fifo.shift()!;
+    if (fifo.length === 0) this.queues[p].delete(group);
+    this.lastGroup[p] = group;
+    this.queued[p]--;
+    return item;
+  }
+
   private start(p: number): void {
-    const item = this.queues[p].shift()!;
+    const item = this.takeNext(p)!;
     this.active++;
     this.activeByPrio[p]++;
     // Run outside the current tick so submit() has returned before fn side effects.
@@ -161,7 +194,7 @@ export class WorkPool {
     // canStart is the single authority on admission (its active-vs-cap check included); the loop just rescans until nothing admits.
     outer: while (true) {
       for (let p = Priority.VISIBLE; p < Priority.PREFETCH; p++) {
-        if (this.queues[p].length === 0 || !this.canStart(p)) continue;
+        if (this.queued[p] === 0 || !this.canStart(p)) continue;
         this.start(p);
         continue outer;
       }
@@ -173,7 +206,7 @@ export class WorkPool {
 
   /** One-line load snapshot for the debug channel — running per class + queued per class. */
   stats(): string {
-    return `active=${this.active}/${this.concurrency} run=[${this.activeByPrio.join(',')}] queued=[${this.queues.map(q => q.length).join(',')}]`;
+    return `active=${this.active}/${this.concurrency} run=[${this.activeByPrio.join(',')}] queued=[${this.queued.join(',')}]`;
   }
 }
 

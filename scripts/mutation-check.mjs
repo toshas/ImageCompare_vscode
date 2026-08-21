@@ -647,11 +647,107 @@ const mutations = [
     killedBy: 'livelock test (a centre that moves on every read must not stall the pump in a microtask cascade)'
   },
   {
+    name: 'workPool: the group rotation removed (the first tab drains its chunk before the second reads)',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/poolFairness.test.ts',
+    find: '    const group = groups[(at + 1) % groups.length];',
+    replace: '    const group = groups[0];',
+    killedBy: 'two-tab tests (the second sweep must get a bulk slot in the first batch, not after 28 reads)'
+  },
+  {
+    name: 'workPool: LIFO inside a group (the sweep\'s centre-out submit order is undone)',
+    file: 'src/workPool.ts',
+    suite: 'test/unit/poolFairness.test.ts',
+    find: '    const item = fifo.shift()!;',
+    replace: '    const item = fifo.pop()!;',
+    killedBy: 'FIFO-within-a-group test (submit order is untouched inside a bucket, grouped or not)'
+  },
+  {
+    name: 'sweep: the hidden-panel pause removed (a tab nobody is watching keeps half of every batch)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '    if (paused()) {',
+    replace: '    if (false) {',
+    killedBy: 'pause tests (a hidden panel dispatches nothing and the tab in focus gets every bulk slot)'
+  },
+  {
+    name: 'sweep: a pause keeps its queued dispatches (the hidden tab drains its whole chunk first)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '      if (outstanding > 0 && !pauseDropped) {',
+    replace: '      if (false) {',
+    killedBy: 'pause tests (the queued dispatches go back to the cursor within one running batch)'
+  },
+  {
+    name: 'sweep: the start exit fires for a paused host (a panel opened hidden ends with a blank grid)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '  if (outstanding === 0 && (abandoned() || !paused())) resolveSweep();',
+    replace: '  if (outstanding === 0) resolveSweep();',
+    killedBy: 'paused-at-start test (the sweep waits for the repump instead of resolving the grid away)'
+  },
+  {
+    name: 'sweep: the host\'s repump does nothing (a paused sweep never ends, claim and plan with it)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '  options.onRepump?.(() => {\n    pump(centre());\n    if (outstanding === 0 && (abandoned() || cursor.remaining === 0)) resolveSweep();\n  });',
+    replace: '  options.onRepump?.(() => { /* mutated: the host cannot re-enter the pump */ });',
+    killedBy: 'resume tests (a paused sweep resumes on re-show and ends on dispose, both inside the deadline)'
+  },
+  {
+    name: 'sweep: the repump\'s abandoned exit dropped (disposing a hidden panel hangs its sweep)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '    if (outstanding === 0 && (abandoned() || cursor.remaining === 0)) resolveSweep();',
+    replace: '    if (outstanding === 0 && cursor.remaining === 0) resolveSweep();',
+    killedBy: 'dispose-while-paused test (the wire claim is given back, so the sweep resolved)'
+  },
+  {
+    name: 'provider: the sweep is never told its panel is hidden (switching away changes nothing)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '          paused: () => !state.visible,',
+    replace: '          paused: () => false,',
+    killedBy: 'provider pause test (a hidden panel reads no further thumbnails)'
+  },
+  {
+    name: 'provider: hiding never reaches the pump (the pause waits for a settle that may never come)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '    state.sweepRepump?.();\n  }',
+    replace: '    if (visible) state.sweepRepump?.();\n  }',
+    killedBy: 'hide test (the queued chunk leaves the pool when the panel is hidden, not one batch later)'
+  },
+  {
+    name: 'provider: showing a panel never resumes its sweep (the grid stays half-filled)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '    state.sweepRepump?.();\n  }',
+    replace: '    if (!visible) state.sweepRepump?.();\n  }',
+    killedBy: 'resume test (every slot is delivered exactly once after the panel comes back)'
+  },
+  {
+    name: 'provider: dispose leaves a paused sweep hanging (the wire claim outlives the panel)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '    state.sweepRepump?.(); // a sweep paused with nothing outstanding has no settle left to end it',
+    replace: '    /* mutated: a paused sweep is never told its panel is gone */',
+    killedBy: 'dispose-while-hidden test (the sweep resolves and endSweep gives the wire back)'
+  },
+  {
+    name: 'provider: the sweep drops its fair-share group (two tabs share one FIFO again)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepHiddenPanel.test.ts',
+    find: '                group: state.poolKey',
+    replace: '                group: undefined',
+    killedBy: 'two-panel test (the second comparison gets a bulk slot in the first batch)'
+  },
+  {
     name: 'provider: the sweep is never told its panel is gone (the dead-panel read storm is back)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepReaimCancel.test.ts',
-    find: '        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }',
-    replace: '        { centre: () => state.currentTupleIndex }',
+    find: '          abandoned: () => state.disposed,',
+    replace: '          abandoned: () => false,',
     killedBy: 'dispose test (a disposed panel reads not one more thumbnail)'
   },
   {
@@ -698,16 +794,16 @@ const mutations = [
     name: 'provider: sweep given no centre (thumbnails fill top-to-bottom wherever the user is)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }',
-    replace: '        { abandoned: () => state.disposed }',
+    find: '          centre: () => state.currentTupleIndex,',
+    replace: '          centre: () => 0,',
     killedBy: 'provider order test (the sweep starts at the row the panel opened on)'
   },
   {
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '        { centre: () => state.currentTupleIndex, abandoned: () => state.disposed }',
-    replace: '        { centre: ((pinned: number) => () => pinned)(state.currentTupleIndex), abandoned: () => state.disposed }',
+    find: '          centre: () => state.currentTupleIndex,',
+    replace: '          centre: ((pinned: number) => () => pinned)(state.currentTupleIndex),',
     killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
   },
   {

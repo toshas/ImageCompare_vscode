@@ -163,7 +163,8 @@ function generateAllThumbnails(s: StandaloneState): Promise<void> {
   return runThumbnailSweep(planThumbnails(s.scan.tuples, s.scan.modalities), {
     makeThumbnail: item =>
       pool
-        .submit(() => thumbnailBytes(s, item.image), { priority: Priority.THUMBNAIL_BULK, key: sweepPoolKey(s) })
+        // The session is the fair-share bucket, as the panel is in the provider (docs/loading-architecture.md: bulk-sweeps-share-the-pool).
+        .submit(() => thumbnailBytes(s, item.image), { priority: Priority.THUMBNAIL_BULK, key: sweepPoolKey(s), group: s.poolKey })
         .catch(error => {
           // A live session's cancellation is the sweep's own re-aim drop; a re-open settles the slot silently, like the provider's disposed panel (docs/loading-architecture.md: sweep-cancels-on-reaim).
           if (error instanceof TaskCancelled) return s.closed ? null : SWEEP_REQUEUE;
