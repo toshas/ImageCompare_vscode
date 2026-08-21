@@ -3,12 +3,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
 import { LOAD_DEBOUNCE_MS } from '../../src/webview/tupleLoadPlan';
 
-// The host half of the centre-out sweep, on the REAL provider: it supplies `state.sweepCentre` as the
+// The host half of the centre-out sweep, on the REAL provider: it supplies `the shared aim policy` as the
 // sweep's centre and must read it LIVE, since a settled `setCurrentTuple` mutates that field while the
 // sweep is draining. A snapshot taken at sweep start would pass every ordering assertion at open and
 // silently never re-aim. (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded)
@@ -112,6 +112,7 @@ function makeRig(): Rig {
     winners: new Map(),
     votingEnabled: false,
     currentTupleIndex: OPEN_AT,
+    sweepAim: newSweepAimPolicy(),
     disposed: false,
     visible: true,
     poolKey: `centre-${Math.random().toString(36).slice(2)}`,

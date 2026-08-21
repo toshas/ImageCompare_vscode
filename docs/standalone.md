@@ -31,6 +31,9 @@ Three ingredients, composed by `scripts/build-standalone.mjs`:
    dims/render/inject/write, arrivals, `cropComplete`, thumbnails — over injected render/write IO),
    `pptxDeck` (deck layout plus `exportDeck`, the export sequence: name, build, save, exactly one
    answer — over injected pptxgenjs/save IO),
+   `sweepAimPolicy` (where the sweep aims and when that moves: the raw `setCurrentTuple` stream
+   trailing-edge dwelled into a settled tuple, the strip un-permuted into a column, and the aim the
+   runner reads — over host-supplied timer primitives, so neither product can dwell differently),
    `thumbnailPlan` (the open-time sweep plan *and runner*: slot order, missing slots, progress
    ticks and the sweep's wire traffic, over an injected `makeThumbnail` that resolves the
    `{bytes, mime}` both products post — the adapter encodes through `canvas.toBlob`, never a data
@@ -64,12 +67,27 @@ Three ingredients, composed by `scripts/build-standalone.mjs`:
 The extension itself keeps thin vscode wrappers around the same pure modules; provider behavior is
 unchanged by the extractions.
 
+**How much is actually shared, and why not more.** One implementation of the UI (the real
+`dist/webview.js` plus `src/webviewShell.ts`, ~3 700 lines) and one of the decisions (~3 500 lines of
+pure `src/` modules, the list above) serve both products. What is *not* shared is host wiring —
+`imageCompareProvider.ts` against `standalone/adapter.ts` — plus roughly a thousand lines that are
+irreducibly platform-bound: Sharp/libvips and the thumbnail pack against canvas/`createImageBitmap`,
+the vscode API (panels, watchers, settings, session files) against FSA handles and a poll loop, PPMX
+decoding into a Node buffer against an `ImageData`. Forcing those into one implementation buys an
+abstraction that costs more than the duplication, so the target is not "100% shared" — it is that
+every *decision* is shared and each host only wires. `host-supplies-data-not-policy` is where that
+line is drawn and gated.
+
 The shared list above is CI-verified, not hand-trusted: `scripts/check-sidedness.mjs` derives every
 module's sidedness from the real runtime import graph (type-only imports are erased at runtime and
 ignored) and fails if ingredient 2 names a module not actually reached from both the extension and
 standalone roots, or omits one that is. The convention it parses: the backticked `src/` module
 basenames inside list item 2 — exactly that item — are the shared list, so name a module there in
-backticks or the gate fires. `node scripts/check-sidedness.mjs --print` is the authoritative
+backticks or the gate fires. The same script carries gate (c), `POLICY_SEAMS` — the curated list of
+injected decisions a shared runner takes from its hosts (see `host-supplies-data-not-policy`); it
+lives there because its precondition is precisely what the sidedness graph already computes, namely
+that the module the hosts must delegate to is genuinely SHARED.
+`node scripts/check-sidedness.mjs --print` is the authoritative
 per-module table (extension-only / standalone-only / shared / webview); the extension-only set is
 the complement and needs no doc list.
 
@@ -162,9 +180,10 @@ edited by hand, and the README it receives says so.
   crop sequence (`cropFlow`, `performCrop`), deck
   layout, the export sequence and its `comparison_NN` numbering (`pptxDeck`, `exportDeck`,
   `nextPptxName`), thumbnail-sweep planning *and running*, ordering, dispatch bound and the
-  decision to drop queued work when the centre moves included — the adapter supplies only its live
-  current tuple *and the strip the webview last reported* as the sweep's aim (so the standalone gets
-  the same bounded-cross-then-row-major order, not a row-only variant) plus the pool call that drop is made of
+  decision to drop queued work when the centre moves included — the adapter forwards only the raw
+  `setCurrentTuple`/`tupleFullyLoaded` reports to the shared aim policy (`sweepAimPolicy`, so the
+  standalone gets the same bounded-cross-then-row-major order *and* the same re-aim dwell, not a
+  row-only or un-dwelled variant) plus the pool call that drop is made of
   (`thumbnailPlan`,
   `runThumbnailSweep`, `docs/loading-architecture.md: thumbnails-centre-out`,
   `docs/loading-architecture.md: sweep-cancels-on-reaim`),
@@ -180,6 +199,20 @@ edited by hand, and the README it receives says so.
   exists to end. Pool scheduling is IO policy, not a decision path: the adapter instantiates the
   shared `workPool` and picks the provider's priority class per request kind, but the scheduler
   itself (admission, fairness, cancellation) is the imported one.
+- **`host-supplies-data-not-policy`** — a host may hand a shared runner **data** (where the user is,
+  what the webview reported) and **primitives** (a timer, a pool, a post), never a **decision**. The
+  distinction is not pedantry: `runThumbnailSweep` takes its aim as an injected callback, and for two
+  commits that callback was hand-built in each host — so ff11b92's trailing-edge re-aim dwell landed
+  in `imageCompareProvider.ts` and the standalone silently kept chasing the cursor
+  (`docs/loading-architecture.md: sweep-centre-dwells`). Every such injected decision is named in
+  `POLICY_SEAMS` in `scripts/check-sidedness.mjs`, which fails the build when a host stops importing
+  the shared factory, hand-builds the injected value, or stops feeding the factory its raw reports;
+  the list is curated rather than derived because the general form ("no callback may contain host
+  logic") is unenforceable without false positives, and a gate people can read beats one they cannot.
+  Two sites per seam — the two hosts (`imageCompareProvider.ts`, `standalone/adapter.ts`), which is
+  exactly where the divergence can reappear. Structure alone is not the proof: `test/unit/sweepHostEquivalence.test.ts`
+  drives the same burst through both real hosts and requires identical traces, and that test is what
+  would have caught the original leak.
 - **`results-format-shared`** — `results.txt` parse and serialize live only in
   `src/resultsFile.ts`; the extension's `fileService` wrappers and the standalone adapter both
   call them, so the two products can never disagree about the file format (it is user data both

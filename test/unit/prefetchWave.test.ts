@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 
@@ -53,6 +53,7 @@ function makeState(present: string[]): Record<string, unknown> {
     scanResult: { modalities: [...MODALITIES], tuples: [{ name: 'frame', images }], mode: 2, roots: [], isMultiTupleMode: false },
     loadedImages: new Map(),
     currentTupleIndex: 0,
+    sweepAim: newSweepAimPolicy(),
     disposed: false,
     visible: true,
     poolKey: `test-${Math.random().toString(36).slice(2)}`,

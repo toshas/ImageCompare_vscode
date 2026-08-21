@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 import { Priority } from '../../src/workPool';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
@@ -104,6 +104,7 @@ function makeRig(): Rig {
     winners: new Map(),
     votingEnabled: false,
     currentTupleIndex: OPEN_AT,
+    sweepAim: newSweepAimPolicy(),
     disposed: false,
     visible: true,
     poolKey: `cancel-${Math.random().toString(36).slice(2)}`,

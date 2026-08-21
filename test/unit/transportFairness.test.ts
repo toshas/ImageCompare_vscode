@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, __setRemoteName } from '../mocks/vscode';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 
@@ -150,6 +150,7 @@ async function runScenario(remote: boolean): Promise<Scenario> {
     scanResult: { modalities: [...MODALITIES], tuples, mode: 2, roots: [], isMultiTupleMode: true },
     loadedImages: new Map(),
     currentTupleIndex: CENTER,
+    sweepAim: newSweepAimPolicy(),
     disposed: false,
     visible: true,
     poolKey: `wire-${Math.random().toString(36).slice(2)}`,

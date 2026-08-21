@@ -15,7 +15,7 @@ import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, workspace } from '../mocks/vscode';
 import { beginOpenMarks, formatOpenRollup, OpenMarks } from '../../src/debugLog';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { scanForImages } from '../../src/fileService';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
@@ -143,6 +143,7 @@ function makeState(marks: OpenMarks | undefined, posted: unknown[]): Record<stri
     scanResult: { modalities: [...MODALITIES], tuples, mode: 2, roots: [], isMultiTupleMode: true },
     loadedImages: new Map(),
     currentTupleIndex: 0,
+    sweepAim: newSweepAimPolicy(),
     modalityDirs: new Map(),
     winners: new Map(),
     votingEnabled: false,

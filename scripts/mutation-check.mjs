@@ -27,7 +27,8 @@ const repoRoot = join(scriptDir, '..');
 
 /**
  * Each mutation names the file it edits and the suite that must kill it. Every
- * suite imports the real source, so a mutation hits src/* — except the two rules at the end that
+ * suite imports the real source, so a mutation hits src/* (or standalone/*, which the sandbox now
+ * carries too: the host-equivalence suite drives the real adapter) — except the two rules at the end that
  * ARE test infrastructure (test/webview/standaloneArtifact.ts, test/webview/playwright.config.ts):
  * whether the webview layer serves a current, complete page, and how that layer sizes itself and
  * lays out its reports on a host CI never runs on. All suites live
@@ -840,11 +841,11 @@ const mutations = [
     killedBy: 'cross-then-row-major order test (each remaining row is filled in the same column rank order the cross used)'
   },
   {
-    name: 'provider: the reported screenful is dropped (the sweep\'s cross falls back to the constant)',
-    file: 'src/imageCompareProvider.ts',
+    name: 'policy: the reported screenful is dropped (the sweep\'s cross falls back to the constant)',
+    file: 'src/sweepAimPolicy.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: 'hidden: message.hiddenModalities, radius: message.visibleRows };',
-    replace: 'hidden: message.hiddenModalities, radius: undefined };',
+    find: 'hidden: report.hiddenModalities, radius: report.visibleRows };',
+    replace: 'hidden: report.hiddenModalities, radius: undefined };',
     killedBy: 'reported-screenful test (a one-row carousel bounds the cross at one row)'
   },
   {
@@ -888,19 +889,19 @@ const mutations = [
     killedBy: 'fresh-object test (an equal aim built per read is not a re-aim, so nothing is dropped)'
   },
   {
-    name: 'provider: the sweep is never told which column the user is on (the row aim is back)',
-    file: 'src/imageCompareProvider.ts',
+    name: 'sweep aim: the strip is dropped from the aim (both products go back to a row aim)',
+    file: 'src/sweepAimPolicy.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),',
-    replace: '          centre: () => ({ tuple: state.sweepCentre }),',
+    find: '    return { tuple: this.settled, ...this.strip };',
+    replace: '    return { tuple: this.settled };',
     killedBy: 'provider column test (the sweep starts at the modality the webview reported, not at the first one)'
   },
   {
-    name: 'provider: the reported display position is passed on as an original modality index',
-    file: 'src/imageCompareProvider.ts',
+    name: 'sweep aim: the reported display position is passed on as an original modality index',
+    file: 'src/sweepAimPolicy.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '        const shown = message.modalityOrder[message.currentDisplayIndex];',
-    replace: '        const shown = message.currentDisplayIndex as OriginalModalityIndex;',
+    find: '    const modality = report.modalityOrder[report.currentDisplayIndex];',
+    replace: '    const modality = report.currentDisplayIndex;',
     killedBy: 'provider column test (a rearranged strip must be un-permuted before the sweep sees it)'
   },
   {
@@ -923,7 +924,7 @@ const mutations = [
     name: 'provider: sweep given no centre (thumbnails fill top-to-bottom wherever the user is)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),',
+    find: '          centre: () => state.sweepAim.aim(),',
     replace: '          centre: () => ({ tuple: 0 }),',
     killedBy: 'provider order test (the sweep starts at the row the panel opened on)'
   },
@@ -931,28 +932,74 @@ const mutations = [
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),',
-    replace: '          centre: ((pinned: TupleIndex) => () => ({ tuple: pinned }))(state.sweepCentre),',
+    find: '          centre: () => state.sweepAim.aim(),',
+    replace: '          centre: (pinned => () => pinned)(state.sweepAim.aim()),',
     killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
   },
   {
-    name: 'provider: the sweep centre follows the raw keystroke (a held key re-aims on every completed thumbnail)',
-    file: 'src/imageCompareProvider.ts',
+    name: 'sweep aim: the centre follows the raw keystroke (a held key re-aims on every completed thumbnail)',
+    file: 'src/sweepAimPolicy.ts',
     suite: 'test/unit/sweepCentreDwell.test.ts',
-    find: `    state.sweepCentreTimer = setTimeout(() => {
-      state.sweepCentreTimer = undefined;
-      state.sweepCentre = state.currentTupleIndex;
-    }, LOAD_DEBOUNCE_MS);`,
-    replace: '    state.sweepCentre = state.currentTupleIndex;',
+    find: `    this.dwell = this.timers.setTimer(() => {
+      this.dwell = undefined;
+      this.settled = this.tuple;
+    }, AIM_DWELL_MS);`,
+    replace: '    this.settled = this.tuple;',
     killedBy: 'dwell test (a burst of setCurrentTuple must re-aim the sweep once, after the burst ends)'
   },
   {
-    name: 'provider: the sweep-centre dwell is leading-edge (the first keystroke of a held key re-aims)',
-    file: 'src/imageCompareProvider.ts',
+    name: 'sweep aim: the dwell is leading-edge (the first keystroke of a held key re-aims)',
+    file: 'src/sweepAimPolicy.ts',
     suite: 'test/unit/sweepCentreDwell.test.ts',
-    find: '    if (state.sweepCentreTimer) clearTimeout(state.sweepCentreTimer);\n    state.sweepCentreTimer = setTimeout(',
-    replace: '    if (state.sweepCentreTimer) return;\n    state.sweepCentreTimer = setTimeout(',
+    find: '    if (this.dwell !== undefined) this.timers.clearTimer(this.dwell);\n    this.dwell = this.timers.setTimer(',
+    replace: '    if (this.dwell !== undefined) return;\n    this.dwell = this.timers.setTimer(',
     killedBy: 'dwell test (the burst must reset the dwell, not ride the first keystroke\'s timer)'
+  },
+  {
+    name: 'sweep aim: an unreadable strip report is taken as an aim (a column nobody is on takes the sweep)',
+    file: 'src/sweepAimPolicy.ts',
+    suite: 'test/unit/sweepAimPolicy.test.ts',
+    find: '    if (modality === undefined) return;\n',
+    replace: '',
+    killedBy: 'policy strip test (a display position naming no column must leave the aim as it was)'
+  },
+  {
+    name: 'sweep aim: the sweep opens at row 0 whatever its host reports (the prime is dropped)',
+    file: 'src/sweepAimPolicy.ts',
+    suite: 'test/unit/sweepProviderCentre.test.ts',
+    find: `  noteSweepStart(tupleIndex: number): void {
+    this.tuple = tupleIndex;
+    this.settled = tupleIndex;
+  }`,
+    replace: '  noteSweepStart(_tupleIndex: number): void {}',
+    killedBy: 'provider order test (a panel opened on row 20 sweeps outward from row 20, not from row 0)'
+  },
+  {
+    name: 'sweep aim: dispose leaves the dwell armed (it fires against a dead panel and holds the host awake)',
+    file: 'src/sweepAimPolicy.ts',
+    suite: 'test/unit/sweepCentreDwell.test.ts',
+    find: `  dispose(): void {
+    if (this.dwell !== undefined) this.timers.clearTimer(this.dwell);
+    this.dwell = undefined;
+  }`,
+    replace: '  dispose(): void {}',
+    killedBy: 'dwell test (a panel disposed mid-burst leaves no timer behind)'
+  },
+  {
+    name: 'standalone: the sweep aims at the raw tuple again (the dwell stays the extension\'s alone)',
+    file: 'standalone/adapter.ts',
+    suite: 'test/unit/sweepHostEquivalence.test.ts',
+    find: '    centre: () => s.sweepAim.aim(),',
+    replace: '    centre: () => ({ tuple: s.currentTupleIndex }),',
+    killedBy: 'host-equivalence test (the same held key must produce the same trace in both products)'
+  },
+  {
+    name: 'standalone: setCurrentTuple never reaches the aim policy (its sweep stops re-aiming at all)',
+    file: 'standalone/adapter.ts',
+    suite: 'test/unit/sweepHostEquivalence.test.ts',
+    find: '      s.sweepAim.noteTuple(message.tupleIndex);\n',
+    replace: '',
+    killedBy: 'host-equivalence test (a host that stops feeding the policy diverges from the other one)'
   },
   {
     name: 'pptxDeck: nextPptxName increment dropped (suggests the max, not max+1)',
@@ -2175,7 +2222,7 @@ const mutations = [
 
 // ── Sandbox: mutations land on a throwaway copy, never the working tree (docs/testing.md) ──
 function copyList() {
-  const roots = ['src', 'test', 'package.json'];
+  const roots = ['src', 'standalone', 'test', 'package.json'];
   for (const entry of readdirSync(repoRoot)) {
     if (/^tsconfig.*\.json$/.test(entry)) roots.push(entry);
   }

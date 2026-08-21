@@ -11,7 +11,8 @@ Pointers, not copies — the rules live in the root `CLAUDE.md` and `docs/testin
    killed by a pre-existing assertion — or by a pre-existing side effect such as Vitest failing on a
    leaked rejection — certifies nothing. Verify both directions.
 3. **If a rule cannot be mutation-covered, say so.** Layer 2 and Layer 3 are outside the harness
-   (it runs Vitest suites only, and never copies `standalone/` into its sandbox). Declare it in the
+   (it runs Vitest suites only; its sandbox carries `src/`, `standalone/` and `test/`, so Layer 1 is
+   the only layer it can drive). Declare it in the
    test header and in `docs/testing.md`, and state what stands in for it — the precedent wording is
    already there. Leaving a gap open with a written reason beats closing it with a test that cannot
    fail.

@@ -14,6 +14,8 @@ import { commitSlotRemoval, deleteTupleFlow, removeModalityStep, removeTupleStep
 import { diffSnapshots, pairRenames, PollEntry, SnapshotEntry } from '../src/pollPlan';
 import { DeckIo, DECK_IMAGE_MAX_DIM, DECK_JPEG_QUALITY, exportDeck } from '../src/pptxDeck';
 import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE, ThumbnailBytes } from '../src/thumbnailPlan';
+// Where the sweep aims and when that settles is the shared policy's, never this host's (docs/loading-architecture.md: sweep-centre-dwells).
+import { SweepAimPolicy } from '../src/sweepAimPolicy';
 import { normalizeImageBytes } from '../src/wireFormat';
 import { buildInitPayload } from '../src/initPayload';
 import { nextPanelKey, poolWidth, Priority, TaskCancelled, WorkPool } from '../src/workPool';
@@ -40,8 +42,8 @@ interface StandaloneState {
   scan: ScanResult;
   winners: Map<number, number>;
   currentTupleIndex: number;
-  /** The sweep's column and cross radius, as the webview last reported its strip — the provider's field, same source (docs/loading-architecture.md: thumbnails-centre-out, sweep-cross-then-row-major). */
-  sweepStrip?: { modality: number; modalityOrder: number[]; hidden: number[]; radius?: number };
+  /** This session's sweep aim: raw reports in, a settled tile out — the provider's policy, same instance shape (docs/loading-architecture.md: sweep-centre-dwells, thumbnails-centre-out). */
+  sweepAim: SweepAimPolicy;
   poolKey: string;
   /** Live per-tuple image-load keys, like the provider's (docs/loading-architecture.md: stale-tuple-loads-cancelled). */
   imageLoadKeys: Set<string>;
@@ -160,8 +162,18 @@ async function thumbnailBytes(s: StandaloneState, img: ImageFile): Promise<Thumb
   return { bytes: normalizeImageBytes(await canvasToBytes(canvas, mime, 0.8)), mime };
 }
 
+/** The host's whole contribution to the aim: two timer primitives, no decision (docs/standalone.md: host-supplies-data-not-policy, docs/loading-architecture.md: sweep-centre-dwells). */
+function newSweepAimPolicy(): SweepAimPolicy {
+  return new SweepAimPolicy({
+    setTimer: (run, ms) => setTimeout(run, ms),
+    clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
+  });
+}
+
 /** Open-time sweep: slots, order, totals and wire traffic come from the shared planner/runner; each decode is pooled at bulk priority exactly like the provider's (docs/standalone.md: adapter-contains-no-logic). */
 function generateAllThumbnails(s: StandaloneState): Promise<void> {
+  // The sweep opens aimed where the session opened; the dwell governs moves only (docs/loading-architecture.md: sweep-centre-dwells).
+  s.sweepAim.noteSweepStart(s.currentTupleIndex);
   return runThumbnailSweep(planThumbnails(s.scan.tuples, s.scan.modalities), {
     makeThumbnail: item =>
       pool
@@ -176,7 +188,7 @@ function generateAllThumbnails(s: StandaloneState): Promise<void> {
     dropQueued: () => pool.cancel(sweepPoolKey(s)),
   }, post, {
     // The host supplies only where the user is; the ordering it implies is the shared module's (docs/loading-architecture.md: thumbnails-centre-out).
-    centre: () => ({ tuple: s.currentTupleIndex, ...s.sweepStrip }),
+    centre: () => s.sweepAim.aim(),
     // A re-opened root abandons this session's sweep: the rest of the grid is never decoded (docs/loading-architecture.md: sweep-stops-when-host-abandons).
     abandoned: () => s.closed === true,
   });
@@ -540,6 +552,7 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
       // Same starvation, same cure: queued loads of the tuple left behind die (docs/loading-architecture.md: stale-tuple-loads-cancelled).
       cancelImageLoads(s, message.tupleIndex);
       s.currentTupleIndex = message.tupleIndex;
+      s.sweepAim.noteTuple(message.tupleIndex);
       break;
     case 'setWinner':
       await handleSetWinner(s, message.tupleIndex, message.modalityIndex);
@@ -554,9 +567,8 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
       await handleExportPptx(s, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
       break;
     case 'tupleFullyLoaded': {
-      const shown = message.modalityOrder[message.currentDisplayIndex];
       // No prefetch here, but the same report carries the sweep's column aim (docs/loading-architecture.md: thumbnails-centre-out).
-      if (shown !== undefined) s.sweepStrip = { modality: shown, modalityOrder: message.modalityOrder, hidden: message.hiddenModalities, radius: message.visibleRows };
+      s.sweepAim.noteStrip(message);
       break;
     }
     case 'saveSessionAs':
@@ -843,6 +855,7 @@ async function openRoot(root: OpenedRoot): Promise<void> {
   if (state) {
     stopPolling(state);
     state.closed = true; // set BEFORE the cancel: the rejections it delivers must read it as a close, not as a re-aim.
+    state.sweepAim.dispose(); // a dwell must not fire against a closed session (docs/loading-architecture.md: sweep-centre-dwells)
     pool.cancel(state.poolKey);
     pool.cancel(sweepPoolKey(state));
     cancelImageLoads(state);
@@ -855,6 +868,7 @@ async function openRoot(root: OpenedRoot): Promise<void> {
     scan,
     winners: new Map(),
     currentTupleIndex: 0,
+    sweepAim: newSweepAimPolicy(),
     poolKey: nextPanelKey(),
     imageLoadKeys: new Set(),
     snapshots: new Map(),

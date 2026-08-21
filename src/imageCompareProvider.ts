@@ -18,8 +18,8 @@ import { performCrop } from './cropFlow';
 import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE } from './thumbnailPlan';
 import { buildInitPayload } from './initPayload';
 import { PrefetchScope, prefetchWavePlan } from './prefetchPlan';
-// The sweep's re-aim dwell is the navigation debounce, host-side (docs/loading-architecture.md: sweep-centre-dwells).
-import { LOAD_DEBOUNCE_MS } from './webview/tupleLoadPlan';
+// Where the sweep aims and when that settles is the shared policy's, never this host's (docs/loading-architecture.md: sweep-centre-dwells).
+import { SweepAimPolicy } from './sweepAimPolicy';
 import { nextPanelKey, poolWidth, Priority, TaskCancelled, usableParallelism, WorkPool } from './workPool';
 import { TransportBudget, reindexSlotKeyedPosts, resolveTransportBudgetBytes } from './transportBudget';
 import { beginOpenMarks, debug, debugEnabled, debugVerbose, diffPackLoadStat, diffTierStats, formatBytes, formatOpenRollup, formatPackLoad, formatTierStats, itemsPerSecond, OpenMarks } from './debugLog';
@@ -72,11 +72,8 @@ interface PanelState {
   scanResult: ScanResult;
   loadedImages: Map<string, LoadedImage>;
   currentTupleIndex: TupleIndex;
-  /** The sweep's own centre: `currentTupleIndex` once navigation has settled, so a held key re-aims once (docs/loading-architecture.md: sweep-centre-dwells). */
-  sweepCentre: TupleIndex;
-  /** The sweep's own column and cross radius, as the webview last reported its strip; the sweep aims at a tile, not a row (docs/loading-architecture.md: thumbnails-centre-out, sweep-cross-then-row-major). */
-  sweepStrip?: { modality: OriginalModalityIndex; modalityOrder: OriginalModalityIndex[]; hidden: OriginalModalityIndex[]; radius?: number };
-  sweepCentreTimer?: ReturnType<typeof setTimeout>; // trailing-edge dwell before the sweep re-aims; cleared on dispose
+  /** This panel's sweep aim: raw reports in, a settled tile out — the shared policy, as the standalone's session has (docs/loading-architecture.md: sweep-centre-dwells, thumbnails-centre-out). */
+  sweepAim: SweepAimPolicy;
   fileWatchers: vscode.FileSystemWatcher[];
   nodeWatchers: fs.FSWatcher[];
   /** Per-directory, so a removed modality releases exactly its own (docs/file-watching.md: watchers-released-with-modality). */
@@ -144,6 +141,14 @@ function sharedWorkPool(): WorkPool {
     shared = new WorkPool(poolWidth(usableParallelism(os.availableParallelism?.(), os.cpus()?.length), override));
   }
   return shared;
+}
+
+/** The host's whole contribution to the aim: two timer primitives, no decision (docs/standalone.md: host-supplies-data-not-policy, docs/loading-architecture.md: sweep-centre-dwells). */
+export function newSweepAimPolicy(): SweepAimPolicy {
+  return new SweepAimPolicy({
+    setTimer: (run, ms) => setTimeout(run, ms),
+    clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
+  });
 }
 
 /**
@@ -294,7 +299,7 @@ export class ImageCompareProvider {
         scanResult,
         loadedImages: new Map<string, LoadedImage>(),
         currentTupleIndex: asTuple(0),
-        sweepCentre: asTuple(0),
+        sweepAim: newSweepAimPolicy(),
         fileWatchers: [],
         nodeWatchers: [],
         watchersByDir: new Map(),
@@ -395,7 +400,7 @@ export class ImageCompareProvider {
     if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
     if (state.sweepStatsTimer) clearInterval(state.sweepStatsTimer);
     if (state.sweepIdleTimer) clearTimeout(state.sweepIdleTimer);
-    if (state.sweepCentreTimer) clearTimeout(state.sweepCentreTimer); // a dwell must not fire against a dead panel (docs/loading-architecture.md: sweep-centre-dwells)
+    state.sweepAim.dispose(); // a dwell must not fire against a dead panel (docs/loading-architecture.md: sweep-centre-dwells)
     // Un-acked pushes would otherwise retain this panel for the ack timeout (docs/loading-architecture.md: speculation-yields-the-wire).
     for (const timer of state.ackWatchdogs ?? []) clearTimeout(timer);
     state.ackWatchdogs?.clear();
@@ -441,7 +446,7 @@ export class ImageCompareProvider {
         this.cancelImageLoads(state, message.tupleIndex);
         state.currentTupleIndex = message.tupleIndex;
         state.lastTupleSwitchAt = Date.now();
-        this.aimSweepAfterDwell(state);
+        state.sweepAim.noteTuple(message.tupleIndex);
         // The user landed here: anything held for this tuple is delivered now, ahead of the burst flush.
         for (const [key, held] of state.heldImagePosts) {
           if (held.tupleIndex === message.tupleIndex) {
@@ -452,9 +457,8 @@ export class ImageCompareProvider {
         break;
 
       case 'tupleFullyLoaded': {
-        const shown = message.modalityOrder[message.currentDisplayIndex];
         // The strip as displayed is also the sweep's column aim — the one report that carries it (docs/loading-architecture.md: thumbnails-centre-out).
-        if (shown !== undefined) state.sweepStrip = { modality: shown, modalityOrder: message.modalityOrder, hidden: message.hiddenModalities, radius: message.visibleRows };
+        state.sweepAim.noteStrip(message);
         if (message.tupleIndex === state.currentTupleIndex) {
           const hidden = new Set<number>(message.hiddenModalities);
           // The strip as displayed is the wave's whole scope (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
@@ -958,7 +962,7 @@ ${lead}
     const itemBySlot = new Map(plan.items.map(item => [`${item.tupleIndex}-${item.modalityIndex}`, item]));
 
     // The sweep opens aimed at the row the panel opened on; the dwell governs moves only (docs/loading-architecture.md: sweep-centre-dwells).
-    state.sweepCentre = state.currentTupleIndex;
+    state.sweepAim.noteSweepStart(state.currentTupleIndex);
     // One flag read gates the whole sweep's instrumentation — clock, snapshots and timer alike (docs/loading-architecture.md: debug-off-costs-nothing).
     const timed = debugEnabled();
     const sweepStart = timed ? Date.now() : 0;
@@ -1065,7 +1069,7 @@ ${lead}
         },
         // The host supplies only where the user is, whether it is still there and whether anyone is looking; every ordering decision is the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels, sweep-centre-dwells).
         {
-          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),
+          centre: () => state.sweepAim.aim(),
           abandoned: () => state.disposed,
           paused: () => !state.visible,
           onRepump: repump => { state.sweepRepump = repump; }
@@ -1246,15 +1250,6 @@ ${lead}
       this.postImageNow(state, first.value[1]);
       if (state.heldImagePosts.size > 0) this.scheduleBurstFlush(state, 32);
     }, delayMs);
-  }
-
-  /** Trailing edge: a held key keeps resetting this, so the sweep re-aims once — when navigation stops (docs/loading-architecture.md: sweep-centre-dwells). */
-  private aimSweepAfterDwell(state: PanelState): void {
-    if (state.sweepCentreTimer) clearTimeout(state.sweepCentreTimer);
-    state.sweepCentreTimer = setTimeout(() => {
-      state.sweepCentreTimer = undefined;
-      state.sweepCentre = state.currentTupleIndex;
-    }, LOAD_DEBOUNCE_MS);
   }
 
   /** Drop every queued image load except `keepTupleIndex`'s (docs/loading-architecture.md: stale-tuple-loads-cancelled). */

@@ -7,12 +7,29 @@
 // Gates (exit 1, offenders named): (a) a src/ module reached from no root is dead code;
 // (b) the shared-module list in docs/standalone.md ("Architecture", ingredient 2) must equal the
 // computed SHARED set — the list is the backticked src/ basenames inside that numbered list item
-// (the convention is stated in the doc), and this checker is what keeps it honest.
+// (the convention is stated in the doc), and this checker is what keeps it honest;
+// (c) a host may supply DATA to a shared runner, never a DECISION — see POLICY_SEAMS below. Gate (c)
+// lives here because its precondition is exactly what this script already derives: the module the
+// hosts must delegate to has to be genuinely SHARED, which only the real import graph can say.
 // Run: node scripts/check-sidedness.mjs        (--print emits the full module table)
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const DOC = 'docs/standalone.md';
+
+// Gate (c): one curated row per injected decision a shared runner takes from its hosts, and why the list is curated (docs/standalone.md: host-supplies-data-not-policy).
+const POLICY_SEAMS = [
+  {
+    runner: 'runThumbnailSweep',
+    option: 'centre',
+    module: 'src/sweepAimPolicy.ts',
+    binding: 'SweepAimPolicy',
+    produces: '.aim()',
+    feeds: ['noteTuple(', 'noteStrip(', 'noteSweepStart('],
+    hosts: ['src/imageCompareProvider.ts', 'standalone/adapter.ts'],
+    why: 'where the user is, is host data; WHEN the aim settles is policy (docs/loading-architecture.md: sweep-centre-dwells)',
+  },
+];
 const ROOTS = {
   extension: ['src/extension.ts'],
   standalone: ['standalone/adapter.ts', 'standalone/fsBackends.ts', 'standalone/compose.mjs'],
@@ -91,6 +108,31 @@ for (const { f, cat } of table) if (cat === 'UNREACHED') problems.push(`DEAD:   
 for (const n of docList) if (!shared.has(n)) problems.push(`FAKE-SHARE: ${DOC} lists \`${n}\` as shared, but no runtime import path reaches it from both roots`);
 for (const n of shared) if (!docList.has(n)) problems.push(`UNLISTED:  src/${n}.ts is SHARED but missing from the ${DOC} ingredient-2 list`);
 
+// Gate (c): each curated seam, checked against the hosts' own text (comments stripped, as above).
+const stripped = file => readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+for (const seam of POLICY_SEAMS) {
+  const where = `${seam.runner}'s \`${seam.option}\``;
+  // Reported, never returned on: the host lines below are what name the offender, and on a tree without the module they are the whole answer.
+  if (!shared.has(srcBase(seam.module))) problems.push(`NOT-SHARED: ${where} must be produced by ${seam.module}, which is not SHARED — ${seam.why}`);
+  for (const host of seam.hosts) {
+    const text = stripped(host);
+    if (!text.includes(`${seam.runner}(`)) {
+      problems.push(`STALE-SEAM: ${host} no longer calls ${seam.runner} — re-point or drop this POLICY_SEAMS row`);
+      continue;
+    }
+    const imports = new RegExp(`\\bimport\\s+[^;]*?\\b${seam.binding}\\b[^;]*?\\bfrom\\s*['"][^'"]*${srcBase(seam.module)}['"]`).test(text);
+    if (!imports) problems.push(`HOST-POLICY: ${host} does not import ${seam.binding} from ${seam.module} — ${seam.why}`);
+    const sites = [...text.matchAll(new RegExp(`^.*\\b${seam.option}:.*$`, 'gm'))].map(m => m[0].trim());
+    if (sites.length === 0) problems.push(`HOST-POLICY: ${host} passes no \`${seam.option}\` to ${seam.runner} — ${seam.why}`);
+    for (const site of sites) {
+      if (!site.includes(seam.produces)) problems.push(`HOST-POLICY: ${host} hand-builds ${where}: \`${site}\` — it must come from ${seam.module} (${seam.produces}); ${seam.why}`);
+    }
+    for (const feed of seam.feeds) {
+      if (!text.includes(feed)) problems.push(`HOST-POLICY: ${host} never calls \`${feed}\` — a host that stops feeding ${seam.module} leaves the other product's aim alone with it; ${seam.why}`);
+    }
+  }
+}
+
 const counts = {};
 for (const { cat } of table) counts[cat] = (counts[cat] ?? 0) + 1;
 console.log(Object.entries(counts).map(([k, v]) => `${k}=${v}`).join('  '));
@@ -100,6 +142,8 @@ if (problems.length) {
   for (const p of problems) console.error(`  ${p}`);
   console.error(`\nThe shared list in ${DOC} ("Architecture", ingredient 2) mirrors the computed SHARED set;`);
   console.error('fix the doc or the import that changed sidedness. `--print` shows the full derived table.');
+  console.error('A HOST-POLICY line means a host decided something a shared runner asks it for: move the decision');
+  console.error('into the shared module both hosts import, and leave the host supplying data and primitives only.');
   process.exit(1);
 }
-console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules.`);
+console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral.`);

@@ -439,11 +439,13 @@ skipping them would leave visible tiles permanently blank. The focused column ke
 head even when hidden — a click or a digit jump lands there. This is the same rule the sibling loads
 use (`sibling-order-by-display-distance`), reused rather than restated.
 
-The hosts supply only *where the user is*: the provider passes
-`() => ({ tuple: state.sweepCentre, ...state.sweepStrip })` — the dwelled copy of the current tuple
-(below) plus the strip as the webview last reported it — and the adapter the same shape over
-`s.currentTupleIndex`. The column half comes from `tupleFullyLoaded`, the one message that carries
-`modalityOrder`, `currentDisplayIndex` and `hiddenModalities`; both products record it, so the
+The hosts supply only *where the user is*, and they supply it **raw**: each forwards
+`setCurrentTuple` and `tupleFullyLoaded` to its own `SweepAimPolicy` and passes
+`() => policy.aim()` as the runner's centre. The dwell that turns a stream of keystrokes into a
+settled tuple (below) and the un-permuting of the column both live in that shared module — the two
+hosts contribute a `setTimeout`/`clearTimeout` pair and nothing else
+(`docs/standalone.md: host-supplies-data-not-policy`). The column half comes from `tupleFullyLoaded`, the one message that carries
+`modalityOrder`, `currentDisplayIndex` and `hiddenModalities`; both products forward it, so the
 standalone gets this order too rather than a row-only variant. That report fires on tuple arrival,
 so a *modality* switch inside an already-loaded tuple does not re-aim the sweep — the same gap
 prefetch has today, and deliberately not closed here. A column inserted or removed mid-sweep leaves
@@ -491,7 +493,7 @@ leaves it. Feeding that same stream to the sweep made it re-aim on every keystro
 genuinely cold 315×10 grid (~3 000 slots at ~8 thumbs/s) the maintainer saw roughly every fifth thumb
 land at a row the cursor had already passed — a sparse trail instead of a front — because every
 completed thumbnail runs a pump pass and every pump pass read a centre that had moved again. So the
-provider keeps a second field, `state.sweepCentre`, updated on a **trailing-edge** dwell of
+sweep aims at a *settled* tuple, kept by `SweepAimPolicy` and updated on a **trailing-edge** dwell of
 `LOAD_DEBOUNCE_MS` (150 ms, the webview's navigation debounce reused rather than re-tuned: the same
 "has the user settled?" question, and small enough to be invisible). While the key is held each
 message resets the timer, so no re-aim happens at all; exactly one fires a dwell after the key comes
@@ -499,9 +501,14 @@ up. Trailing edge rather than a literal `keyup`, because click, scroll and carou
 post the same message and deserve the same treatment. Everything else keeps reading the raw
 `currentTupleIndex` — the scrub-burst window and held-payload flush (`held-payloads-always-flush`),
 the prefetch band — and the re-aim itself is still the pump's own decision
-(`sweep-aims-once-per-pass`): the dwell moves a field, it pushes nothing at the sweep. The standalone
-adapter still feeds the raw index; the pathology was measured on the remote extension host, where a
-sweep slot is a network read, and the adapter was left alone rather than changed unmeasured.
+(`sweep-aims-once-per-pass`): the dwell moves a field, it pushes nothing at the sweep.
+
+That dwell shipped in the *provider's* wiring first (ff11b92) and the standalone kept feeding the raw
+index for two commits — the sweep's aim was injected per host, so a fix to one host was invisible to
+the other. The policy is now one shared module both hosts import, and
+`test/unit/sweepHostEquivalence.test.ts` drives the same held-key burst through both real hosts and
+requires the same trace out of each; `scripts/check-sidedness.mjs` fails the build if either host
+hand-builds the aim again (`docs/standalone.md: host-supplies-data-not-policy`).
 
 **Chunking.** Re-aiming is only possible if the pool has not already been handed the whole grid — a
 queued task is never re-ordered or promoted, so 7 293 queued items *are* the order. The sweep
@@ -1189,8 +1196,8 @@ mount latency — but the same shape applies, so neither product can quietly div
   `standalone/adapter.ts`) — a host that stops passing its live tuple silently restores the 746×10
   pathology, and one that stops passing its column silently sweeps the strip's first modality
   instead of the one on screen; in both cases the sweep still works, just in the order the user is
-  least likely to want. The column half must be **un-permuted** before it is handed over
-  (`modalityOrder[currentDisplayIndex]`, not the display position): passing a display index on as a
+  least likely to want. The column half must be **un-permuted** before it becomes an aim
+  (`modalityOrder[currentDisplayIndex]`, not the display position — `sweepAimPolicy.noteStrip`): passing a display index on as a
   modality index aims at whatever column happens to sit at that original position, which on an
   un-rearranged strip is silently correct and on a rearranged one is silently wrong
   (`docs/tuple-matching.md: wire-index-is-original`).
@@ -1223,18 +1230,22 @@ mount latency — but the same shape applies, so neither product can quietly div
   screenful the webview measures (`webview/main.ts`) and the two hosts that carry it
   (`imageCompareProvider.ts`, `standalone/adapter.ts`).
 - **`sweep-centre-dwells`** — the sweep's centre is a *settled* current tuple, never the raw
-  `setCurrentTuple` stream: the provider keeps `state.sweepCentre`, assigned from `currentTupleIndex`
-  on a trailing-edge dwell of `LOAD_DEBOUNCE_MS`, while `cancelImageLoads` stays on the raw message.
-  One message, two consumers, opposite latency requirements — a stale full-image load must die at
-  once, and a sweep that re-aims per keystroke chases the cursor instead of leading it (the field
-  report above: a held Down over a cold 315×10 grid delivered tiles at rows already passed). Any
-  change that delays the cancellation to share one path is wrong in the other direction. Four sites,
-  each failing silently and differently: the dwell *and its reset* (a leading-edge or un-reset timer
-  re-aims mid-burst, which is the bug at a coarser grain), the field the sweep is handed (a centre
-  supplier pointed back at `currentTupleIndex` restores the trail exactly), the prime at sweep start
-  (the sweep opens aimed at the row the panel opened on — no navigation has happened, so no dwell has
-  fired), and the clear on dispose (a dwell that outlives its panel fires against dead state and
-  holds the host awake for its duration). The dwell only decides *when the field moves*; the re-aim
+  `setCurrentTuple` stream: `SweepAimPolicy` (`src/sweepAimPolicy.ts`) holds a settled tuple assigned
+  from the raw one on a trailing-edge dwell of `LOAD_DEBOUNCE_MS`, while `cancelImageLoads` stays on
+  the raw message. One message, two consumers, opposite latency requirements — a stale full-image
+  load must die at once, and a sweep that re-aims per keystroke chases the cursor instead of leading
+  it (the field report above: a held Down over a cold 315×10 grid delivered tiles at rows already
+  passed). Any change that delays the cancellation to share one path is wrong in the other direction.
+  The dwell is **shared, not per host**: it shipped in the provider's wiring first and the standalone
+  kept chasing the cursor for two commits, which is why the policy is one module both hosts import
+  and why hosts may hand it data and timers only (`docs/standalone.md: host-supplies-data-not-policy`).
+  Six sites, each failing silently and differently: the dwell *and its reset* (a leading-edge or
+  un-reset timer re-aims mid-burst, which is the bug at a coarser grain), the prime at sweep start
+  (the sweep opens aimed at the row its host reports — no navigation has happened, so no dwell has
+  fired), the dispose (a dwell that outlives its panel or session fires against dead state and holds
+  the host awake for its duration), and the two hosts, each of which must feed the policy its raw
+  reports and read its aim back rather than build one (`imageCompareProvider.ts`,
+  `standalone/adapter.ts`). The dwell only decides *when the settled tuple moves*; the re-aim
   is still one-per-pump-pass (`sweep-aims-once-per-pass`), and coverage is untouched
   (`sweep-covers-every-slot-once`) — re-centring is an ordering change whenever it happens.
 - **`sweep-covers-every-slot-once`** — re-centring is an ordering change and nothing else: for a

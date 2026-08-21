@@ -40,8 +40,8 @@ jobs:
       - name: Check comment length
         run: node scripts/comment-lint.mjs
 
-      # Module sidedness (extension/standalone/shared) derived from real imports. See docs/standalone.md.
-      - name: Check module sidedness
+      # Module sidedness from real imports, and no host hand-building a shared runner's decision. See docs/standalone.md.
+      - name: Check module sidedness and policy seams
         run: node scripts/check-sidedness.mjs
 
       # A generator writing outside an ignored dir is one `git add .` from publishing it. See docs/testing.md.

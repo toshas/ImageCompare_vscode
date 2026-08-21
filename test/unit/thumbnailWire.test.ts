@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig } from '../mocks/vscode';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 
 // The `thumbnail` wire shape, on the REAL provider's post path. The packfile hands out
@@ -58,6 +58,7 @@ function makeRig(thumbnailBytes: () => Buffer) {
     winners: new Map(),
     votingEnabled: false,
     currentTupleIndex: 0,
+    sweepAim: newSweepAimPolicy(),
     disposed: false,
     visible: true,
     poolKey: `thumbwire-${Math.random().toString(36).slice(2)}`,

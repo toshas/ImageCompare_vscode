@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { Uri, workspace, __channelLines, __resetChannels, __resetConfig, __setConfig } from '../mocks/vscode';
 import { ThumbnailService } from '../../src/thumbnailService';
-import { ImageCompareProvider } from '../../src/imageCompareProvider';
+import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 import { makeSolidPng } from '../fixtures/synthetic';
@@ -90,6 +90,7 @@ function makeState(images: Uri[]): Record<string, unknown> {
     },
     loadedImages: new Map(),
     currentTupleIndex: 0,
+    sweepAim: newSweepAimPolicy(),
     disposed: false,
     visible: true,
     poolKey: `sharedwait-${Math.random().toString(36).slice(2)}`,

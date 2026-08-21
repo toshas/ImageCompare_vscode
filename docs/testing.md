@@ -255,7 +255,8 @@ with several of its rules deliberately broken. When you add a test, pin a value
 from *outside* the implementation (a spec constant, a hand-computed expectation); code compared to
 itself proves nothing.
 
-**The harness never writes the working tree.** It copies `src/`, `test/`, `package.json` and the
+**The harness never writes the working tree.** It copies `src/`, `standalone/`, `test/`,
+`package.json` and the
 tsconfigs into an `imagecompare-mutation-*` sandbox under the OS temp dir, mirrors `node_modules`
 entry by entry as symlinks (so the sandbox gets its own empty Vite cache rather than sharing the
 repo's), runs every suite with the sandbox as cwd, and deletes it on the way out. Mutating in place
@@ -359,10 +360,25 @@ the fix, the docs, and the CI check.
   full-image loads at once, and the open-time sweep took its centre from the same field. Holding Down
   over a cold 315x10 grid therefore re-aimed the sweep on every completed thumbnail, landing tiles at
   rows the cursor had already passed. The sweep now reads a trailing-edge dwelled copy
-  (`state.sweepCentre`, `LOAD_DEBOUNCE_MS`) while the cancellation keeps the raw signal;
+  (`the shared aim policy`, `LOAD_DEBOUNCE_MS`) while the cancellation keeps the raw signal;
   `test/unit/sweepCentreDwell.test.ts` drives a real key-repeat burst on the real provider under fake
   timers and pins one re-aim after it, per-keystroke cancellation during it, and no timer left behind
   by a dispose mid-burst, with two mutations (dwell removed, dwell made leading-edge).
+
+- **The fix above shipped to one product only** *(fixed)* — the sweep takes its aim as an injected
+  callback and each host built one by hand, so the dwell landed in `imageCompareProvider.ts` and the
+  standalone adapter kept feeding the raw index. The aim is now `src/sweepAimPolicy.ts`, shared:
+  hosts forward raw reports and supply `setTimeout`/`clearTimeout`, nothing else.
+  `test/unit/sweepAimPolicy.test.ts` pins the policy on a fake clock, and
+  `test/unit/sweepHostEquivalence.test.ts` drives the *same* held-key burst through both **real**
+  hosts — the real provider, and the real `standalone/adapter.ts` imported with the browser globals
+  it needs stubbed and opened on a fake FSA handle — and requires the two traces to be identical and
+  equal to the literal ff11b92 pinned. That suite is why the mutation sandbox now carries
+  `standalone/` (the adapter can be mutated at last: two of the entries do exactly that, and nothing
+  but this suite kills them). `scripts/check-sidedness.mjs` gained a third gate for the structural
+  half — `POLICY_SEAMS`, a curated list of injected decisions, which fails when a host hand-builds
+  one; verified by running it against the ff11b92 and 32f73a0 trees, where it names both hosts and
+  quotes the offending line (`docs/standalone.md: host-supplies-data-not-policy`).
 
 - **Two comparison tabs shared one FIFO, so the second one indexed nothing for a chunk** *(fixed)* —
   on the real pool and the real sweep runner, a second 746x10 tab joining a running sweep waited 28

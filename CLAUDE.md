@@ -89,6 +89,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`prefetchPlan.ts`** - Pure (extension-only, no vscode): what a prefetch wave speculates on — the
   tuple band `prefetchCount` names, the on-screen modality column plus the nearest siblings (reusing
   `tupleLoadPlan`'s own rule), and the column-major issue order → `docs/loading-architecture.md`
+- **`sweepAimPolicy.ts`** - Pure (no vscode/DOM): where the open-time sweep aims and when that moves — the raw `setCurrentTuple` stream trailing-edge dwelled into a settled tuple, the strip un-permuted into a column, over host-supplied timer primitives; shared, so neither product can dwell differently → `docs/loading-architecture.md`, `docs/standalone.md`
 - **`thumbnailPlan.ts`** - Pure (no vscode dependency): open-time thumbnail-sweep planning and running (slot order, missing slots, progress ticks, sweep wire traffic over injected IO), shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
 - **`imageServe.ts`** - Pure (no vscode dependency): full-image serving — passthrough-vs-convert branch, payload normalization, the single terminal reply, and the current-tuple refresh loop — shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
 - **`initPayload.ts`** - Pure (no vscode dependency): `init`-message assembly (dense tuples, positional color defaults, winners record, product version for the help modal), shared with the standalone build → `docs/standalone.md`
@@ -246,7 +247,7 @@ npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
 npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
 node scripts/comment-lint.mjs       # no multi-line // blocks in src/ or scripts/ (test/ exempt)
-node scripts/check-sidedness.mjs    # module sidedness (extension/standalone/shared) from real imports; no dead src/ modules
+node scripts/check-sidedness.mjs    # module sidedness from real imports; no dead src/ modules; no host hand-building a shared runner's injected decision
 node scripts/check-generated-output.mjs  # generators write only into ignored dirs (nothing to `git add .`)
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
 npm run compile                     # both webpack targets

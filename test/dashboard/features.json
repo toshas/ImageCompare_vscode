@@ -1778,6 +1778,22 @@
             {
               "suite": "unit",
               "match": "leaves no dwell pending when the panel is disposed mid-burst"
+            },
+            {
+              "suite": "unit",
+              "match": "holds the dwell open for a whole burst and re-aims once"
+            },
+            {
+              "suite": "unit",
+              "match": "waits the navigation debounce, not a dwell of its own invention"
+            },
+            {
+              "suite": "unit",
+              "match": "opens the sweep at the tuple its host reports"
+            },
+            {
+              "suite": "unit",
+              "match": "drives the same burst through the real provider and the real standalone adapter"
             }
           ]
         },
