@@ -1809,6 +1809,10 @@
             {
               "suite": "webview",
               "match": "standalone landing shows the ported dropzone chrome"
+            },
+            {
+              "suite": "unit",
+              "match": "standalone artifact freshness"
             }
           ]
         },

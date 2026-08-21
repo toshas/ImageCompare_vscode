@@ -90,6 +90,7 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `modalityVisibility` | real source | Hidden-pill keyboard cycling: skip, run-skip, non-wrapping edges, all-hidden stay; the tiny-tile mouse-vote guard threshold |
 | `thumbPack` | real source | Packfile round-trip, uuid pairing rejection, truncation/overflow/duplicate rejection |
 | `wireFormat` | real source | Image payload normalization: Buffer→plain Uint8Array (species-safe), offset views copied tight, structuredClone survival |
+| `standaloneArtifact` | real source | The webview layer's build-once rule (`test/webview/standaloneArtifact.ts`) on synthetic trees: missing/stale/fresh, every input kind making the page stale, the shared-mtime tie counted as stale, `test/` and non-source files ignored, and the problem message naming the file and the command |
 | `thumbUrlCache` | real source | Webview thumbnail-url ownership: the superseded url is revoked and the incoming one never is, the successor is adopted before the loser dies, the shared ✕ placeholder is stored but never revoked, delete/clear/re-key revoke exactly what they drop |
 | `thumbnailWire` | real source | The `thumbnail` post path on the real provider: a pack-slice Buffer is copied tight (plain constructor, offset 0, exact length) before it reaches `postMessage`, sweep and on-demand paths alike |
 | `resultsFile` | real source | `results.txt` format: byte-pinned header (committed literals, not self-comparison), serialize/parse round-trip, CRLF parsing, malformed-line skipping |
@@ -118,9 +119,9 @@ structure survival, CRC-32 against the IEEE check value and a full-table probe, 
 of an injected PNG (the one unit test that needs a working native Sharp).
 
 One webview-layer spec covers a whole product rather than one behavior:
-`test/webview/standalone-build.spec.ts` builds `dist/standalone/image_compare.html` (via
-`scripts/build-standalone.mjs`) in its `beforeAll`, serves it over localhost (OPFS needs a secure
-context), fabricates a real modality tree in OPFS in-page, boots the adapter through
+`test/webview/standalone-build.spec.ts` serves `dist/standalone/image_compare.html` (built once per
+run by the Playwright `globalSetup`, see "The standalone artifact" below) over localhost (OPFS needs
+a secure context), fabricates a real modality tree in OPFS in-page, boots the adapter through
 `window.__ic_standalone.open()`, and pins the tuple/modality literals the real matcher produces plus
 a byte-for-byte `results.txt` round trip against the real `serializeResults`. The same file pins
 the standalone poll (external add/delete/change and `results.txt` edits landing as granular
@@ -150,6 +151,82 @@ invocation shape with the number, because it moves the escape rate threefold: th
 the reorder **14 of 20** whole-suite, 14 of 20 running only the two rename specs, and 18 of 20 under
 `--repeat-each=20`. So it escapes 10-30% of the time, not the 1-in-6 first reported. The held-timer
 spec failed 20 of 20 in every shape, and is 20 of 20 green with the adapter restored.
+
+### The standalone artifact is built once per run, and freshness is checked, not assumed
+
+The build lives in `test/webview/global-setup.ts` — the Playwright main process, before any worker
+exists — not in the spec's `beforeAll`. It used to be in `beforeAll`, and with `fullyParallel` every
+worker that picked up a test from that file ran its own `scripts/build-standalone.mjs` over the
+**same** output path: instrumented at `--workers=4` (an `fs.writeFileSync`/`readFileSync` spy
+preloaded into every node process of the run), four separate builds wrote
+`dist/standalone/image_compare.html` inside the same half-second while four workers read it — 273 ms
+apart in one run, 434 ms in the next, with a worker's read starting 12 ms after another build's write
+finished. Nothing had failed in 40+ runs — which is the profile of a
+flake that bites first on a slow CI runner, and this suite gates three OSes.
+
+Moving the build is only safe if "already built" stays an honest question, so
+`test/webview/standaloneArtifact.ts` owns one rule and both callers use it: `globalSetup` builds
+**iff** the artifact is not fresh, and the spec's `beforeAll` asserts the same predicate and
+never builds — an `existsSync` would serve a month-old page happily. Stale means *some build input
+has an mtime at least as new as the artifact*: `scripts/build-standalone.mjs`, `tsconfig.standalone.json`,
+`package.json` (the version is injected into the page), the inlined `dist/webview.js`, and every
+`.ts` under `src/` and `.ts`/`.mjs` under `standalone/`. A tie counts as stale — a build reads its
+inputs before it writes, so an input sharing the artifact's mtime was edited after it; the cost is
+one redundant build, never a stale page. `test/` is deliberately not an input: editing a spec
+changes nothing about the page.
+
+An mtime alone is not enough, because the worst artifact on disk is also the newest one. A build
+killed mid-write (Ctrl-C, ENOSPC, an EIO on a network mount, the OOM killer) leaves a truncated or
+**zero-byte** page stamped *now* — newer than every input, so a pure mtime rule calls it current
+and every worker serves it. Measured: the page is written with a single `writeFileSync`, which
+truncates before it writes, and a syscall-level probe of a parallel run saw 12 of 3366 reads come
+back short or empty (0.36%). That page then fails the specs deep inside the adapter
+(`Cannot set properties of undefined`), pointing the developer at `standalone/` instead of at the
+artifact, and — before the build moved out of `beforeAll`, where it ran unconditionally — it used to
+heal itself on the next run; under a conditional build it is sticky forever, because no input mtime
+ever moves again.
+
+So the rule checks completeness first: the artifact's last 64 bytes must contain `</html>`, the
+page's closing tag (`standalone/compose.mjs` ends the template with it and nothing else follows, and
+it occurs exactly once in the built page). Anything else — zero bytes, a prefix, an unreadable file —
+is `corrupt`, which `globalSetup` rebuilds and the spec reports **by name**. The sentinel is
+structural, not semantic, and that is the point: a *content* marker such as the `__ic_standalone`
+boot seam could legitimately be renamed by a future build, and then every run would rebuild and
+still call the result corrupt — a permanent false alarm. An HTML
+document that stops ending in `</html>` is not a legitimately-changed build; it is a truncated file.
+A length threshold was rejected for the opposite reason: it is arbitrary, and it passes any
+truncation that happens to be long enough.
+
+The same fail-closed default applies to the inputs. A directory that cannot be listed, or an input
+set that comes back empty, is not evidence that the artifact is current — both report
+`unverifiable`, which rebuilds and reports, rather than the `fresh` that a swallowed `readdirSync`
+error used to produce.
+
+A build that *fails* is caught but not fatal: `globalSetup` reports it and continues, so the specs
+that serve the page fail on their own assertion (naming the stale, missing or corrupt artifact) while
+the rest of Layer 3 still runs — the blast radius each spec had when it built the page itself.
+Throwing from `globalSetup` would abort the whole webview run over a broken `standalone/`. The
+completeness check is what keeps that policy honest: a build that dies *during* its write both
+leaves a corrupt artifact and stamps it fresh, so without it the `FAILED` banner would be followed
+by misleading in-page failures instead of the actionable message.
+
+What the rule does **not** catch: an input restored with an older timestamp (`tar -x`, `rsync -t`;
+`git checkout` stamps now, so it is caught), a dependency change under `node_modules` (an esbuild
+upgrade), and a `dist/webview.js` that is itself stale with respect to `src/` — the standalone build
+inlines whatever bundle is on disk and only compiles when it is *missing*, so `npm run compile`
+before the webview layer remains the developer's job exactly as it was before. The conditional is
+also what keeps a single-spec run cheap: a developer running `-g` something pays an mtime scan of
+`src/` + `standalone/` (milliseconds) instead of a build.
+
+It does **not** always avoid the build in the canonical `npm test && npm run test:webview` loop, and
+the earlier claim that it did was wrong. `test/unit/mutationHarness.test.ts` restores
+`src/wireFormat.ts` in the *working tree* with byte-identical content (that is how it proves the
+manifest catches a poisoned tree), which leaves `git status src/` clean but bumps the file's mtime —
+measured: same md5, mtime one minute later. So `npm test` alone makes the artifact stale and the
+webview layer pays one ~1.7 s build. Restoring the mtime with `utimesSync` would remove it, but it
+belongs in that spec's restore path, not in `scripts/mutation-check.mjs` (the harness only ever
+writes inside its sandbox copy), and one redundant build is not worth complicating a restore path
+whose correctness is what keeps mutations out of the working tree.
 
 ## The copy trap (historical)
 
@@ -276,6 +353,20 @@ the fix, the docs, and the CI check.
   and silent.
 
 ## Findings (caught by this testbed)
+
+- **Four Playwright workers raced one standalone build output** *(fixed, latent)* — the standalone
+  spec built `dist/standalone/image_compare.html` in `beforeAll`, so at `--workers=4` four builds
+  wrote the page other workers were serving (spied writes: 4 per invocation, 270 ms apart, a read 12 ms
+  behind one). Built once in `globalSetup` now, gated by the mtime freshness rule in
+  `test/webview/standaloneArtifact.ts` (1 write per invocation, all reads after it), pinned by
+  `test/unit/standaloneArtifact.test.ts` and eight mutations. See "The standalone artifact" above.
+
+- **A zero-byte artifact was the newest file on disk, so nothing rebuilt it** *(fixed)* — moving the
+  build behind an mtime check turned a self-healing truncated page (the old `beforeAll` rebuilt
+  unconditionally) into a permanently sticky one: `: > dist/standalone/image_compare.html` produced
+  no rebuild on any later run and the specs failed inside the adapter instead. The freshness rule now
+  requires the page's closing tag in its last bytes before it looks at any mtime, and fails closed on
+  an input tree it cannot enumerate. See "The standalone artifact" above.
 
 - **A slot invalidation left the payload already parked for that slot on the wire** *(fixed)* — the
   five slot-level invalidation paths (a delete when first seen and again when the rename window

@@ -27,7 +27,9 @@ const repoRoot = join(scriptDir, '..');
 
 /**
  * Each mutation names the file it edits and the suite that must kill it. Every
- * suite imports the real source, so every mutation hits src/*. All suites live
+ * suite imports the real source, so a mutation hits src/* — except the standalone-artifact
+ * freshness rule at the end, which IS test infrastructure (test/webview/standaloneArtifact.ts) and
+ * decides whether the webview layer serves a current, complete page. All suites live
  * under test/unit/ and are run through Vitest (the tuple-matching and pngText
  * mutations are killed there; the old in-test copies are gone).
  */
@@ -1840,6 +1842,73 @@ const mutations = [
     find: '    this.cancelImageLoads(state); // per-tuple keys outlive poolKey',
     replace: '    /* mutated: only poolKey is cancelled */ // per-tuple keys outlive poolKey',
     killedBy: 'dispose test (a closed panel leaves nothing queued)'
+  },
+
+  // ── Standalone artifact freshness: the one non-src file here, because "built once by
+  //    globalSetup" is only safe while "already built" stays an honest question (docs/testing.md) ──
+  {
+    name: 'standalone artifact: freshness downgraded to an existence check (any artifact counts as current)',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: '  if (newest && newest.mtimeMs >= artifact.mtimeMs) {',
+    replace: '  if (newest && false) {',
+    killedBy: 'stale tests (a newer build input must not read as fresh)'
+  },
+  {
+    name: 'standalone artifact: an input sharing the artifact mtime reads as fresh',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: '  if (newest && newest.mtimeMs >= artifact.mtimeMs) {',
+    replace: '  if (newest && newest.mtimeMs > artifact.mtimeMs) {',
+    killedBy: 'shared-mtime test (a build reads its inputs before it writes, so a tie is an edit after)'
+  },
+  {
+    name: 'standalone artifact: src/ dropped from the input set',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: "  { dir: 'src', exts: ['.ts'] },\n",
+    replace: '',
+    killedBy: 'input-set and src-stale tests (a changed src file must make the page stale)'
+  },
+  {
+    name: 'standalone artifact: standalone/ dropped from the input set',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: "  { dir: 'standalone', exts: ['.ts', '.mjs'] },\n",
+    replace: '',
+    killedBy: 'input-set and adapter-stale tests (a changed adapter must make the page stale)'
+  },
+  {
+    name: 'standalone artifact: a missing artifact reported as fresh',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: "    return { state: 'missing' };",
+    replace: "    return { state: 'fresh' };",
+    killedBy: 'missing test (no page on disk is not a current page)'
+  },
+  {
+    name: 'standalone artifact: completeness check dropped (a zero-byte page written now reads as fresh)',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: "  if (damage) return { state: 'corrupt', detail: damage };",
+    replace: '  /* mutated: whatever the write left behind is served */',
+    killedBy: 'corrupt tests (a truncated or empty artifact with the newest mtime must not read as fresh)'
+  },
+  {
+    name: 'standalone artifact: an unlistable input tree no longer blocks a fresh verdict',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: "  if (unreadable) return { state: 'unverifiable', detail: `${unreadable} could not be listed` };",
+    replace: '  /* mutated: an input set that cannot be enumerated counts as evidence */',
+    killedBy: 'unlistable-tree test (a src/ that cannot be read is not proof the page is current)'
+  },
+  {
+    name: 'standalone artifact: an empty input set reads as fresh',
+    file: 'test/webview/standaloneArtifact.ts',
+    suite: 'test/unit/standaloneArtifact.test.ts',
+    find: "  if (!newest) return { state: 'unverifiable', detail: 'no build input was found' };",
+    replace: '  /* mutated: no inputs found means nothing is newer */',
+    killedBy: 'no-inputs test (finding no build input at all is not evidence of freshness)'
   }
 ];
 

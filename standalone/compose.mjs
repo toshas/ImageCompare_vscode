@@ -15,6 +15,8 @@ function stripSourceMapRef(js) {
   return js.replace(/^\/\/# sourceMappingURL=.*$/gm, '');
 }
 
+// The page must end with `</html>`: the webview suite treats an artifact whose tail lacks it as a
+// half-written build and rebuilds (test/webview/standaloneArtifact.ts, docs/testing.md).
 export function composeStandaloneHtml({ styles, body, adapterJs, webviewJs, version }) {
   return `<!DOCTYPE html>
 <html lang="en">

@@ -1,7 +1,8 @@
 /**
  * Smoke spec for the standalone browser build (docs/standalone.md).
  *
- * beforeAll builds the real artifact (scripts/build-standalone.mjs), a throwaway
+ * globalSetup builds the real artifact (scripts/build-standalone.mjs) once for the whole run and
+ * beforeAll asserts it is present and current (never builds it — N workers, one output path), a throwaway
  * http server serves it (OPFS needs a secure context; 127.0.0.1 qualifies, file:// may not),
  * and the spec creates a real directory tree in OPFS in-page, then boots the adapter
  * through the window.__ic_standalone seam. The pinned literals below (tuple/modality
@@ -12,21 +13,24 @@
  * The results.txt readback pins the shared serializer byte-for-byte end to end.
  */
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { serializeResults } from '../../src/resultsFile';
+import { STANDALONE_ARTIFACT, assertStandaloneArtifactFresh } from './standaloneArtifact';
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const ARTIFACT = path.join(ROOT, 'dist', 'standalone', 'image_compare.html');
+const ARTIFACT = STANDALONE_ARTIFACT;
 
 let server: http.Server;
 let pageUrl: string;
 
 test.beforeAll(async () => {
-  execSync('node scripts/build-standalone.mjs', { cwd: ROOT, stdio: 'inherit' });
+  // The artifact is built ONCE by globalSetup (test/webview/standaloneArtifact.ts); every worker
+  // that runs this file only reads it, so no build can race a read. Reading a page that is missing,
+  // half-written or older than its sources is the failure this guards, not just an absent file.
+  assertStandaloneArtifactFresh();
   const html = fs.readFileSync(ARTIFACT);
   server = http.createServer((_req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -37,6 +41,8 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  // beforeAll can fail before the server exists (a missing or stale artifact); don't bury it.
+  if (!server) return;
   await new Promise(resolve => server.close(resolve));
 });
 
