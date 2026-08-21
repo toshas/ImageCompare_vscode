@@ -40,7 +40,8 @@ if (!Number.isInteger(n) || n < 1) {
 const [maj, min, pat] = base.split('.').map(Number);
 const alpha = `${maj}.${min}.${pat + 1}-alpha${n}`;
 setVersion(alpha);
-execSync('npx vsce package', { cwd: root, stdio: 'inherit' });
+// Standalone first: vsce packs dist/, so packaging first shipped the previous build's copy.
 execSync('npm run build:standalone', { cwd: root, stdio: 'inherit' });
+execSync('npx vsce package', { cwd: root, stdio: 'inherit' });
 console.log(`\nBuilt image-compare-${alpha}.vsix + dist/standalone/image_compare.html (both stamped ${alpha}).`);
 console.log('package.json keeps the alpha version until `--restore` (never commit it; CI guards).');

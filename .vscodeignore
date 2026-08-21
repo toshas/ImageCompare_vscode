@@ -38,6 +38,16 @@ scripts/**
 # Testing bed and dev tooling (not shipped)
 test/**
 .dashboard-data/**
+# Gitignored working files: .vscodeignore is a SEPARATE list and vsce packs the working tree,
+# not git, so anything only .gitignore covers still ships unless it is named here too.
+.agent-runs/**
+test-results/**
+**/test-results/**
+out-integration/**
+.words-to-check.txt
+NIGHT-RUN-NOTES.md
+ITERATION-TIPS.md
+.dashboard-data/**
 .vscode-test.mjs
 
 # Test data
