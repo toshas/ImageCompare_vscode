@@ -354,6 +354,16 @@ the fix, the docs, and the CI check.
 
 ## Findings (caught by this testbed)
 
+- **One message, two consumers with opposite latency needs: the sweep chased a held key** *(fixed)* —
+  `setCurrentTuple` is posted ungated on every navigation so `cancelImageLoads` can kill stale
+  full-image loads at once, and the open-time sweep took its centre from the same field. Holding Down
+  over a cold 315x10 grid therefore re-aimed the sweep on every completed thumbnail, landing tiles at
+  rows the cursor had already passed. The sweep now reads a trailing-edge dwelled copy
+  (`state.sweepCentre`, `LOAD_DEBOUNCE_MS`) while the cancellation keeps the raw signal;
+  `test/unit/sweepCentreDwell.test.ts` drives a real key-repeat burst on the real provider under fake
+  timers and pins one re-aim after it, per-keystroke cancellation during it, and no timer left behind
+  by a dispose mid-burst, with two mutations (dwell removed, dwell made leading-edge).
+
 - **Two comparison tabs shared one FIFO, so the second one indexed nothing for a chunk** *(fixed)* —
   on the real pool and the real sweep runner, a second 746x10 tab joining a running sweep waited 28
   reads (8 batches, ~11 s at the field's cold cost) for its first slot and then took 12 % of the next

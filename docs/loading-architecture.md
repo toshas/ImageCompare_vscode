@@ -384,11 +384,30 @@ queue: an item leaves its row exactly once (`shift`), so it can be dispatched at
 two walks between them cover `[0, rows)` from any centre, so it is dispatched at least once. Distance
 is over the tuple index only — the carousel's axis — and within a row the order stays modality-minor.
 
-The hosts supply only *where the user is*: the provider passes `() => state.currentTupleIndex`, the
-adapter `() => s.currentTupleIndex`, both updated by the webview's `setCurrentTuple`. The decision —
+The hosts supply only *where the user is*: the provider passes `() => state.sweepCentre` (its dwelled
+copy of the current tuple, below), the adapter `() => s.currentTupleIndex`, both fed by the webview's
+`setCurrentTuple`. The decision —
 what that means for order — lives in the shared module, so the two products cannot diverge
 (`docs/standalone.md: adapter-contains-no-logic`). Nothing is pushed at the sweep: the centre is read
 at each dispatch, so a jump costs nothing when nobody navigates.
+
+**The centre dwells; the cancellation does not.** `setCurrentTuple` is posted on every navigation,
+ungated, because `cancelImageLoads` must kill the previous row's full-image loads the moment the user
+leaves it. Feeding that same stream to the sweep made it re-aim on every keystroke of a held key: on a
+genuinely cold 315×10 grid (~3 000 slots at ~8 thumbs/s) the maintainer saw roughly every fifth thumb
+land at a row the cursor had already passed — a sparse trail instead of a front — because every
+completed thumbnail runs a pump pass and every pump pass read a centre that had moved again. So the
+provider keeps a second field, `state.sweepCentre`, updated on a **trailing-edge** dwell of
+`LOAD_DEBOUNCE_MS` (150 ms, the webview's navigation debounce reused rather than re-tuned: the same
+"has the user settled?" question, and small enough to be invisible). While the key is held each
+message resets the timer, so no re-aim happens at all; exactly one fires a dwell after the key comes
+up. Trailing edge rather than a literal `keyup`, because click, scroll and carousel-drag navigation
+post the same message and deserve the same treatment. Everything else keeps reading the raw
+`currentTupleIndex` — the scrub-burst window and held-payload flush (`held-payloads-always-flush`),
+the prefetch band — and the re-aim itself is still the pump's own decision
+(`sweep-aims-once-per-pass`): the dwell moves a field, it pushes nothing at the sweep. The standalone
+adapter still feeds the raw index; the pathology was measured on the remote extension host, where a
+sweep slot is a network read, and the adapter was left alone rather than changed unmeasured.
 
 **Chunking.** Re-aiming is only possible if the pool has not already been handed the whole grid — a
 queued task is never re-ordered or promoted, so 7 293 queued items *are* the order. The sweep
@@ -1067,12 +1086,27 @@ picture, so width buys decoder-competition fairness between priority classes rat
 mount latency — but the same shape applies, so neither product can quietly diverge.
 - **`thumbnails-centre-out`** — the open-time sweep dispatches slots by distance from the tuple the
   user is on (forward first on a tie, modality-minor within a row), and re-aims at the new row as
-  soon as the user moves there — the remaining work is re-ordered, never finished in the old order
+  soon as the user settles there (`sweep-centre-dwells`) — the remaining work is re-ordered, never finished in the old order
   first. Scanline order is the special case of a centre pinned at 0, which is what a host that
   supplies no centre gets. Three sites: the ordering itself (`thumbnailPlan.ts`) and the centre each
   host feeds it (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that stops passing its
   live current tuple silently restores the 746×10 pathology, since the sweep still works, just in
   the order the user is least likely to want.
+- **`sweep-centre-dwells`** — the sweep's centre is a *settled* current tuple, never the raw
+  `setCurrentTuple` stream: the provider keeps `state.sweepCentre`, assigned from `currentTupleIndex`
+  on a trailing-edge dwell of `LOAD_DEBOUNCE_MS`, while `cancelImageLoads` stays on the raw message.
+  One message, two consumers, opposite latency requirements — a stale full-image load must die at
+  once, and a sweep that re-aims per keystroke chases the cursor instead of leading it (the field
+  report above: a held Down over a cold 315×10 grid delivered tiles at rows already passed). Any
+  change that delays the cancellation to share one path is wrong in the other direction. Four sites,
+  each failing silently and differently: the dwell *and its reset* (a leading-edge or un-reset timer
+  re-aims mid-burst, which is the bug at a coarser grain), the field the sweep is handed (a centre
+  supplier pointed back at `currentTupleIndex` restores the trail exactly), the prime at sweep start
+  (the sweep opens aimed at the row the panel opened on — no navigation has happened, so no dwell has
+  fired), and the clear on dispose (a dwell that outlives its panel fires against dead state and
+  holds the host awake for its duration). The dwell only decides *when the field moves*; the re-aim
+  is still one-per-pump-pass (`sweep-aims-once-per-pass`), and coverage is untouched
+  (`sweep-covers-every-slot-once`) — re-centring is an ordering change whenever it happens.
 - **`sweep-covers-every-slot-once`** — re-centring is an ordering change and nothing else: for a
   host that is still there, every planned slot is **delivered and counted exactly once**, however
   often the centre moves and whenever it moves, and the tail is still swept when the user stops

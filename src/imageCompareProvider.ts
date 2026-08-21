@@ -18,6 +18,8 @@ import { performCrop } from './cropFlow';
 import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE } from './thumbnailPlan';
 import { buildInitPayload } from './initPayload';
 import { PrefetchScope, prefetchWavePlan } from './prefetchPlan';
+// The sweep's re-aim dwell is the navigation debounce, host-side (docs/loading-architecture.md: sweep-centre-dwells).
+import { LOAD_DEBOUNCE_MS } from './webview/tupleLoadPlan';
 import { nextPanelKey, poolWidth, Priority, TaskCancelled, usableParallelism, WorkPool } from './workPool';
 import { TransportBudget, reindexSlotKeyedPosts, resolveTransportBudgetBytes } from './transportBudget';
 import { beginOpenMarks, debug, debugEnabled, debugVerbose, diffPackLoadStat, diffTierStats, formatBytes, formatOpenRollup, formatPackLoad, formatTierStats, itemsPerSecond, OpenMarks } from './debugLog';
@@ -70,6 +72,9 @@ interface PanelState {
   scanResult: ScanResult;
   loadedImages: Map<string, LoadedImage>;
   currentTupleIndex: TupleIndex;
+  /** The sweep's own centre: `currentTupleIndex` once navigation has settled, so a held key re-aims once (docs/loading-architecture.md: sweep-centre-dwells). */
+  sweepCentre: TupleIndex;
+  sweepCentreTimer?: ReturnType<typeof setTimeout>; // trailing-edge dwell before the sweep re-aims; cleared on dispose
   fileWatchers: vscode.FileSystemWatcher[];
   nodeWatchers: fs.FSWatcher[];
   /** Per-directory, so a removed modality releases exactly its own (docs/file-watching.md: watchers-released-with-modality). */
@@ -287,6 +292,7 @@ export class ImageCompareProvider {
         scanResult,
         loadedImages: new Map<string, LoadedImage>(),
         currentTupleIndex: asTuple(0),
+        sweepCentre: asTuple(0),
         fileWatchers: [],
         nodeWatchers: [],
         watchersByDir: new Map(),
@@ -387,6 +393,7 @@ export class ImageCompareProvider {
     if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
     if (state.sweepStatsTimer) clearInterval(state.sweepStatsTimer);
     if (state.sweepIdleTimer) clearTimeout(state.sweepIdleTimer);
+    if (state.sweepCentreTimer) clearTimeout(state.sweepCentreTimer); // a dwell must not fire against a dead panel (docs/loading-architecture.md: sweep-centre-dwells)
     // Un-acked pushes would otherwise retain this panel for the ack timeout (docs/loading-architecture.md: speculation-yields-the-wire).
     for (const timer of state.ackWatchdogs ?? []) clearTimeout(timer);
     state.ackWatchdogs?.clear();
@@ -432,6 +439,7 @@ export class ImageCompareProvider {
         this.cancelImageLoads(state, message.tupleIndex);
         state.currentTupleIndex = message.tupleIndex;
         state.lastTupleSwitchAt = Date.now();
+        this.aimSweepAfterDwell(state);
         // The user landed here: anything held for this tuple is delivered now, ahead of the burst flush.
         for (const [key, held] of state.heldImagePosts) {
           if (held.tupleIndex === message.tupleIndex) {
@@ -943,6 +951,8 @@ ${lead}
     const plan = planThumbnails(state.scanResult.tuples, state.scanResult.modalities);
     const itemBySlot = new Map(plan.items.map(item => [`${item.tupleIndex}-${item.modalityIndex}`, item]));
 
+    // The sweep opens aimed at the row the panel opened on; the dwell governs moves only (docs/loading-architecture.md: sweep-centre-dwells).
+    state.sweepCentre = state.currentTupleIndex;
     // One flag read gates the whole sweep's instrumentation — clock, snapshots and timer alike (docs/loading-architecture.md: debug-off-costs-nothing).
     const timed = debugEnabled();
     const sweepStart = timed ? Date.now() : 0;
@@ -1047,9 +1057,9 @@ ${lead}
             this.sendThumbnailMessage(state, slot.tupleIndex, slot.modalityIndex, msg.bytes, msg.mime);
           } else this.sendThumbnailErrorMessage(state, slot.tupleIndex, slot.modalityIndex, msg.error);
         },
-        // The host supplies only where the user is, whether it is still there and whether anyone is looking; every ordering decision is the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels).
+        // The host supplies only where the user is, whether it is still there and whether anyone is looking; every ordering decision is the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels, sweep-centre-dwells).
         {
-          centre: () => state.currentTupleIndex,
+          centre: () => state.sweepCentre,
           abandoned: () => state.disposed,
           paused: () => !state.visible,
           onRepump: repump => { state.sweepRepump = repump; }
@@ -1230,6 +1240,15 @@ ${lead}
       this.postImageNow(state, first.value[1]);
       if (state.heldImagePosts.size > 0) this.scheduleBurstFlush(state, 32);
     }, delayMs);
+  }
+
+  /** Trailing edge: a held key keeps resetting this, so the sweep re-aims once — when navigation stops (docs/loading-architecture.md: sweep-centre-dwells). */
+  private aimSweepAfterDwell(state: PanelState): void {
+    if (state.sweepCentreTimer) clearTimeout(state.sweepCentreTimer);
+    state.sweepCentreTimer = setTimeout(() => {
+      state.sweepCentreTimer = undefined;
+      state.sweepCentre = state.currentTupleIndex;
+    }, LOAD_DEBOUNCE_MS);
   }
 
   /** Drop every queued image load except `keepTupleIndex`'s (docs/loading-architecture.md: stale-tuple-loads-cancelled). */

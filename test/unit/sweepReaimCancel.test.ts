@@ -7,6 +7,7 @@ import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 import { Priority } from '../../src/workPool';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
+import { LOAD_DEBOUNCE_MS } from '../../src/webview/tupleLoadPlan';
 
 // The host half of cancel-on-re-aim, on the REAL provider and the REAL shared pool, at the shape the
 // field log recorded: width 5 leaves the bulk class 4 running slots (`run=[0,0,0,0,0,4,0,0]`), so the
@@ -123,6 +124,13 @@ function makeRig(): Rig {
   return rig;
 }
 
+// Navigation as the panel really receives it: the message handler, then the dwell the sweep's centre
+// waits out before it re-aims (docs/loading-architecture.md: sweep-centre-dwells).
+async function navigate(rig: Rig, tupleIndex: number): Promise<void> {
+  await rig.provider.handlePanelMessage(rig.state, { type: 'setCurrentTuple', tupleIndex });
+  await new Promise(r => setTimeout(r, LOAD_DEBOUNCE_MS + 20));
+}
+
 /** Releases every read the pool currently has running: exactly one batch of work. */
 async function releaseBatch(rig: Rig): Promise<void> {
   for (const r of rig.resolvers.splice(0)) r();
@@ -138,8 +146,8 @@ describe('a re-aimed provider sweep drops the work it has already queued', () =>
     expect(rig.asked).toEqual([OPEN_AT, OPEN_AT, OPEN_AT + 1, OPEN_AT + 1]);
     expect((rig.provider as any).pool.pending).toBe(SWEEP_CHUNK - BULK_SLOTS);
 
-    // What the setCurrentTuple handler does to the panel state, with all 32 slots outstanding.
-    rig.state.currentTupleIndex = JUMP_TO;
+    // The real message path, dwell included, with all 32 slots outstanding.
+    await navigate(rig, JUMP_TO);
     let guard = 0;
     while (!rig.asked.slice(BULK_SLOTS).includes(JUMP_TO) && guard++ < 20) await releaseBatch(rig);
     // Old-centre tiles the user still waits through: at most the batch that was already running.
@@ -182,7 +190,7 @@ describe('a re-aimed provider sweep drops the work it has already queued', () =>
     await settle();
     expect(pollRan).toBe(false);
 
-    rig.state.currentTupleIndex = JUMP_TO;
+    await navigate(rig, JUMP_TO);
     await releaseBatch(rig);
     await settle();
 

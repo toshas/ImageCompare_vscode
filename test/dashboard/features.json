@@ -1710,6 +1710,22 @@
             {
               "suite": "unit",
               "match": "finishes a grid under a centre that moves on every read, instead of livelocking"
+            },
+            {
+              "suite": "unit",
+              "match": "re-aims the sweep exactly once, after the burst ends"
+            },
+            {
+              "suite": "unit",
+              "match": "still cancels the tuple being left on every keystroke"
+            },
+            {
+              "suite": "unit",
+              "match": "a hidden panel dwells without re-aiming"
+            },
+            {
+              "suite": "unit",
+              "match": "leaves no dwell pending when the panel is disposed mid-burst"
             }
           ]
         },

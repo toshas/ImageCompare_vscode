@@ -22,7 +22,7 @@ export interface TupleLoadInput {
   isCached: (originalIndex: number) => boolean;
 }
 
-/** Navigation debounce and sibling dwell: one constant, deliberately (docs/loading-architecture.md: siblings-dwell-gated). */
+/** Navigation debounce, sibling dwell and the host's sweep-centre dwell: one constant, deliberately (docs/loading-architecture.md: siblings-dwell-gated, sweep-centre-dwells). */
 export const LOAD_DEBOUNCE_MS = 150;
 
 /** Rank ladder, highest first; the host maps each rank to a pool priority once, at submit. */

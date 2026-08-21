@@ -795,7 +795,7 @@ const mutations = [
     name: 'provider: sweep given no centre (thumbnails fill top-to-bottom wherever the user is)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => state.currentTupleIndex,',
+    find: '          centre: () => state.sweepCentre,',
     replace: '          centre: () => 0,',
     killedBy: 'provider order test (the sweep starts at the row the panel opened on)'
   },
@@ -803,9 +803,28 @@ const mutations = [
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => state.currentTupleIndex,',
-    replace: '          centre: ((pinned: number) => () => pinned)(state.currentTupleIndex),',
+    find: '          centre: () => state.sweepCentre,',
+    replace: '          centre: ((pinned: number) => () => pinned)(state.sweepCentre),',
     killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
+  },
+  {
+    name: 'provider: the sweep centre follows the raw keystroke (a held key re-aims on every completed thumbnail)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepCentreDwell.test.ts',
+    find: `    state.sweepCentreTimer = setTimeout(() => {
+      state.sweepCentreTimer = undefined;
+      state.sweepCentre = state.currentTupleIndex;
+    }, LOAD_DEBOUNCE_MS);`,
+    replace: '    state.sweepCentre = state.currentTupleIndex;',
+    killedBy: 'dwell test (a burst of setCurrentTuple must re-aim the sweep once, after the burst ends)'
+  },
+  {
+    name: 'provider: the sweep-centre dwell is leading-edge (the first keystroke of a held key re-aims)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepCentreDwell.test.ts',
+    find: '    if (state.sweepCentreTimer) clearTimeout(state.sweepCentreTimer);\n    state.sweepCentreTimer = setTimeout(',
+    replace: '    if (state.sweepCentreTimer) return;\n    state.sweepCentreTimer = setTimeout(',
+    killedBy: 'dwell test (the burst must reset the dwell, not ride the first keystroke\'s timer)'
   },
   {
     name: 'pptxDeck: nextPptxName increment dropped (suggests the max, not max+1)',

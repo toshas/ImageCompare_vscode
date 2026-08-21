@@ -6,9 +6,10 @@ import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscod
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
+import { LOAD_DEBOUNCE_MS } from '../../src/webview/tupleLoadPlan';
 
-// The host half of the centre-out sweep, on the REAL provider: it supplies `state.currentTupleIndex`
-// as the sweep's centre and must read it LIVE, since `setCurrentTuple` mutates that field while the
+// The host half of the centre-out sweep, on the REAL provider: it supplies `state.sweepCentre` as the
+// sweep's centre and must read it LIVE, since a settled `setCurrentTuple` mutates that field while the
 // sweep is draining. A snapshot taken at sweep start would pass every ordering assertion at open and
 // silently never re-aim. (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded)
 
@@ -42,6 +43,13 @@ afterEach(async () => {
 const tick = (): Promise<void> => new Promise(r => setTimeout(r, 0));
 async function settle(rounds = 6): Promise<void> {
   for (let i = 0; i < rounds; i++) await tick();
+}
+
+// Navigation as the panel really receives it: the message handler, then the dwell the sweep's centre
+// waits out before it re-aims (docs/loading-architecture.md: sweep-centre-dwells).
+async function navigate(rig: Rig, tupleIndex: number): Promise<void> {
+  await rig.provider.handlePanelMessage(rig.state, { type: 'setCurrentTuple', tupleIndex });
+  await new Promise(r => setTimeout(r, LOAD_DEBOUNCE_MS + 20));
 }
 
 interface Rig {
@@ -154,8 +162,8 @@ describe('open-time sweep aims at the provider\'s live current tuple', () => {
     const dispatchedBefore = rig.asked.length;
     expect(dispatchedBefore).toBe(SWEEP_CHUNK);
 
-    // What the setCurrentTuple handler does to the panel state; the sweep must read it on its next dispatch.
-    rig.state.currentTupleIndex = JUMP_TO;
+    // The real message path, dwell included; the sweep must read the new centre on its next dispatch.
+    await navigate(rig, JUMP_TO);
     for (const r of rig.resolvers.splice(0, 4)) r();
     await settle();
     expect(rig.asked.slice(dispatchedBefore, dispatchedBefore + 4)).toEqual([3, 3, 4, 4]);
