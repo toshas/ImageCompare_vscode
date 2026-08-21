@@ -128,6 +128,17 @@ messages with view state intact, plus the two-root switch producing no stale pos
 short injected `pollIntervalMs`) and the no-FSA drag-drop walker via the `openDroppedEntry` seam —
 see `docs/standalone.md` and `docs/file-watching.md`, "The standalone poll".
 
+Two of its poll specs exist because the obvious fixture cannot fail. `standalone poll re-verifies a
+removal with stat before reporting it` boots the adapter on a **lying directory handle** (the
+`wrapListing` option of `bootPolledFixture`: names in `window.__ic_hidden` are skipped by every
+`entries()` listing while `getFileHandle` still returns them), because a real OPFS removal is
+genuinely gone — with genuinely-gone removals, deleting the poll's `stat` re-verification changes no
+outcome and every other spec stays green. `standalone re-open stops the old root poll timer and
+observer` counts **live pollers** (page-level `setInterval`/`clearInterval` wrappers keyed on the
+injected interval, plus a stub `FileSystemObserver` counting constructions against disconnects),
+because the adapter's `state !== s` guards silence a leaked timer or observer without stopping it:
+the no-stale-posts spec beside it passes with the whole `stopPolling` call removed from `openRoot`.
+
 ## The copy trap (historical)
 
 `tupleMatching.test.ts` used to contain **pure TypeScript copies** of the trie-matching functions,
@@ -359,6 +370,19 @@ the fix, the docs, and the CI check.
   build is smoke-tested end to end (`test/webview/standalone-build.spec.ts`): mutation runs showed
   the spec catches both a row-order bypass of `scanForImages` and a hand-rolled `results.txt`
   format replacing `serializeResults`.
+- **Two standalone poll rules were pinned only by tests that could not fail** *(new coverage)* — the
+  polling round shipped with both gaps written down rather than closed: with real OPFS fixtures the
+  poll's `stat` re-verification (docs/file-watching.md: sweep-reverifies-before-report) could be
+  deleted with every spec green, and the re-open cleanup could be deleted from `openRoot` with the
+  two-root spec green, because `state !== s` mutes a leaked poller instead of stopping it. Closed by
+  the two specs described under "The suites" above (a lying listing; a live-poller count) — no
+  production change: both ride seams the build already had (`__ic_standalone.open` takes the
+  directory handle the test supplies; `pollIntervalMs` is injectable). **No mutation covers either
+  one**: they are pinned only by Playwright, which the mutation harness cannot run (it is
+  Vitest-only), so each was broken by hand instead — deleting the re-verify fails only the
+  re-verification spec (`tupleDeleted:0-` reported for a file `stat` still finds), deleting
+  `stopPolling(state)` fails only the cleanup spec (`pollTimers: 2, live: 2` after the switch), and
+  in both runs the other eleven specs in the file passed.
 - **Standalone modality rename made the pill disappear; a copied-in modality dir never appeared**
   *(fixed)* — modality-column adoption was provider-only (`addNewModality` lived in
   `imageCompareProvider.ts`) while removal was already shared, so the standalone poll could only

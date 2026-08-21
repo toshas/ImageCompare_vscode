@@ -1841,6 +1841,14 @@
             {
               "suite": "webview",
               "match": "standalone re-open cancels the previous root"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone poll re-verifies a removal with stat before reporting it"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone re-open stops the old root poll timer and observer"
             }
           ]
         },

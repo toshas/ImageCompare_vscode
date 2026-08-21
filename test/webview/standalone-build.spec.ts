@@ -304,8 +304,18 @@ test('standalone no-FSA drop path walks webkit entries into the read-only backen
 
 // ---- External-change detection (the standalone poll) ----
 
-/** Boot the standalone page on a fresh OPFS tree with a short injected poll interval; returns nothing — state lives in the page. */
-async function bootPolledFixture(page: import('@playwright/test').Page, dirName: string, intervalMs = 150): Promise<void> {
+/**
+ * Boot the standalone page on a fresh OPFS tree with a short injected poll interval; returns
+ * nothing — state lives in the page.
+ *
+ * `wrapListing` boots the adapter on a *lying* directory handle instead of the OPFS one: names in
+ * `window.__ic_hidden` are skipped by every `entries()` listing (counted in
+ * `window.__ic_hiddenListings`) while `getFileHandle` — what the backend's `stat`/`fingerprint`
+ * resolve through — still returns them. That listing/stat disagreement is the only way to tell the
+ * poll's `stat` re-verification apart from its absence: real OPFS removals are genuinely gone, so
+ * the second check never changes their outcome (docs/file-watching.md: sweep-reverifies-before-report).
+ */
+async function bootPolledFixture(page: import('@playwright/test').Page, dirName: string, intervalMs = 150, wrapListing = false): Promise<void> {
   await page.addInitScript(() => {
     (window as unknown as { __ic_test_enabled: boolean }).__ic_test_enabled = true;
     // Record every extension→webview post so specs can assert granular traffic (never a re-init).
@@ -321,7 +331,7 @@ async function bootPolledFixture(page: import('@playwright/test').Page, dirName:
     });
   });
   await page.goto(pageUrl);
-  await page.evaluate(async ({ dir, interval }) => {
+  await page.evaluate(async ({ dir, interval, wrap }) => {
     const root = await navigator.storage.getDirectory();
     try {
       await root.removeEntry(dir, { recursive: true });
@@ -352,8 +362,34 @@ async function bootPolledFixture(page: import('@playwright/test').Page, dirName:
     const seam = (window as unknown as { __ic_standalone: { pollIntervalMs: number; open(h: FileSystemDirectoryHandle): Promise<void> } }).__ic_standalone;
     // Injected test interval — the seam the poll loop reads when it arms its timer.
     seam.pollIntervalMs = interval;
-    await seam.open(fix);
-  }, { dir: dirName, interval: intervalMs });
+    if (!wrap) {
+      await seam.open(fix);
+      return;
+    }
+    const w = window as unknown as { __ic_hidden: Set<string>; __ic_hiddenListings: number };
+    w.__ic_hidden = new Set<string>();
+    w.__ic_hiddenListings = 0;
+    // A faithful-enough FileSystemDirectoryHandle: only the four members the FSA backend calls,
+    // with entries() filtered and getFileHandle left truthful (the listing/stat disagreement).
+    const wrapDir = (real: FileSystemDirectoryHandle, path: string): FileSystemDirectoryHandle => ({
+      kind: 'directory',
+      name: real.name,
+      entries: () => (async function* () {
+        const listing = (real as unknown as { entries(): AsyncIterableIterator<[string, { kind: string }]> }).entries();
+        for await (const [n, h] of listing) {
+          if (w.__ic_hidden.has(`${path}/${n}`)) {
+            w.__ic_hiddenListings++;
+            continue;
+          }
+          yield [n, h.kind === 'directory' ? wrapDir(h as FileSystemDirectoryHandle, `${path}/${n}`) : h];
+        }
+      })(),
+      getDirectoryHandle: async (n: string, o?: { create?: boolean }) => wrapDir(await real.getDirectoryHandle(n, o), `${path}/${n}`),
+      getFileHandle: (n: string, o?: { create?: boolean }) => real.getFileHandle(n, o),
+      removeEntry: (n: string, o?: { recursive?: boolean }) => real.removeEntry(n, o),
+    } as unknown as FileSystemDirectoryHandle);
+    await seam.open(wrapDir(fix, `/${dir}`));
+  }, { dir: dirName, interval: intervalMs, wrap: wrapListing });
   await page.waitForFunction(() => {
     const t = (window as unknown as { __ic_test?: { getState(): { tupleCount: number } } }).__ic_test;
     return !!t && t.getState().tupleCount === 2;
@@ -471,6 +507,38 @@ test('standalone poll delivers external deletes, content changes and results.txt
     .toBeGreaterThan(before);
 });
 
+test('standalone poll re-verifies a removal with stat before reporting it', async ({ page }) => {
+  // Boot on a lying directory handle (see bootPolledFixture): every real OPFS removal the other
+  // poll specs make is genuinely gone, so nothing they assert changes when the re-verify is
+  // deleted. Only a name the listing loses while stat still finds it can tell the two apart.
+  await bootPolledFixture(page, 'statfix', 150, true);
+
+  // Both of scene_01's files vanish from their directory listings — and from nothing else.
+  await page.evaluate(() => {
+    const w = window as unknown as { __ic_hidden: Set<string>; __ic_hiddenListings: number };
+    w.__ic_hiddenListings = 0;
+    w.__ic_hidden.add('/statfix/gt/scene_01_gt.png');
+    w.__ic_hidden.add('/statfix/pred/scene_01_pred.png');
+  });
+
+  // Two full poll cycles must have listed the lying dirs (one skip per dir per cycle). The first is
+  // the cycle whose snapshot diff yields the removal candidates; the count is the proof it ran.
+  await expect
+    .poll(async () => page.evaluate(() => (window as unknown as { __ic_hiddenListings: number }).__ic_hiddenListings), { timeout: 15000 })
+    .toBeGreaterThanOrEqual(4);
+
+  // Nothing was reported: the candidates re-stat'ed as present, so the tuple never left.
+  const msgs = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
+  expect(msgs.filter(m => m.startsWith('tupleDeleted:'))).toEqual([]);
+  expect(msgs.filter(m => m.startsWith('fileDeleted:'))).toEqual([]);
+  const state = await page.evaluate(
+    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
+  );
+  expect(state.tupleCount).toBe(2);
+  expect(state.currentTupleName).toBe('scene_01');
+  expect(state.modalityPaths).toEqual(['/statfix/gt', '/statfix/pred']);
+});
+
 test('standalone re-open cancels the previous root: no stale poll posts after the switch', async ({ page }) => {
   await bootPolledFixture(page, 'pollfixA');
 
@@ -526,6 +594,74 @@ test('standalone re-open cancels the previous root: no stale poll posts after th
   );
   expect(state.tupleCount).toBe(1);
   expect(state.currentTupleName).toBe(nameB);
+});
+
+test('standalone re-open stops the old root poll timer and observer, not just their posts', async ({ page }) => {
+  // The spec above pins that nothing from the old root LANDS — which the `state !== s` guards
+  // deliver even if the timer and observer are never stopped. This one counts the live ones.
+  const POLL_MS = 137;
+  await page.addInitScript(() => {
+    const live = new Map<number, number>();
+    (window as unknown as { __ic_liveTimers: Map<number, number> }).__ic_liveTimers = live;
+    const realSet = window.setInterval.bind(window) as (fn: TimerHandler, ms?: number) => number;
+    const realClear = window.clearInterval.bind(window) as (id?: number) => void;
+    (window as unknown as { setInterval: unknown }).setInterval = (fn: TimerHandler, ms?: number) => {
+      const id = realSet(fn, ms);
+      live.set(id, ms ?? 0);
+      return id;
+    };
+    (window as unknown as { clearInterval: unknown }).clearInterval = (id?: number) => {
+      if (id !== undefined) live.delete(id);
+      realClear(id);
+    };
+    // Headless Chromium has no FileSystemObserver, so the accelerator branch is dead here unless a
+    // stub supplies one: this counts constructions against disconnects.
+    const obs = { made: 0, live: 0 };
+    (window as unknown as { __ic_observers: { made: number; live: number } }).__ic_observers = obs;
+    (window as unknown as { FileSystemObserver: unknown }).FileSystemObserver = class {
+      constructor(_cb: () => void) {
+        obs.made++;
+        obs.live++;
+      }
+      observe(): void { /* the interval poll stays the source of truth; nothing to deliver */ }
+      disconnect(): void { obs.live--; }
+    };
+  });
+  await bootPolledFixture(page, 'cleanupfixA', POLL_MS);
+
+  const read = (ms: number) => page.evaluate((delay) => {
+    const w = window as unknown as { __ic_liveTimers: Map<number, number>; __ic_observers: { made: number; live: number } };
+    return { pollTimers: [...w.__ic_liveTimers.values()].filter(d => d === delay).length, ...w.__ic_observers };
+  }, ms);
+
+  // Root A armed exactly one poll timer at the injected interval and one observer — the counters
+  // are wired to the production call sites, so the post-switch reading below means something.
+  expect(await read(POLL_MS)).toEqual({ pollTimers: 1, made: 1, live: 1 });
+
+  // Switch to a second root through the same seam.
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    try {
+      await root.removeEntry('cleanupfixB', { recursive: true });
+    } catch { /* fresh */ }
+    await root.getDirectoryHandle('cleanupfixB', { create: true });
+  });
+  await writeOpfsPng(page, 'cleanupfixB', 'm1', 'item_01_m1.png', 4, 3, '#123');
+  await writeOpfsPng(page, 'cleanupfixB', 'm2', 'item_01_m2.png', 4, 3, '#321');
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const fix = await root.getDirectoryHandle('cleanupfixB');
+    await (window as unknown as { __ic_standalone: { open(h: FileSystemDirectoryHandle): Promise<void> } })
+      .__ic_standalone.open(fix);
+  });
+  await page.waitForFunction(() => {
+    const t = (window as unknown as { __ic_test?: { getState(): { tupleCount: number } } }).__ic_test;
+    return !!t && t.getState().tupleCount === 1;
+  });
+
+  // Root B armed its own timer and observer; root A's were stopped, not merely muted — one live
+  // poller across the switch, whatever the guards would have hidden.
+  expect(await read(POLL_MS)).toEqual({ pollTimers: 1, made: 2, live: 1 });
 });
 
 test('standalone poll adopts a modality directory copied in after boot', async ({ page }) => {
