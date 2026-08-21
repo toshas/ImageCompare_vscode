@@ -9,8 +9,7 @@ import { join } from 'node:path';
 const DOCS = 'docs';
 const SELF = 'scripts/check-invariants.mjs';
 
-// A citation is `docs/<file>.md: <kebab-key>`. Section pointers use quoted CapCase names or a comma,
-// never `: kebab-slug`, so they never match — keeping pointers and invariant keys distinct.
+// A citation is `docs/<file>.md: <kebab-key>`; section pointers use quoted CapCase or a comma, never that shape, so they never match.
 const CITE = /docs\/([a-z0-9-]+\.md):\s*`?([a-z][a-z0-9-]*)`?/gi;
 // An invariant is a top-level bullet leading with a backticked bold key in the `## Invariants` section.
 const KEY = /^- \*\*`([a-z][a-z0-9-]*)`\*\*/gm;

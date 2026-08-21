@@ -39,11 +39,25 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
   code beside it, and it is invisible to anyone reading the design. Put the explanation in the
   relevant `docs/` file and leave a one-line comment — ideally naming the doc. Applies to JSDoc too:
   state the contract, don't narrate the rationale. `node scripts/comment-lint.mjs` enforces it (a run
-  of 2+ consecutive `//` lines fails) and runs in CI. It reads only `src/**/*.ts`; tests live under
-  `test/`, outside that scope, which is the exemption they need — a comment explaining why a fixture
-  triggers an edge case is correctly co-located with the fixture. `scripts/`, `webpack.config.js` and
-  `.github/` are outside its scope entirely — the rule there is convention, not a gate. Banner (`// ----`) and directive (`// eslint-`, `// @ts-`)
-  runs are exempt too.
+  of 2+ consecutive `//` lines fails) and runs in CI. It reads `src/**/*.ts` **and**
+  `scripts/**/*.{mjs,js}` — the gate scripts are held to the rule they gate. `test/` is exempt **on
+  its merits, not by an accident of scope**: a comment explaining why a fixture triggers an edge case
+  is correctly co-located with the fixture, and the rule exists to keep *production* code from
+  carrying design prose that belongs in `docs/`. `webpack.config.js` and `.github/` stay outside —
+  convention there, not a gate. Exempt in both scanned scopes: banner (`// ----`) and directive
+  (`// eslint-`, `// @ts-`) runs. Exempt in `scripts/` **only**: the leading file-header block — the
+  `//` run starting at the file's first non-shebang, non-blank line and ending at the first
+  non-comment line, nothing else that is merely near the top. A gate script's header documents the
+  file, and `docs/` describes subsystems, not individual scripts, so it has no better home; `src/`
+  files say that in `/** */` JSDoc instead and so keep the plain threshold with no header carve-out.
+  The checker never looks inside `/** */` at all — deliberate, and stated in its own header, so the
+  "state the contract, don't narrate" half of the rule is review-enforced rather than gated.
+  Widening the gate to `test/` was **considered and declined** on measurement: 192 runs across 93
+  files, none of them the failure the rule exists to prevent, against 10 in `scripts/`. The reason
+  the scope matters at all is the diagnosis that produced this gate — **gates shape agent behaviour;
+  prose does not.** A rule expressed as a scoped gate is obeyed exactly to its scope: close-out
+  audits correctly reported "comment-lint: n/a, scans only `src/`" and moved on, and no amount of
+  wording here changed that. If a rule should hold somewhere, the *checker* has to say so.
 
 ## Architecture Overview
 
@@ -231,12 +245,21 @@ clip; bug fixes need a test, never a demo.
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
 npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
-node scripts/comment-lint.mjs       # no multi-line // blocks in production code
+node scripts/comment-lint.mjs       # no multi-line // blocks in src/ or scripts/ (test/ exempt)
 node scripts/check-sidedness.mjs    # module sidedness (extension/standalone/shared) from real imports; no dead src/ modules
 node scripts/check-generated-output.mjs  # generators write only into ignored dirs (nothing to `git add .`)
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
 npm run compile                     # both webpack targets
 ```
+
+**Running the mutation harness.** It must run to completion and report its **own** exit status.
+Never signal it, never `pkill` it — the pattern matches your own shell, which is how a run was once
+orphaned onto SIGHUP — and never attach a tool deadline that can cut it: a full run is ~10 minutes
+and sits right at the 600 s agent tool ceiling, so it is over the line as often as under. Launch it
+detached, await its completion marker, and read the status it recorded. A run that was cut is **not**
+a pass: the `Mutations: N killed: K` summary and the only exit-0 path are both after the loop, so a
+truncated run prints no verdict at all. A `MUTATION_CHECK_TEST` subset run is never the gate — it
+says so itself and exits 2.
 
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
 checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but

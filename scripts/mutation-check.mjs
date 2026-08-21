@@ -1941,8 +1941,7 @@ const mutations = [
     killedBy: 'dispose test (a closed panel leaves nothing queued)'
   },
 
-  // ── Standalone artifact freshness: a non-src file, because "built once by
-  //    globalSetup" is only safe while "already built" stays an honest question (docs/testing.md) ──
+  // ── Standalone artifact freshness: a non-src file, because "built once by globalSetup" is only safe while "already built" stays an honest question (docs/testing.md) ──
   {
     name: 'standalone artifact: freshness downgraded to an existence check (any artifact counts as current)',
     file: 'test/webview/standaloneArtifact.ts',
@@ -2008,8 +2007,7 @@ const mutations = [
     killedBy: 'no-inputs test (finding no build input at all is not evidence of freshness)'
   },
 
-  // ── Webview suite sizing/report layout: the rules CI structurally cannot pin, because on a
-  //    runner cpus() and availableParallelism() agree and the wrong call stays green (docs/testing.md) ──
+  // ── Webview suite sizing/report layout: CI structurally cannot pin these — on a runner cpus() and availableParallelism() agree, so the wrong call stays green (docs/testing.md) ──
   {
     name: 'playwright config: worker count sized from the reported core count again',
     file: 'test/webview/playwright.config.ts',

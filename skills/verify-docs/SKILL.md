@@ -148,7 +148,7 @@ Each `fix-verifier` already ran these against its own entry; this is the pass-le
 what only shows up once every entry has landed together. All must pass — run them, don't assume:
 ```
 node scripts/check-invariants.mjs      # every invariant cited, every citation resolves
-node scripts/comment-lint.mjs          # no comment blocks in production code
+node scripts/comment-lint.mjs          # no multi-line // blocks in src/ or scripts/ (test/ exempt)
 npm test                               # the suites listed in package.json
 node scripts/mutation-check.mjs        # the suites actually pin their rules
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json

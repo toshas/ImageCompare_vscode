@@ -13,8 +13,7 @@ import { join } from 'node:path';
 const WORDS_FILE = '.words-to-check.txt';
 // A short or generic runtime name would match ordinary source ("root" is in repoRoot, rootDir, …).
 const MIN_RUNTIME_LEN = 4;
-// '/home' or 'C:\' names no machine; two segments is the shortest prefix that identifies one, and
-// 8 chars keeps a degenerate '/home/u' from swallowing the fixture path '/home/u/data/results'.
+// Two segments and 8 chars: shorter prefixes name no machine and swallow test fixtures — see docs/testing.md.
 const MIN_PREFIX_SEGMENTS = 2;
 const MIN_PREFIX_LEN = 8;
 const GENERIC = new Set(['root', 'user', 'users', 'admin', 'ubuntu', 'node', 'runner', 'build', 'test', 'home', 'staff', 'wheel', 'docker']);
@@ -74,8 +73,7 @@ function machinePrefixes(paths) {
   for (const p of paths) {
     const norm = (p || '').replace(/[\\/]+$/, '');
     const segs = norm.split(/[\\/]/).filter(Boolean);
-    // Deliberately NOT the word filters above: a prefix is specific because it is a path, so
-    // '/home/bob' must survive even though 'bob' is too short to be a term on its own.
+    // Deliberately not the word filters above: a path is specific, so a short trailing name must survive.
     if (segs.length < MIN_PREFIX_SEGMENTS || norm.length < MIN_PREFIX_LEN) {
       if (norm) skipped.push(norm);
       continue;

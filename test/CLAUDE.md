@@ -15,7 +15,8 @@ Pointers, not copies — the rules live in the root `CLAUDE.md` and `docs/testin
    test header and in `docs/testing.md`, and state what stands in for it — the precedent wording is
    already there. Leaving a gap open with a written reason beats closing it with a test that cannot
    fail.
-4. **Multi-line comments are allowed here** — deliberately. `comment-lint` reads only `src/`, because
-   a comment explaining why a fixture triggers an edge case belongs beside the fixture.
+4. **Multi-line comments are allowed here** — deliberately. `comment-lint` reads `src/` and
+   `scripts/`, never `test/`, because a comment explaining why a fixture triggers an edge case
+   belongs beside the fixture.
 5. **Pin values from outside the implementation.** Comparing the code to itself proves nothing; when
    you add a test, break the code it covers and watch it fail.

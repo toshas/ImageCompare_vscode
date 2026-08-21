@@ -4,8 +4,9 @@ Pointers, not copies — the rules live in the root `CLAUDE.md` and `docs/`. Thi
 four that bite *here* are in front of you while you work.
 
 1. **One-line comments.** A run of 2+ consecutive `//` lines fails `node scripts/comment-lint.mjs`,
-   which gates CI and reads only this directory. If the explanation does not fit on one line it
-   belongs in `docs/` — leave a one-line pointer naming the doc.
+   which gates CI and reads this directory and `scripts/`. If the explanation does not fit on one
+   line it belongs in `docs/` — leave a one-line pointer naming the doc. The leading-file-header
+   exemption is `scripts/`-only: here that job belongs to `/** */` JSDoc, which the checker ignores.
 2. **Every invariant is cited from the code that could break it.** Adding or changing an invariant in
    `docs/*.md` means adding `(docs/<file>.md: <invariant-key>)` at *every* site its text names —
    "reads and writes", "Sharp and Jimp", both hosts. `node scripts/check-invariants.mjs` catches an
