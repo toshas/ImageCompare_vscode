@@ -80,12 +80,17 @@ describe('sweep runner: one pump pass aims at one centre', () => {
     const rig = poolRig();
     let calls = 0;
     // A viewport-shaped centre: a fresh value on every read, starting at row 30.
-    const centre = () => 30 + calls++;
+    const centre = () => ({ tuple: 30 + calls++ });
 
     const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre });
 
-    // The 8 rows nearest 30, forward first on a tie, 4 columns each: one aim, not 32 of them.
-    const band = [30, 31, 29, 32, 28, 33, 27, 34].flatMap(t => [t, t, t, t]);
+    // One aim, not 32 of them: the cross from (30, m0) — row 30's three other columns interleaved
+    // with rows 31, 29, 32 — then the column arm alone out to the default radius of 12 rows (42 and
+    // 18), and finally the row-major remainder, which refills row 31 and reaches row 29.
+    const band = [
+      30, 30, 31, 30, 29, 30, 32, 28, 33, 27, 34, 26, 35, 25, 36, 24, 37, 23, 38, 22, 39, 21, 40, 20, 41, 19, 42, 18,
+      31, 31, 31, 29,
+    ];
     expect(rig.dispatched.length).toBe(SWEEP_CHUNK);
     expect(rig.dispatched).toEqual(band);
     expect(calls).toBe(1);
@@ -100,7 +105,7 @@ describe('sweep runner: one pump pass aims at one centre', () => {
     const plan = planThumbnails(rows, modalities);
     const rig = poolRig();
     let calls = 0;
-    const centre = () => (calls++) % TUPLES;
+    const centre = () => ({ tuple: (calls++) % TUPLES });
 
     // A macrotask that only fires if the pump ever yields the event loop back.
     let tickFired = false;

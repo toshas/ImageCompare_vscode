@@ -170,11 +170,13 @@ describe('the open-time sweep re-aims on a settled centre, not on every keystrok
 
     for (const row of BURST) await keystroke(rig, row);
 
-    // The whole burst fits inside one dwell, so the sweep is still walking out from where it opened:
-    // not one tile at the rows the key flew past, and not one drop of its queue.
+    // The whole burst fits inside one dwell, so the sweep is still filling outward from where it
+    // opened: not one tile at the rows the key flew past, and not one drop of its queue. The rows
+    // it does dispatch only ever move further from OPEN_AT, which a re-aim would break.
     const duringBurst = rig.asked.slice(dispatchedAtOpen);
     expect(duringBurst.length).toBeGreaterThan(0);
     expect(Math.max(...duringBurst)).toBeLessThan(BURST[0]);
+    expect(duringBurst).toEqual([...duringBurst].sort((a, b) => a - b));
     expect(rig.sweepCancels()).toBe(0);
 
     // The key comes up: one dwell later the sweep aims at where the user actually stopped.
@@ -182,7 +184,9 @@ describe('the open-time sweep re-aims on a settled centre, not on every keystrok
     const dispatchedBeforeReaim = rig.asked.length;
     for (const r of rig.resolvers.splice(0, 4)) r();
     await settle();
-    expect(rig.asked.slice(dispatchedBeforeReaim, dispatchedBeforeReaim + 4)).toEqual([49, 49, 50, 50]);
+    // The cross from (49, gt): the tile itself, its row's other modality, then rows 50 and 48 —
+    // 30 rows away from where the sweep was still filling when the key came up.
+    expect(rig.asked.slice(dispatchedBeforeReaim, dispatchedBeforeReaim + 4)).toEqual([49, 49, 50, 48]);
     expect(rig.sweepCancels()).toBe(1);
 
     // The dwell reorders the sweep and nothing else: every slot still lands exactly once.
@@ -249,7 +253,7 @@ describe('the open-time sweep re-aims on a settled centre, not on every keystrok
     rig.provider.setPanelVisible(rig.state, true);
     await settle();
     // Resumed at where the user actually is, not at the row it was walking out from when it paused.
-    expect(rig.asked.slice(askedWhenHidden, askedWhenHidden + 4)).toEqual([49, 49, 50, 50]);
+    expect(rig.asked.slice(askedWhenHidden, askedWhenHidden + 4)).toEqual([49, 49, 50, 48]);
   });
 
   it('leaves no dwell pending when the panel is disposed mid-burst', async () => {

@@ -160,14 +160,14 @@ describe('two panels sweeping at once', () => {
     const { rows, modalities } = grid(40, 4);
 
     const a = panelRig(pool, 'a', started, release);
-    const sweepA = runThumbnailSweep(planThumbnails(rows, modalities), a.io, a.post, { centre: () => 0 });
+    const sweepA = runThumbnailSweep(planThumbnails(rows, modalities), a.io, a.post, { centre: () => ({ tuple: 0 }) });
     await settle();
     // The first tab has handed the pool its whole chunk: 4 reading, 28 queued behind them.
     expect(started.length).toBe(BULK_SLOTS);
     expect(pool.pending).toBe(SWEEP_CHUNK - BULK_SLOTS);
 
     const b = panelRig(pool, 'b', started, release);
-    const sweepB = runThumbnailSweep(planThumbnails(rows, modalities), b.io, b.post, { centre: () => 0 });
+    const sweepB = runThumbnailSweep(planThumbnails(rows, modalities), b.io, b.post, { centre: () => ({ tuple: 0 }) });
     await settle();
     const startsBeforeB = started.length;
 
@@ -203,10 +203,10 @@ describe('two panels sweeping at once', () => {
     const { rows, modalities } = grid(40, 4);
 
     const a = panelRig(pool, 'a', started, release);
-    const sweepA = runThumbnailSweep(planThumbnails(rows, modalities), a.io, a.post, { centre: () => 0 });
+    const sweepA = runThumbnailSweep(planThumbnails(rows, modalities), a.io, a.post, { centre: () => ({ tuple: 0 }) });
     await settle();
     const b = panelRig(pool, 'b', started, release);
-    const sweepB = runThumbnailSweep(planThumbnails(rows, modalities), b.io, b.post, { centre: () => 0 });
+    const sweepB = runThumbnailSweep(planThumbnails(rows, modalities), b.io, b.post, { centre: () => ({ tuple: 0 }) });
     await settle();
 
     const joinedAt = started.length;

@@ -75,7 +75,7 @@ function sweepRig(pool: WorkPool, name: string, started: string[], release: Arra
 
 function startSweep(rig: SweepRig, rows: ReturnType<typeof grid>['rows'], modalities: string[]): Promise<void> {
   return runThumbnailSweep(planThumbnails(rows, modalities), rig.io, rig.post, {
-    centre: () => 0,
+    centre: () => ({ tuple: 0 }),
     abandoned: () => rig.closed,
     paused: () => rig.hidden,
     onRepump: repump => { rig.repump = repump; },

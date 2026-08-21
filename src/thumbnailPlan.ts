@@ -53,8 +53,8 @@ export interface ThumbnailSweepIo<T> {
 export const SWEEP_CHUNK = 32;
 
 export interface ThumbnailSweepOptions {
-  /** Where the user is now, as a tuple index; read once per pump pass, so a jump re-aims the remaining work (docs/loading-architecture.md: thumbnails-centre-out, sweep-aims-once-per-pass). */
-  centre?: () => number;
+  /** Where the user is now, as a grid position; read once per pump pass, so a move re-aims the remaining work (docs/loading-architecture.md: thumbnails-centre-out, sweep-aims-once-per-pass). */
+  centre?: () => SweepAim;
   /** True once the host has abandoned this sweep — panel disposed, session re-opened; the pump then stops at the batch boundary and the cursor keeps the rest (docs/loading-architecture.md: sweep-stops-when-host-abandons). */
   abandoned?: () => boolean;
   /** Dispatch bound; defaults to SWEEP_CHUNK (docs/loading-architecture.md: sweep-dispatch-bounded). */
@@ -65,18 +65,63 @@ export interface ThumbnailSweepOptions {
   onRepump?: (repump: () => void) => void;
 }
 
-/** The sweep's dispatch order: two walks out from the centre over the plan's rows, forward first on a tie, each item leaving its row exactly once (docs/loading-architecture.md: sweep-covers-every-slot-once). */
+/** Where the user is, as a tile: the sweep aims at a grid position, not at a row (docs/loading-architecture.md: thumbnails-centre-out). */
+export interface SweepAim {
+  /** Tuple row, in original (global) space. */
+  tuple: number;
+  /** Original modality index of the column on screen; absent or unknown aims at the strip's first column. */
+  modality?: number;
+  /** Display position -> original modality index, as the strip is shown; absent means the plan's own column order (docs/tuple-matching.md: wire-index-is-original). */
+  modalityOrder?: readonly number[];
+  /** Original indices of the columns the user has hidden: swept after every visible one, never dropped (docs/session-files.md: hidden-is-presentation-only). */
+  hidden?: readonly number[];
+  /** Carousel rows one screenful high — how far the cross's column arm reaches; absent falls back to SWEEP_CROSS_RADIUS (docs/loading-architecture.md: sweep-cross-then-row-major). */
+  radius?: number;
+}
+
+/** Fallback screenful for a host that reports no visible row count (docs/loading-architecture.md: sweep-cross-then-row-major). */
+export const SWEEP_CROSS_RADIUS = 12;
+
+const sameList = (a?: readonly number[], b?: readonly number[]): boolean =>
+  a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((v, i) => v === b[i]));
+
+/** Aims compare by value: a host that rebuilds its aim object on every read must not count as a re-aim (docs/loading-architecture.md: sweep-aims-once-per-pass). */
+export function sameAim(a: SweepAim, b: SweepAim | undefined): boolean {
+  return b !== undefined && a.tuple === b.tuple && a.modality === b.modality && a.radius === b.radius &&
+    sameList(a.modalityOrder, b.modalityOrder) && sameList(a.hidden, b.hidden);
+}
+
+/** A host's raw aim made comparable: a NaN or fractional coordinate would otherwise differ from itself and re-aim every pass (docs/loading-architecture.md: sweep-aims-once-per-pass). */
+function readAim(centre: () => SweepAim): SweepAim {
+  const raw = centre();
+  const tuple = Number.isFinite(raw.tuple) ? Math.trunc(raw.tuple) : 0;
+  const modality = raw.modality !== undefined && Number.isFinite(raw.modality) ? Math.trunc(raw.modality) : undefined;
+  // A non-finite radius means "no report" here as it does in the walk, so the two agree and the aim stays equal to itself.
+  const radius = raw.radius !== undefined && Number.isFinite(raw.radius) ? Math.trunc(raw.radius) : undefined;
+  return tuple === raw.tuple && modality === raw.modality && radius === raw.radius ? raw : { ...raw, tuple, modality, radius };
+}
+
+/** One grid position; the cell may be empty by the time the walk reaches it. */
+interface SweepPosition {
+  tuple: number;
+  modality: number;
+}
+
+/** The sweep's dispatch order: the focused tile, then its cross interleaved out to one screenful, then the rest row-major centre-out, each cell leaving the grid exactly once (docs/loading-architecture.md: sweep-cross-then-row-major, sweep-covers-every-slot-once). */
 export class SweepCursor<T> {
-  private readonly rows: Array<Array<ThumbnailSlot & { image: T }>> = [];
+  private readonly grid: Array<Array<(ThumbnailSlot & { image: T }) | undefined>> = [];
+  private columns = 0;
   private count: number;
-  private centre = -1;
-  private up = 0;
-  private down = -1;
+  private aim?: SweepAim;
+  private walk?: Iterator<SweepPosition>;
 
   constructor(items: ReadonlyArray<ThumbnailSlot & { image: T }>) {
     for (const item of items) {
-      while (this.rows.length <= item.tupleIndex) this.rows.push([]);
-      this.rows[item.tupleIndex].push(item);
+      while (this.grid.length <= item.tupleIndex) this.grid.push([]);
+      const row = this.grid[item.tupleIndex];
+      while (row.length <= item.modalityIndex) row.push(undefined);
+      row[item.modalityIndex] = item;
+      if (item.modalityIndex >= this.columns) this.columns = item.modalityIndex + 1;
     }
     this.count = items.length;
   }
@@ -86,42 +131,114 @@ export class SweepCursor<T> {
     return this.count;
   }
 
-  /** The next slot to dispatch, nearest `centre` first; undefined once every slot has been handed out. */
-  next(centre: number): (ThumbnailSlot & { image: T }) | undefined {
+  /** The next slot to dispatch, nearest `aim` first; undefined once every slot has been handed out. */
+  next(aim: SweepAim): (ThumbnailSlot & { image: T }) | undefined {
     if (this.count === 0) return undefined;
-    const wanted = Number.isFinite(centre) ? Math.trunc(centre) : 0;
-    const aim = Math.min(Math.max(wanted, 0), this.rows.length - 1);
-    // A new centre restarts both walks there; rows emptied under the old one are skipped, never re-visited.
-    if (aim !== this.centre) {
-      this.centre = aim;
-      this.up = aim;
-      this.down = aim - 1;
+    // A new aim restarts the enumeration; cells emptied under the old one are skipped, never re-visited.
+    if (this.walk === undefined || !sameAim(aim, this.aim)) {
+      this.aim = aim;
+      this.walk = this.positions(aim);
     }
-    while (this.up < this.rows.length && this.rows[this.up].length === 0) this.up++;
-    while (this.down >= 0 && this.rows[this.down].length === 0) this.down--;
-    const hasUp = this.up < this.rows.length;
-    const hasDown = this.down >= 0;
-    let row: number;
-    // Nearer walk wins; forward on a tie, the rule the sibling order uses (docs/loading-architecture.md: thumbnails-centre-out).
-    if (hasUp && hasDown) row = this.up - this.centre <= this.centre - this.down ? this.up : this.down;
-    else if (hasUp) row = this.up;
-    else if (hasDown) row = this.down;
-    else return undefined;
-    this.count--;
-    return this.rows[row].shift();
+    let walk = this.walk;
+    let restarted = false;
+    for (;;) {
+      const step = walk.next();
+      if (step.done) {
+        // A slot returned behind the walk is reached by the next enumeration, wherever the aim now puts it.
+        if (restarted) return undefined;
+        restarted = true;
+        walk = this.positions(this.aim!);
+        this.walk = walk;
+        continue;
+      }
+      const item = this.grid[step.value.tuple]?.[step.value.modality];
+      if (item === undefined) continue;
+      // Consumed, not peeked: an emptied cell can never be dispatched twice (docs/loading-architecture.md: sweep-covers-every-slot-once).
+      this.grid[step.value.tuple][step.value.modality] = undefined;
+      this.count--;
+      return item;
+    }
   }
 
-  /** Return a handed-out slot whose work never started, in modality order, so it is handed out again exactly once (docs/loading-architecture.md: sweep-covers-every-slot-once). */
+  /** Return a handed-out slot whose work never started, so it is handed out again exactly once (docs/loading-architecture.md: sweep-covers-every-slot-once). */
   putBack(item: ThumbnailSlot & { image: T }): void {
-    const row = this.rows[item.tupleIndex];
-    let at = 0;
-    while (at < row.length && row[at].modalityIndex < item.modalityIndex) at++;
-    row.splice(at, 0, item);
+    this.grid[item.tupleIndex][item.modalityIndex] = item;
     this.count++;
-    // Rewind whichever walk had already passed this row, or nothing ever revisits it.
-    if (item.tupleIndex >= this.centre) {
-      if (item.tupleIndex < this.up) this.up = item.tupleIndex;
-    } else if (item.tupleIndex > this.down) this.down = item.tupleIndex;
+    // The walk may be past this cell on either axis, so it is discarded: re-enumerating rewinds both at once.
+    this.walk = undefined;
+  }
+
+  /** Columns in sweep order: the focused one first, then by display distance, hidden columns after every visible one (docs/loading-architecture.md: sweep-cross-then-row-major, docs/session-files.md: hidden-is-presentation-only). */
+  private rankColumns(aim: SweepAim): number[] {
+    const order = aim.modalityOrder !== undefined && aim.modalityOrder.length > 0 ? [...aim.modalityOrder] : [];
+    for (let m = 0; m < this.columns; m++) if (!order.includes(m)) order.push(m);
+    const hidden = new Set(aim.hidden ?? []);
+    const at = aim.modality === undefined ? -1 : order.indexOf(aim.modality);
+    const here = at >= 0 ? at : 0;
+    // Hidden columns are not steps, and the focused one counts as reachable even when hidden — a click or digit jump lands on it (docs/loading-architecture.md: sibling-order-by-display-distance).
+    const steps = new Map<number, number>();
+    for (let d = 0; d < order.length; d++) if (d === here || !hidden.has(order[d])) steps.set(d, steps.size);
+    const hereStep = steps.get(here) ?? 0;
+    const distance = (d: number): number => {
+      const step = steps.get(d);
+      return step === undefined ? Math.abs(d - here) : Math.abs(step - hereStep);
+    };
+    return order
+      .map((modality, d) => ({ modality, d }))
+      // Visible before hidden, then nearest, then forward on a tie — the rule the sibling order uses (docs/loading-architecture.md: sibling-order-by-display-distance).
+      .sort((a, b) => (steps.has(a.d) ? 0 : 1) - (steps.has(b.d) ? 0 : 1) || distance(a.d) - distance(b.d) || b.d - a.d)
+      .map(c => c.modality);
+  }
+
+  /** Every grid position from the aim, in dispatch order (docs/loading-architecture.md: sweep-cross-then-row-major). */
+  private *positions(aim: SweepAim): Generator<SweepPosition> {
+    const rows = this.grid.length;
+    if (rows === 0) return;
+    const columns = this.rankColumns(aim);
+    const wanted = Number.isFinite(aim.tuple) ? Math.trunc(aim.tuple) : 0;
+    const t0 = Math.min(Math.max(wanted, 0), rows - 1);
+    const reach = Math.max(1, Number.isFinite(aim.radius) ? Math.trunc(aim.radius as number) : SWEEP_CROSS_RADIUS);
+    const focus = columns[0];
+    yield { tuple: t0, modality: focus };
+
+    const across = (function* (): Generator<SweepPosition> {
+      for (let r = 1; r < columns.length; r++) yield { tuple: t0, modality: columns[r] };
+    })();
+    // Bounded, unlike the row arm: past one screenful the column is no longer what the user is looking at (docs/loading-architecture.md: sweep-cross-then-row-major).
+    const down = (function* (): Generator<SweepPosition> {
+      for (let k = 1; k <= reach; k++) {
+        for (const tuple of [t0 + k, t0 - k]) if (tuple >= 0 && tuple < rows) yield { tuple, modality: focus };
+      }
+    })();
+    const nextSlot = (arm: Generator<SweepPosition>): SweepPosition | undefined => {
+      for (;;) {
+        const step = arm.next();
+        if (step.done) return undefined;
+        if (this.grid[step.value.tuple]?.[step.value.modality] !== undefined) return step.value;
+      }
+    };
+    // The cross, at equal rates: one slot from the row arm, one from the column arm, the row arm first (docs/loading-architecture.md: sweep-cross-then-row-major).
+    let row = nextSlot(across);
+    let column = nextSlot(down);
+    let rowTurn = true;
+    while (row !== undefined || column !== undefined) {
+      if (row !== undefined && (rowTurn || column === undefined)) {
+        yield row;
+        row = nextSlot(across);
+      } else {
+        yield column!;
+        column = nextSlot(down);
+      }
+      rowTurn = !rowTurn;
+    }
+
+    // Everything the cross did not reach, row-major centre-out — the whole grid, so no cell depends on the radius (docs/loading-architecture.md: sweep-cross-then-row-major, sweep-covers-every-slot-once).
+    for (let k = 0; k < rows; k++) {
+      for (const tuple of k === 0 ? [t0] : [t0 + k, t0 - k]) {
+        if (tuple < 0 || tuple >= rows) continue;
+        for (const modality of columns) yield { tuple, modality };
+      }
+    }
   }
 }
 
@@ -142,8 +259,8 @@ export function runThumbnailSweep<T extends { modality: string }>(
     return Promise.resolve();
   }
 
-  // No centre supplied is a centre pinned at 0 — scanline order, the old behaviour (docs/loading-architecture.md: thumbnails-centre-out).
-  const centre = options.centre ?? (() => 0);
+  // No centre supplied is an aim pinned at the first tile, which is what the plan's own order starts from (docs/loading-architecture.md: thumbnails-centre-out).
+  const centre = options.centre ?? (() => ({ tuple: 0 }));
   // A host that never abandons is the old behaviour: the sweep runs to full coverage (docs/loading-architecture.md: sweep-stops-when-host-abandons).
   const abandoned = options.abandoned ?? (() => false);
   // A host that never pauses is the old behaviour too: it sweeps whether anyone is looking or not (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels).
@@ -152,7 +269,7 @@ export function runThumbnailSweep<T extends { modality: string }>(
   const cursor = new SweepCursor(plan.items);
   let done = 0;
   let outstanding = 0;
-  let aimed = Number.NaN;
+  let aimed: SweepAim | undefined;
   let pauseDropped = false;
   let resolveSweep!: () => void;
   let rejectSweep!: (error: unknown) => void;
@@ -170,7 +287,7 @@ export function runThumbnailSweep<T extends { modality: string }>(
     outstanding--;
     try {
       // A requeue re-uses the aim it was dropped for; re-reading here lets a drop's own fallout buy another drop, forever (docs/loading-architecture.md: sweep-aims-once-per-pass).
-      pump(requeued ? aimed : centre());
+      pump(requeued && aimed !== undefined ? aimed : readAim(centre));
     } catch (error) {
       rejectSweep(error);
       return;
@@ -208,7 +325,7 @@ export function runThumbnailSweep<T extends { modality: string }>(
   };
 
   // Refilled on every settle, so the pool always has queued work behind its running slots (docs/loading-architecture.md: sweep-dispatch-bounded).
-  function pump(aim: number): void {
+  function pump(aim: SweepAim): void {
     // Nobody is watching: the rest of the grid stays in the cursor instead of being read for a window that is gone (docs/loading-architecture.md: sweep-stops-when-host-abandons).
     if (abandoned()) return;
     // Hidden, not gone: the queued dispatches go back to the cursor so the tab in focus gets those slots, and the grid is still owed (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels).
@@ -221,7 +338,7 @@ export function runThumbnailSweep<T extends { modality: string }>(
     }
     pauseDropped = false;
     // The outstanding dispatches ARE the lag: drop the ones that never started so the new centre is next (docs/loading-architecture.md: sweep-cancels-on-reaim).
-    if (aim !== aimed) {
+    if (!sameAim(aim, aimed)) {
       aimed = aim;
       if (outstanding > 0) io.dropQueued?.();
     }
@@ -235,11 +352,11 @@ export function runThumbnailSweep<T extends { modality: string }>(
 
   // The runner's own re-entry point: a pause acts at once, and a sweep paused with nothing outstanding still has an exit (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels).
   options.onRepump?.(() => {
-    pump(centre());
+    pump(readAim(centre));
     if (outstanding === 0 && (abandoned() || cursor.remaining === 0)) resolveSweep();
   });
 
-  pump(centre());
+  pump(readAim(centre));
   // Nothing dispatched means no settle can ever fire, so this is the only exit — unless a pause still owes the grid, and then the repump is (docs/loading-architecture.md: sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels).
   if (outstanding === 0 && (abandoned() || !paused())) resolveSweep();
   return finished;

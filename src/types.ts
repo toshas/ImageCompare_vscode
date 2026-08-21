@@ -84,8 +84,8 @@ export type WebViewMessage =
   // sibling: off-screen modality. tail: sibling past the nearest two (docs/loading-architecture.md: sibling-tail-never-competes). forceReload: bypass cached bytes so a failed decode can retry.
   | { type: 'requestImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; sibling?: boolean; tail?: boolean; forceReload?: boolean }
   | { type: 'setCurrentTuple'; tupleIndex: TupleIndex }
-  // Carries the modality strip as displayed: prefetch speculates on the column on screen, not the whole tuple (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
-  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[] }
+  // Carries the modality strip as displayed: prefetch speculates on the column on screen, not the whole tuple (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column). visibleRows is the carousel's screenful — the sweep's cross radius (docs/loading-architecture.md: sweep-cross-then-row-major).
+  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[]; visibleRows?: number }
   | { type: 'setWinner'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null } // null = clear winner
   | { type: 'cropImages'; tupleIndex: TupleIndex; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
   | { type: 'deleteTuple'; tupleIndex: TupleIndex }

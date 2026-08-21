@@ -40,6 +40,8 @@ interface StandaloneState {
   scan: ScanResult;
   winners: Map<number, number>;
   currentTupleIndex: number;
+  /** The sweep's column and cross radius, as the webview last reported its strip — the provider's field, same source (docs/loading-architecture.md: thumbnails-centre-out, sweep-cross-then-row-major). */
+  sweepStrip?: { modality: number; modalityOrder: number[]; hidden: number[]; radius?: number };
   poolKey: string;
   /** Live per-tuple image-load keys, like the provider's (docs/loading-architecture.md: stale-tuple-loads-cancelled). */
   imageLoadKeys: Set<string>;
@@ -174,7 +176,7 @@ function generateAllThumbnails(s: StandaloneState): Promise<void> {
     dropQueued: () => pool.cancel(sweepPoolKey(s)),
   }, post, {
     // The host supplies only where the user is; the ordering it implies is the shared module's (docs/loading-architecture.md: thumbnails-centre-out).
-    centre: () => s.currentTupleIndex,
+    centre: () => ({ tuple: s.currentTupleIndex, ...s.sweepStrip }),
     // A re-opened root abandons this session's sweep: the rest of the grid is never decoded (docs/loading-architecture.md: sweep-stops-when-host-abandons).
     abandoned: () => s.closed === true,
   });
@@ -551,7 +553,12 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
     case 'exportPptx':
       await handleExportPptx(s, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
       break;
-    case 'tupleFullyLoaded':
+    case 'tupleFullyLoaded': {
+      const shown = message.modalityOrder[message.currentDisplayIndex];
+      // No prefetch here, but the same report carries the sweep's column aim (docs/loading-architecture.md: thumbnails-centre-out).
+      if (shown !== undefined) s.sweepStrip = { modality: shown, modalityOrder: message.modalityOrder, hidden: message.hiddenModalities, radius: message.visibleRows };
+      break;
+    }
     case 'saveSessionAs':
     case 'log':
       break;

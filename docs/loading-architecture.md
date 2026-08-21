@@ -373,23 +373,117 @@ top, previously estimated at 13 minutes. Order, not throughput, is what the user
 they are looking at was delivered when the scanline reached it, however far that was from where they
 were.
 
-So the sweep dispatches **outward from the current tuple** and re-aims when the user moves. The
-structure is a cursor over the plan's items grouped by tuple row (`SweepCursor` in
-`thumbnailPlan.ts`): two walks, one up from the centre and one down, each advancing past rows it has
-emptied, and each `next(centre)` takes from whichever walk is nearer — forward on a tie, the same
-"forward first" rule the sibling order uses. A centre change just restarts both walks at the new
-row; rows consumed under the old centre are empty, so they are skipped rather than re-visited. That
-is the whole coverage argument, and it is why the structure is a cursor rather than a re-sorted
-queue: an item leaves its row exactly once (`shift`), so it can be dispatched at most once, and the
-two walks between them cover `[0, rows)` from any centre, so it is dispatched at least once. Distance
-is over the tuple index only — the carousel's axis — and within a row the order stays modality-minor.
+So the sweep dispatches **outward from the tile the user is on** and re-aims when the user moves.
+The aim is a grid position, not a row: the carousel is a rectangle — a row shows every modality at
+once — so a sweep ordered by row distance alone drains the whole strip of one row before touching
+the row beside it, which at 30 columns is 30 tiles the user is not waiting for.
 
-The hosts supply only *where the user is*: the provider passes `() => state.sweepCentre` (its dwelled
-copy of the current tuple, below), the adapter `() => s.currentTupleIndex`, both fed by the webview's
-`setCurrentTuple`. The decision —
-what that means for order — lives in the shared module, so the two products cannot diverge
-(`docs/standalone.md: adapter-contains-no-logic`). Nothing is pushed at the sweep: the centre is read
-at each dispatch, so a jump costs nothing when nobody navigates.
+The structure is a cursor over the plan's items laid out as a grid of cells (`SweepCursor` in
+`thumbnailPlan.ts`), plus a lazy **walk** — a generator that enumerates grid *positions* in the
+order the aim implies, skipping cells that are already empty. `next(aim)` pulls positions until it
+finds a filled one, empties that cell and returns it. The coverage argument is now the cells, not
+the walk: a cell is emptied before its slot is handed out, so nothing can be dispatched twice, and
+the enumeration visits every position in `rows × columns` from any aim, so nothing is missed. An aim
+change simply discards the walk and starts a new one — positions consumed under the old aim are
+empty cells now, skipped rather than re-visited — and `putBack` refills the cell and discards the
+walk too, which is how a return rewinds *both* axes at once (there are no pointers left to rewind
+by hand). The price of that simplicity is that re-aiming costs one pass over the grid rather than
+`O(1)`: a fresh walk steps over the emptied cells one at a time. At one re-aim per dwell that is a
+fraction of a millisecond even at 7 460 cells — and it is one more reason a centre computed on every
+read is the wrong shape (`sweep-aims-once-per-pass`), since that shape would pay it per dispatch.
+
+The order the walk enumerates has two phases:
+
+1. the focused tile;
+2. its **bounded cross** — the focused row's other columns and the focused column's other rows —
+   one slot from each arm in turn, so neither axis waits for the other. The row arm takes the first
+   turn, an arm that runs out lets the other continue alone, and within an arm the rule is
+   unchanged: forward first on a distance tie. Only the **column** arm is bounded, at a radius of
+   about one screenful of carousel rows (below); the row arm always covers the whole strip, because
+   the whole strip is on screen;
+3. everything remaining, **row-major centre-out** — rows by distance from the focused row, forward
+   first on a tie, each row's columns in the same rank order the cross used. That is the pre-round
+   order, and it is not a fallback: it is what fills a viewport that is bounded in rows and shows
+   every column, i.e. a wide rectangle rather than a diamond. A distance (taxicab) order was
+   measured and rejected for exactly that reason — it spends on rows outside the viewport to keep
+   its radius round.
+
+The remainder enumerates the **whole** grid, not just what lies outside the cross, so no cell's
+coverage depends on the radius: a cell the cross already took is an empty position the walk steps
+over. The radius is an ordering knob only, which is what makes it safe to change or to get wrong.
+For the same reason a walk that runs out with slots still in the cursor restarts once instead of
+reporting the grid finished — belt and braces behind `putBack`'s rewind, which therefore decides
+*when* a returned slot comes back (at the head of what is left, where the user is looking) rather
+than *whether* it comes back at all. That safety net also hides the rewind from a coverage fuzz:
+removing the rewind alone leaves the fuzz green, and only removing the restart too makes it fail.
+So the rewind is pinned by the deterministic boundary test, not by the fuzz — a mutation that gates
+it on distance from the aim survives every other test in the suite.
+
+**The radius is the carousel's own screenful.** `tupleFullyLoaded` carries `visibleRows` — the
+webview's `carouselEl.clientHeight / carouselRowHeight()`, the same arithmetic the virtual carousel
+already does to decide which rows to materialise — and both hosts pass it through as the aim's
+`radius`. It has to be reported rather than assumed because a "screenful" here spans an order of
+magnitude: tile size is the carousel width divided by the modality count, so a 3-modality session
+shows ~7 rows and a 30-modality one, at the 12px tile floor, ~64. A host that reports nothing gets
+`SWEEP_CROSS_RADIUS` (12), deliberately on the small side — an under-estimate costs only reach along
+the column, an over-estimate costs the rectangle (the table below). Zero and negative reports are
+floored at one row: a collapsed carousel still gets a cross.
+
+Column distance is measured over the strip **as displayed**, not over original modality indices: the
+aim carries `modalityOrder`, so a strip the user rearranged with `[` / `]` still sweeps the neighbour
+that is next *on screen* (`docs/tuple-matching.md: wire-index-is-original` — the aim's own column
+arrives as an original index and is un-permuted through that order). Hidden columns are ranked after
+every visible one but are still swept: hiding a pill greys it and stops keyboard cycling, it does not
+remove the column from the carousel (`docs/session-files.md: hidden-is-presentation-only`), so
+skipping them would leave visible tiles permanently blank. The focused column keeps its place at the
+head even when hidden — a click or a digit jump lands there. This is the same rule the sibling loads
+use (`sibling-order-by-display-distance`), reused rather than restated.
+
+The hosts supply only *where the user is*: the provider passes
+`() => ({ tuple: state.sweepCentre, ...state.sweepStrip })` — the dwelled copy of the current tuple
+(below) plus the strip as the webview last reported it — and the adapter the same shape over
+`s.currentTupleIndex`. The column half comes from `tupleFullyLoaded`, the one message that carries
+`modalityOrder`, `currentDisplayIndex` and `hiddenModalities`; both products record it, so the
+standalone gets this order too rather than a row-only variant. That report fires on tuple arrival,
+so a *modality* switch inside an already-loaded tuple does not re-aim the sweep — the same gap
+prefetch has today, and deliberately not closed here. A column inserted or removed mid-sweep leaves
+the reported strip stale until the next report, which can only *mis-order* what is left: the plan is
+fixed at open and every settle re-addresses to the file's live slot
+(`docs/tuple-matching.md: revalidate-slot-before-write`), so no slot is lost by it. The decision — what any of it means for order
+— lives in the shared module, so the two products cannot diverge
+(`docs/standalone.md: adapter-contains-no-logic`). Nothing is pushed at the sweep: the aim is read
+once per pump pass, so a jump costs nothing when nobody navigates.
+
+**What the cross buys, and what it costs.** Measured on the field shapes, focused mid-grid, counting
+dispatches until a tile arrives — old = row-major centre-out, new = bounded cross with the radius
+each carousel actually reports (28 rows at 10 columns, 64 at 30):
+
+| | 746×10 | 315×10 | 746×30 |
+|---|---|---|---|
+| the on-screen column of the row below | 11 → 3 | 11 → 3 | 31 → 3 |
+| the on-screen column five rows away | 91 → 19 | 91 → 19 | 271 → 19 |
+| the on-screen column twenty rows away | 391 → **49** | 391 → **49** | 1 171 → **69** |
+| the last column of the focused row | 10 → 18 | 10 → 18 | 30 → 58 |
+| **the whole visible rectangle** (a screenful of rows × every column) | **290 → 318** | **290 → 318** | **1 950 → 2 014** |
+| the nearest 5 rows × every column | 50 → 102 | 50 → 102 | 150 → 274 |
+
+The cost is exact, not empirical: against row-major the bounded cross pays **two dispatches per row
+by which the radius overshoots the rectangle being measured**, and nothing else. At a radius of one
+screenful and a rectangle a screenful tall that is `+2 × (screenful/2)` — the 290 → 318 above, under
+10 %. Take the radius down to half a screenful and the visible rectangle costs *exactly* what
+row-major costs (290 → 290), with reach at twenty rows falling back to 391; that is the whole trade,
+and it is one number to change. The nearest-5-rows row is the same arithmetic against a smaller
+rectangle, which is why it looks worse — it measures how far the cross reaches past a rectangle five
+rows tall, not a regression in anything the user sees.
+
+An **unbounded** cross was built first and rejected: the column arm ran to the end of the grid before
+the second phase began, and it bought nothing on reach that the bounded arm does not. Two numbers,
+kept apart because that build changed two things at once. Bounding the arm alone — the shipped cursor
+driven with `radius = rows` — costs **791** dispatches on the 5-row rectangle at 746×10 against the
+bounded 102 (and row-major's 50); 791 is `1 + (C-1) + (rows-1) + 4(C-1)`, the whole column plus the
+focused row, then four rows of nine. The **847** measured at the time is that same unbounded arm
+*plus* a taxicab remainder, so it is the rejected build's combined figure and not the cost of the
+radius: the remainder's ordering accounts for the other 56.
 
 **The centre dwells; the cancellation does not.** `setCurrentTuple` is posted on every navigation,
 ungated, because `cancelImageLoads` must kill the previous row's full-image loads the moment the user
@@ -487,10 +581,12 @@ counting it. Three rules make that safe, and each fails silently if broken:
 
 - **Return before settle.** The slot goes back into the cursor inside the `then`, before `outstanding`
   drops, so the sweep can never observe `outstanding === 0 && remaining === 0` with a slot in the air.
-- **Rewind the walk.** The cursor's coverage argument is "every row in `[centre, up)` and
-  `(down, centre)` is empty". Re-filling a row inside a walked band breaks it, so `putBack` moves the
-  relevant pointer back to that row. Without the rewind the returned rows are skipped forever —
-  blank tiles for the life of the panel, which is the exact failure the cursor exists to prevent.
+- **Rewind the walk.** The cursor's coverage argument is "every position the walk has already
+  enumerated is an empty cell". Re-filling a cell behind the walk breaks it, so `putBack` discards
+  the walk and the next `next()` re-enumerates from the current aim — which rewinds both axes at
+  once, since a returned slot may be behind the walk on the row axis, the column axis, or both.
+  Without the rewind the returned cells are skipped forever — blank tiles for the life of the panel,
+  which is the exact failure the cursor exists to prevent.
 - **A requeued dispatch is not a delivery.** No `thumbnail` post, no progress tick, no `done++`. Work
   may be *attempted* more than once; a slot is delivered and counted exactly once
   (`sweep-covers-every-slot-once`).
@@ -1084,14 +1180,48 @@ with the standalone build, which feeds `poolWidth`
 `navigator.hardwareConcurrency`: there the tasks are in-page canvas decodes with no libuv in the
 picture, so width buys decoder-competition fairness between priority classes rather than hidden
 mount latency — but the same shape applies, so neither product can quietly diverge.
-- **`thumbnails-centre-out`** — the open-time sweep dispatches slots by distance from the tuple the
-  user is on (forward first on a tie, modality-minor within a row), and re-aims at the new row as
-  soon as the user settles there (`sweep-centre-dwells`) — the remaining work is re-ordered, never finished in the old order
-  first. Scanline order is the special case of a centre pinned at 0, which is what a host that
-  supplies no centre gets. Three sites: the ordering itself (`thumbnailPlan.ts`) and the centre each
-  host feeds it (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that stops passing its
-  live current tuple silently restores the 746×10 pathology, since the sweep still works, just in
-  the order the user is least likely to want.
+- **`thumbnails-centre-out`** — the open-time sweep dispatches slots by distance from the **tile**
+  the user is on — the tuple *and* the modality column — and re-aims as soon as either moves and the
+  user settles there (`sweep-centre-dwells`); the remaining work is re-ordered, never finished in the
+  old order first. What that distance means is `sweep-cross-then-row-major`. A host that supplies no
+  aim at all gets the first tile of the plan, which is where its own order starts. Three sites: the
+  ordering itself (`thumbnailPlan.ts`) and the aim each host feeds it (`imageCompareProvider.ts`,
+  `standalone/adapter.ts`) — a host that stops passing its live tuple silently restores the 746×10
+  pathology, and one that stops passing its column silently sweeps the strip's first modality
+  instead of the one on screen; in both cases the sweep still works, just in the order the user is
+  least likely to want. The column half must be **un-permuted** before it is handed over
+  (`modalityOrder[currentDisplayIndex]`, not the display position): passing a display index on as a
+  modality index aims at whatever column happens to sit at that original position, which on an
+  un-rearranged strip is silently correct and on a rearranged one is silently wrong
+  (`docs/tuple-matching.md: wire-index-is-original`).
+- **`sweep-cross-then-row-major`** — the order from that aim, and every tie-break in it. The focused
+  tile, then its **cross** (the focused row's other columns and the focused column's other rows)
+  taken **one slot from each arm in turn** — never one arm drained before the other, which is the
+  whole point of the round — the row arm first, and each arm forward-first on a distance tie. The
+  **column arm is bounded** at one screenful of carousel rows and the row arm is not: past a
+  screenful the column is no longer on the user's screen, while every column of the focused row
+  always is. An unbounded arm is not a milder version of this rule but the defect it was measured
+  against — it walks to the end of the grid before anything else is filled. Everything the cross did
+  not reach then fills **row-major centre-out** (rows by distance, forward first on a tie, each row
+  whole, columns in the cross's own rank order), which is the order that fills a viewport bounded in
+  rows and unbounded in columns; a taxicab remainder was measured and rejected, since it spends on
+  rows outside the viewport. That remainder enumerates the *whole* grid, so coverage never depends on
+  the radius — a wrong radius mis-orders and nothing more (`sweep-covers-every-slot-once`). The
+  radius itself is the webview's reported `visibleRows` (`tupleFullyLoaded`), floored at one row and
+  falling back to `SWEEP_CROSS_RADIUS` when a host reports none; it cannot be a constant alone,
+  because a screenful here ranges from ~7 rows to ~64 with the modality count. Column distance is
+  display distance: the aim carries the strip (`modalityOrder`), hidden columns are ranked after
+  every visible one — but still swept, since the carousel keeps showing them
+  (`docs/session-files.md: hidden-is-presentation-only`) — and the focused column keeps the head of
+  the order even when hidden, because a click or digit jump lands there. Every one of those rules
+  fails silently and differently: drain an arm and the adjacent row waits for the whole strip again;
+  invert the arm order and the tile beside the one on screen loses a turn; unbound the column arm and
+  the viewport fills last; make the remainder scanline instead of centre-out and the row above the
+  focus waits for the grid; ignore `modalityOrder` and a rearranged strip sweeps the wrong neighbour;
+  rank a hidden column like a visible one and a column nobody is looking at takes the front of the
+  sweep. Five sites: the ordering, the ranking and the radius floor (`thumbnailPlan.ts`), the
+  screenful the webview measures (`webview/main.ts`) and the two hosts that carry it
+  (`imageCompareProvider.ts`, `standalone/adapter.ts`).
 - **`sweep-centre-dwells`** — the sweep's centre is a *settled* current tuple, never the raw
   `setCurrentTuple` stream: the provider keeps `state.sweepCentre`, assigned from `currentTupleIndex`
   on a trailing-edge dwell of `LOAD_DEBOUNCE_MS`, while `cancelImageLoads` stays on the raw message.
@@ -1116,13 +1246,15 @@ mount latency — but the same shape applies, so neither product can quietly div
   delivered at all. Nothing may weaken the guarantee for a *live* host. This is
   the property that made the sweep blind in the first place — nothing re-enqueues a slot the sweep
   drops, so a lost slot is blank for the life of the panel, and a duplicated one is a wasted decode
-  plus a second post for a tile already shown. The cursor is what enforces it (an item is `shift`ed
-  out of its row before dispatch; the up/down walks cover every row from any centre), and the
+  plus a second post for a tile already shown. The cursor is what enforces it (the grid cell is
+  emptied before its slot is dispatched and only a filled cell is ever emitted; the walk enumerates
+  every position from any aim), and the
   progress denominator depends on it too: `total` counts each slot once, so a double dispatch
   overruns the bar and a lost one hangs it below `total` forever. The one dispatch that is *not* a
   delivery is a slot the host dropped before it started (`sweep-cancels-on-reaim`): it is returned to
-  the cursor (`putBack`, before its settle, rewinding whichever walk had passed its row) and handed
-  out again — so both sites are load-bearing, the hand-out and the return.
+  the cursor (`putBack`, before its settle, refilling its cell and discarding the walk so the
+  re-enumeration reaches it again — a rewind of both axes, since the walk may have passed the cell on
+  either) and handed out again — so both sites are load-bearing, the hand-out and the return.
 - **`sweep-cancels-on-reaim`** — when the centre moves, the sweep drops the dispatches that have not
   started (`io.dropQueued` → `WorkPool.cancel`) instead of letting them deliver at the old row: at
   the field's cold cost (1 586 ms per thumbnail, 4 bulk slots) the queued 28 were ~13 s of stale

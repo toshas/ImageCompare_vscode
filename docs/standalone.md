@@ -163,7 +163,9 @@ edited by hand, and the README it receives says so.
   layout, the export sequence and its `comparison_NN` numbering (`pptxDeck`, `exportDeck`,
   `nextPptxName`), thumbnail-sweep planning *and running*, ordering, dispatch bound and the
   decision to drop queued work when the centre moves included — the adapter supplies only its live
-  current tuple as the sweep's centre and the pool call that drop is made of (`thumbnailPlan`,
+  current tuple *and the strip the webview last reported* as the sweep's aim (so the standalone gets
+  the same bounded-cross-then-row-major order, not a row-only variant) plus the pool call that drop is made of
+  (`thumbnailPlan`,
   `runThumbnailSweep`, `docs/loading-architecture.md: thumbnails-centre-out`,
   `docs/loading-architecture.md: sweep-cancels-on-reaim`),
   full-image serving (`imageServe`), init-payload assembly (`initPayload`), post-crop placement

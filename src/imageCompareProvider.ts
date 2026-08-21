@@ -74,6 +74,8 @@ interface PanelState {
   currentTupleIndex: TupleIndex;
   /** The sweep's own centre: `currentTupleIndex` once navigation has settled, so a held key re-aims once (docs/loading-architecture.md: sweep-centre-dwells). */
   sweepCentre: TupleIndex;
+  /** The sweep's own column and cross radius, as the webview last reported its strip; the sweep aims at a tile, not a row (docs/loading-architecture.md: thumbnails-centre-out, sweep-cross-then-row-major). */
+  sweepStrip?: { modality: OriginalModalityIndex; modalityOrder: OriginalModalityIndex[]; hidden: OriginalModalityIndex[]; radius?: number };
   sweepCentreTimer?: ReturnType<typeof setTimeout>; // trailing-edge dwell before the sweep re-aims; cleared on dispose
   fileWatchers: vscode.FileSystemWatcher[];
   nodeWatchers: fs.FSWatcher[];
@@ -449,7 +451,10 @@ export class ImageCompareProvider {
         }
         break;
 
-      case 'tupleFullyLoaded':
+      case 'tupleFullyLoaded': {
+        const shown = message.modalityOrder[message.currentDisplayIndex];
+        // The strip as displayed is also the sweep's column aim — the one report that carries it (docs/loading-architecture.md: thumbnails-centre-out).
+        if (shown !== undefined) state.sweepStrip = { modality: shown, modalityOrder: message.modalityOrder, hidden: message.hiddenModalities, radius: message.visibleRows };
         if (message.tupleIndex === state.currentTupleIndex) {
           const hidden = new Set<number>(message.hiddenModalities);
           // The strip as displayed is the wave's whole scope (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
@@ -460,6 +465,7 @@ export class ImageCompareProvider {
           });
         }
         break;
+      }
 
       case 'setWinner':
         await this.handleSetWinner(state, message.tupleIndex, message.modalityIndex);
@@ -1059,7 +1065,7 @@ ${lead}
         },
         // The host supplies only where the user is, whether it is still there and whether anyone is looking; every ordering decision is the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels, sweep-centre-dwells).
         {
-          centre: () => state.sweepCentre,
+          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),
           abandoned: () => state.disposed,
           paused: () => !state.visible,
           onRepump: repump => { state.sweepRepump = repump; }

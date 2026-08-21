@@ -1669,11 +1669,63 @@
         },
         {
           "id": "sweep-centre-out",
-          "name": "Open-time thumbnail sweep starts at the current row and re-aims when the user jumps",
+          "name": "Open-time thumbnail sweep starts at the tile the user is on (cross first, then row-major) and re-aims when the user jumps",
           "tests": [
             {
               "suite": "unit",
               "match": "walks outward from the centre row, forward first on a tie"
+            },
+            {
+              "suite": "unit",
+              "match": "fills the focused row and column interleaved, then the rest row-major centre-out"
+            },
+            {
+              "suite": "unit",
+              "match": "stops the column arm at the radius and finishes row-major"
+            },
+            {
+              "suite": "unit",
+              "match": "a radius past the ends of the grid is simply the whole column"
+            },
+            {
+              "suite": "unit",
+              "match": "a radius of zero is still one row of cross"
+            },
+            {
+              "suite": "unit",
+              "match": "stops the cross at the screenful the webview reported"
+            },
+            {
+              "suite": "unit",
+              "match": "alternates the two arms one slot each"
+            },
+            {
+              "suite": "unit",
+              "match": "an arm that runs out lets the other continue"
+            },
+            {
+              "suite": "unit",
+              "match": "skips empty cells without spending an arm turn on them"
+            },
+            {
+              "suite": "unit",
+              "match": "ranks columns by the strip as shown"
+            },
+            {
+              "suite": "unit",
+              "match": "hidden columns are swept last, never dropped"
+            },
+            {
+              "suite": "unit",
+              "match": "the focused column is swept first even when the user has hidden it"
+            },
+            {
+              "suite": "unit",
+              "match": "aims at the column the webview reports"
+            },
+            {
+              "suite": "unit",
+              "match": "drops nothing while the host reports the same tile from a fresh object"
             },
             {
               "suite": "unit",
@@ -1784,6 +1836,30 @@
             {
               "suite": "unit",
               "match": "hands out every planned slot exactly once across 350 seeded schedules"
+            },
+            {
+              "suite": "unit",
+              "match": "hands out every planned slot exactly once across 300 seeded schedules"
+            },
+            {
+              "suite": "unit",
+              "match": "hands back a slot the walk has passed on the column axis"
+            },
+            {
+              "suite": "unit",
+              "match": "returns a slot at the radius boundary the remainder has already passed"
+            },
+            {
+              "suite": "unit",
+              "match": "a non-finite radius reads as no report"
+            },
+            {
+              "suite": "unit",
+              "match": "a slot returned after the aim moved is re-placed by the NEW aim"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the queue when only the COLUMN moves"
             },
             {
               "suite": "unit",

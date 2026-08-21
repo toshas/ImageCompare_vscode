@@ -563,41 +563,41 @@ const mutations = [
     name: 'sweep: a moved centre never re-aims the cursor (the sweep finishes the old order first)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '    if (aim !== this.centre) {',
-    replace: '    if (this.centre < 0) {',
+    find: '    if (this.walk === undefined || !sameAim(aim, this.aim)) {',
+    replace: '    if (this.walk === undefined) {',
     killedBy: 're-aim tests (a jump mid-walk must serve the new row next, not the old walk\'s next step)'
   },
   {
     name: 'sweep: the centre is used unnormalized (a NaN or fractional centre aims at no row at all)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '    const wanted = Number.isFinite(centre) ? Math.trunc(centre) : 0;',
-    replace: '    const wanted = centre;',
+    find: '    const wanted = Number.isFinite(aim.tuple) ? Math.trunc(aim.tuple) : 0;',
+    replace: '    const wanted = aim.tuple;',
     killedBy: 'seeded fuzz (NaN, +-Infinity and fractional centres must still hand out every slot)'
   },
   {
-    name: 'sweep: nearest-walk pick always forward (rows above the centre are swept last, not by distance)',
+    name: 'sweep: the column arm\'s forward-first tie inverted (the row above the centre is swept before the row below)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '    if (hasUp && hasDown) row = this.up - this.centre <= this.centre - this.down ? this.up : this.down;',
-    replace: '    if (hasUp && hasDown) row = this.up;',
-    killedBy: 'centre-out order test (the distance-1 row below the centre precedes the distance-2 row above it)'
+    find: '        for (const tuple of [t0 + k, t0 - k]) if (tuple >= 0 && tuple < rows) yield { tuple, modality: focus };',
+    replace: '        for (const tuple of [t0 - k, t0 + k]) if (tuple >= 0 && tuple < rows) yield { tuple, modality: focus };',
+    killedBy: 'centre-out order test (the row below the centre precedes the row above it at equal distance)'
   },
   {
     name: 'sweep: slot peeked instead of consumed (a slot can be dispatched twice, and the tail never)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '    return this.rows[row].shift();',
-    replace: '    return this.rows[row][0];',
+    find: '      this.grid[step.value.tuple][step.value.modality] = undefined;',
+    replace: '      /* mutated: the cell keeps its slot */',
     killedBy: 'exactly-once tests (every planned slot handed out and delivered exactly one time)'
   },
   {
-    name: 'sweep: backward walk disabled (rows below the first centre are never swept)',
+    name: 'sweep: the cross\'s column arm only goes forward (the row above the centre waits for the remainder)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '      this.down = aim - 1;',
-    replace: '      this.down = -1;',
-    killedBy: 'coverage tests (the tail must still be swept once the user stops navigating)'
+    find: '        for (const tuple of [t0 + k, t0 - k]) if (tuple >= 0 && tuple < rows) yield { tuple, modality: focus };',
+    replace: '        for (const tuple of [t0 + k]) if (tuple >= 0 && tuple < rows) yield { tuple, modality: focus };',
+    killedBy: 'centre-out order test (the cross reaches the row above the centre before the row two below it)'
   },
   {
     name: 'sweep: dispatch bound removed (the whole grid is handed to the pool again)',
@@ -636,15 +636,15 @@ const mutations = [
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepAim.test.ts',
     find: '      const item = cursor.next(aim);',
-    replace: '      aim = centre();\n      if (aim !== aimed) { aimed = aim; if (outstanding > 0) io.dropQueued?.(); }\n      const item = cursor.next(aim);',
+    replace: '      aim = readAim(centre);\n      if (!sameAim(aim, aimed)) { aimed = aim; if (outstanding > 0) io.dropQueued?.(); }\n      const item = cursor.next(aim);',
     killedBy: 'first-chunk band test (a chunk dispatched as one centre-out band, on one centre read)'
   },
   {
     name: 'sweep: a requeue takes a fresh centre reading (the drop\'s own fallout re-triggers the drop)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepAim.test.ts',
-    find: '      pump(requeued ? aimed : centre());',
-    replace: '      pump(centre());',
+    find: '      pump(requeued && aimed !== undefined ? aimed : readAim(centre));',
+    replace: '      pump(readAim(centre));',
     killedBy: 'livelock test (a centre that moves on every read must not stall the pump in a microtask cascade)'
   },
   {
@@ -691,7 +691,7 @@ const mutations = [
     name: 'sweep: the host\'s repump does nothing (a paused sweep never ends, claim and plan with it)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepHiddenPanel.test.ts',
-    find: '  options.onRepump?.(() => {\n    pump(centre());\n    if (outstanding === 0 && (abandoned() || cursor.remaining === 0)) resolveSweep();\n  });',
+    find: '  options.onRepump?.(() => {\n    pump(readAim(centre));\n    if (outstanding === 0 && (abandoned() || cursor.remaining === 0)) resolveSweep();\n  });',
     replace: '  options.onRepump?.(() => { /* mutated: the host cannot re-enter the pump */ });',
     killedBy: 'resume tests (a paused sweep resumes on re-show and ends on dispose, both inside the deadline)'
   },
@@ -768,12 +768,140 @@ const mutations = [
     killedBy: 'progress test (exactly one tick per planned item, ending at total)'
   },
   {
-    name: 'sweep: putBack leaves the walks where they were (a returned row is never revisited)',
+    name: 'sweep: putBack leaves the walk where it was (a returned slot is never revisited)',
     file: 'src/thumbnailPlan.ts',
     suite: 'test/unit/sweepCentre.test.ts',
-    find: '      if (item.tupleIndex < this.up) this.up = item.tupleIndex;\n    } else if (item.tupleIndex > this.down) this.down = item.tupleIndex;',
-    replace: '      /* mutated: no rewind */\n    }',
-    killedBy: 'cursor return test (a slot returned to a row both walks have passed must still be handed out)'
+    find: '    this.walk = undefined;\n  }',
+    replace: '    /* mutated: no rewind */\n  }',
+    killedBy: 'cursor return test (a slot returned behind the walk, on either axis, must still be handed out)'
+  },
+  {
+    name: 'sweep: putBack rewinds only for slots outside the cross (a boundary return waits for the sweep\'s tail)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '    this.walk = undefined;\n  }',
+    replace: '    if (this.aim === undefined || item.tupleIndex === Math.trunc(this.aim.tuple) || Math.abs(item.tupleIndex - Math.trunc(this.aim.tuple)) > (this.aim.radius ?? SWEEP_CROSS_RADIUS)) this.walk = undefined;\n  }',
+    killedBy: 'radius-boundary return test (a slot returned at the cross\'s own boundary comes back through the cross, not at the tail) — same-row returns still rewind, so only that test discriminates'
+  },
+  {
+    name: 'sweep: putBack rewinds the row axis only (a slot returned across the columns waits for the end of the sweep)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '    this.walk = undefined;\n  }',
+    replace: '    if (this.aim !== undefined && item.tupleIndex !== Math.trunc(this.aim.tuple)) this.walk = undefined;\n  }',
+    killedBy: '2-D return test (a slot returned from the aimed row, behind the walk, comes back at the head of what is left)'
+  },
+  {
+    name: 'sweep: the cross drains its row arm before the column arm (row-major order again)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '      rowTurn = !rowTurn;',
+    replace: '      rowTurn = true;',
+    killedBy: 'interleave test (the two arms advance one slot each; the adjacent row must not wait for the whole strip)'
+  },
+  {
+    name: 'sweep: the cross starts with the column arm (the tile beside the one on screen waits a turn)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '    let rowTurn = true;',
+    replace: '    let rowTurn = false;',
+    killedBy: 'cross-order tests (the focused row\'s next column leads the neighbouring row)'
+  },
+  {
+    name: 'sweep: the cross\'s column arm is unbounded again (it walks the whole grid before the rest of the viewport)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '      for (let k = 1; k <= reach; k++) {',
+    replace: '      for (let k = 1; k < rows; k++) {',
+    killedBy: 'radius test (the column arm stops one screenful out and the row-major remainder takes over)'
+  },
+  {
+    name: 'sweep: a reported radius of 0 turns the cross off entirely (no column arm at all)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '    const reach = Math.max(1, Number.isFinite(aim.radius) ? Math.trunc(aim.radius as number) : SWEEP_CROSS_RADIUS);',
+    replace: '    const reach = Number.isFinite(aim.radius) ? Math.trunc(aim.radius as number) : SWEEP_CROSS_RADIUS;',
+    killedBy: 'zero-radius test (a collapsed carousel still gets one row of cross, never none)'
+  },
+  {
+    name: 'sweep: the remainder is scanline, not centre-out (the row above the centre waits for the whole grid)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '      for (const tuple of k === 0 ? [t0] : [t0 + k, t0 - k]) {',
+    replace: '      for (const tuple of k === 0 ? [t0] : [t0 - k, t0 + k]) {',
+    killedBy: 'radius test (after the cross, the row BELOW the centre is filled before the row above it)'
+  },
+  {
+    name: 'sweep: the remainder ignores the column ranking (hidden and rearranged columns lead their rows)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '        for (const modality of columns) yield { tuple, modality };',
+    replace: '        for (let modality = 0; modality < columns.length; modality++) yield { tuple, modality };',
+    killedBy: 'cross-then-row-major order test (each remaining row is filled in the same column rank order the cross used)'
+  },
+  {
+    name: 'provider: the reported screenful is dropped (the sweep\'s cross falls back to the constant)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepProviderCentre.test.ts',
+    find: 'hidden: message.hiddenModalities, radius: message.visibleRows };',
+    replace: 'hidden: message.hiddenModalities, radius: undefined };',
+    killedBy: 'reported-screenful test (a one-row carousel bounds the cross at one row)'
+  },
+  {
+    name: 'sweep: column ranks ignore the display order (a rearranged strip sweeps the wrong neighbour)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '    const order = aim.modalityOrder !== undefined && aim.modalityOrder.length > 0 ? [...aim.modalityOrder] : [];',
+    replace: '    const order: number[] = [];',
+    killedBy: 'display-distance test (column distance is measured over the strip as shown, not over original indices)'
+  },
+  {
+    name: 'sweep: hidden columns rank like visible ones (a hidden pill takes the front of the sweep)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '      .sort((a, b) => (steps.has(a.d) ? 0 : 1) - (steps.has(b.d) ? 0 : 1) || distance(a.d) - distance(b.d) || b.d - a.d)',
+    replace: '      .sort((a, b) => distance(a.d) - distance(b.d) || b.d - a.d)',
+    killedBy: 'hidden-column test (hidden columns are swept after every visible one, and still swept)'
+  },
+  {
+    name: 'sweep: a hidden focused column is ranked last (the column the user is on is swept last)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '    for (let d = 0; d < order.length; d++) if (d === here || !hidden.has(order[d])) steps.set(d, steps.size);',
+    replace: '    for (let d = 0; d < order.length; d++) if (!hidden.has(order[d])) steps.set(d, steps.size);',
+    killedBy: 'hidden-focus test (a click or digit jump lands on a hidden column, so it keeps the head of the order)'
+  },
+  {
+    name: 'sweep: the radius is left unnormalized (a NaN report re-aims on every read)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '  const radius = raw.radius !== undefined && Number.isFinite(raw.radius) ? Math.trunc(raw.radius) : undefined;',
+    replace: '  const radius = raw.radius;',
+    killedBy: 'non-finite radius test (an aim carrying NaN must still equal itself, so nothing is dropped)'
+  },
+  {
+    name: 'sweep: aims compare by identity (a host that rebuilds its aim object drops the queue every pass)',
+    file: 'src/thumbnailPlan.ts',
+    suite: 'test/unit/sweepGrid.test.ts',
+    find: '  a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((v, i) => v === b[i]));',
+    replace: '  a === b;',
+    killedBy: 'fresh-object test (an equal aim built per read is not a re-aim, so nothing is dropped)'
+  },
+  {
+    name: 'provider: the sweep is never told which column the user is on (the row aim is back)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepProviderCentre.test.ts',
+    find: '          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),',
+    replace: '          centre: () => ({ tuple: state.sweepCentre }),',
+    killedBy: 'provider column test (the sweep starts at the modality the webview reported, not at the first one)'
+  },
+  {
+    name: 'provider: the reported display position is passed on as an original modality index',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepProviderCentre.test.ts',
+    find: '        const shown = message.modalityOrder[message.currentDisplayIndex];',
+    replace: '        const shown = message.currentDisplayIndex as OriginalModalityIndex;',
+    killedBy: 'provider column test (a rearranged strip must be un-permuted before the sweep sees it)'
   },
   {
     name: 'provider: the re-aim drop takes the whole panel key (export and poll work cancelled with it)',
@@ -795,16 +923,16 @@ const mutations = [
     name: 'provider: sweep given no centre (thumbnails fill top-to-bottom wherever the user is)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => state.sweepCentre,',
-    replace: '          centre: () => 0,',
+    find: '          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),',
+    replace: '          centre: () => ({ tuple: 0 }),',
     killedBy: 'provider order test (the sweep starts at the row the panel opened on)'
   },
   {
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepProviderCentre.test.ts',
-    find: '          centre: () => state.sweepCentre,',
-    replace: '          centre: ((pinned: number) => () => pinned)(state.sweepCentre),',
+    find: '          centre: () => ({ tuple: state.sweepCentre, ...state.sweepStrip }),',
+    replace: '          centre: ((pinned: TupleIndex) => () => ({ tuple: pinned }))(state.sweepCentre),',
     killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
   },
   {

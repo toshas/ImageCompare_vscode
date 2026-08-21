@@ -239,7 +239,13 @@ value the pill stamps.
   between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
   unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
 - **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label,
-  and keyboard cycling; **nothing else reads the set**. Loading, prefetch, voting, PPTX export,
+  keyboard cycling, and the *order and scope of speculation* — nothing else. The carousel keeps
+  showing the column, so nothing the user can still reach may be dropped for it: speculative work
+  skips hidden columns (sibling loads and prefetch waves,
+  `docs/loading-architecture.md: sibling-order-by-display-distance`) because a click or digit jump
+  re-requests them on demand, while the open-time sweep only ranks them **last** and still sweeps
+  every one (`docs/loading-architecture.md: sweep-cross-then-row-major`) — a skipped sweep slot would
+  be a blank tile in a column that is still on screen. Voting, PPTX export,
   matching and reordering are oblivious, and the state dies with the panel — it is not persisted to
   the session file. The cycling itself is `nextVisibleModality` (`webview/modalityVisibility.ts`,
   pure, suite-pinned), non-wrapping like the arrow keys it serves.

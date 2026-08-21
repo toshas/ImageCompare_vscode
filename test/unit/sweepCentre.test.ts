@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { SWEEP_CHUNK, SWEEP_REQUEUE, SweepCursor, planThumbnails, runThumbnailSweep, ThumbnailBytes } from '../../src/thumbnailPlan';
+import { SWEEP_CHUNK, SWEEP_REQUEUE, SweepAim, SweepCursor, planThumbnails, runThumbnailSweep, ThumbnailBytes } from '../../src/thumbnailPlan';
 import { Priority, TaskCancelled, WorkPool } from '../../src/workPool';
 import { ExtensionMessage } from '../../src/types';
 
 // The sweep's order and coverage on the real thumbnailPlan code: dispatch order is written out as
 // external literals, and the coverage case counts what the runner actually asked for and posted.
-// (docs/loading-architecture.md: thumbnails-centre-out, sweep-covers-every-slot-once, sweep-dispatch-bounded)
+// The order these cases pin is the ROW half of it — one column, or the column arm of the cross;
+// the 2-D order (bounded cross, row-major remainder, hidden columns, display order) is pinned
+// in sweepGrid.test.ts.
+// (docs/loading-architecture.md: thumbnails-centre-out, sweep-cross-then-row-major,
+//  sweep-covers-every-slot-once, sweep-dispatch-bounded)
 
 const img = (modality: string, name: string) => ({ modality, name });
 
@@ -22,52 +26,46 @@ const flush = () => new Promise<void>(r => setTimeout(r, 0));
 const jpeg = (length: number): ThumbnailBytes => ({ bytes: new Uint8Array(length), mime: 'image/jpeg' });
 
 describe('sweep cursor: centre-out order (real thumbnailPlan code)', () => {
-  it('walks outward from the centre row, forward first on a tie, modality-minor within a row', () => {
-    const { rows, modalities } = grid(5, 2);
+  it('walks outward from the centre row, forward first on a tie, one column at a time', () => {
+    const { rows, modalities } = grid(5, 1);
     const cursor = new SweepCursor(planThumbnails(rows, modalities).items);
     const order: string[] = [];
-    for (let i = 0; i < 10; i++) {
-      const item = cursor.next(2);
+    for (let i = 0; i < 5; i++) {
+      const item = cursor.next({ tuple: 2 });
       order.push(`${item!.tupleIndex}-${item!.modalityIndex}`);
     }
-    // Rows 2, then 3 (forward wins the distance-1 tie), 1, 4, 0 — each row's two columns in order.
-    expect(order).toEqual([
-      '2-0', '2-1',
-      '3-0', '3-1',
-      '1-0', '1-1',
-      '4-0', '4-1',
-      '0-0', '0-1',
-    ]);
+    // Rows 2, then 3 (forward wins the distance-1 tie), 1, 4, 0 — the column arm of the cross.
+    expect(order).toEqual(['2-0', '3-0', '1-0', '4-0', '0-0']);
     expect(cursor.remaining).toBe(0);
-    expect(cursor.next(2)).toBeUndefined();
+    expect(cursor.next({ tuple: 2 })).toBeUndefined();
   });
 
-  it('a centre of 0 is plain scanline order — what a host that supplies no centre gets', () => {
+  it('a single-column grid aimed at row 0 is plain scanline order — what a host that supplies no centre gets', () => {
     const { rows, modalities } = grid(4, 1);
     const cursor = new SweepCursor(planThumbnails(rows, modalities).items);
     const order: number[] = [];
-    for (let i = 0; i < 4; i++) order.push(cursor.next(0)!.tupleIndex);
+    for (let i = 0; i < 4; i++) order.push(cursor.next({ tuple: 0 })!.tupleIndex);
     expect(order).toEqual([0, 1, 2, 3]);
   });
 
   it('a centre moved mid-walk re-aims the remainder instead of finishing the old order', () => {
     const { rows, modalities } = grid(20, 1);
     const cursor = new SweepCursor(planThumbnails(rows, modalities).items);
-    const before = [cursor.next(0)!.tupleIndex, cursor.next(0)!.tupleIndex, cursor.next(0)!.tupleIndex];
+    const before = [cursor.next({ tuple: 0 })!.tupleIndex, cursor.next({ tuple: 0 })!.tupleIndex, cursor.next({ tuple: 0 })!.tupleIndex];
     expect(before).toEqual([0, 1, 2]);
     // The user jumps to row 15: the next slots are 15's neighbourhood, not row 3.
-    const after = [15, 16, 14, 17, 13].map(() => cursor.next(15)!.tupleIndex);
+    const after = [15, 16, 14, 17, 13].map(() => cursor.next({ tuple: 15 })!.tupleIndex);
     expect(after).toEqual([15, 16, 14, 17, 13]);
     // Back to the top: the rows already taken are skipped, so the walk resumes at 3.
-    expect([cursor.next(0)!.tupleIndex, cursor.next(0)!.tupleIndex]).toEqual([3, 4]);
+    expect([cursor.next({ tuple: 0 })!.tupleIndex, cursor.next({ tuple: 0 })!.tupleIndex]).toEqual([3, 4]);
   });
 
   it('a centre past the ends is clamped to the grid, not dropped', () => {
     const { rows, modalities } = grid(3, 1);
     const cursor = new SweepCursor(planThumbnails(rows, modalities).items);
-    expect(cursor.next(99)!.tupleIndex).toBe(2);
-    expect(cursor.next(-99)!.tupleIndex).toBe(0);
-    expect(cursor.next(-99)!.tupleIndex).toBe(1);
+    expect(cursor.next({ tuple: 99 })!.tupleIndex).toBe(2);
+    expect(cursor.next({ tuple: -99 })!.tupleIndex).toBe(0);
+    expect(cursor.next({ tuple: -99 })!.tupleIndex).toBe(1);
   });
 
   it('rows with no planned items are skipped, not counted as distance stops', () => {
@@ -77,38 +75,40 @@ describe('sweep cursor: centre-out order (real thumbnailPlan code)', () => {
     const plan = planThumbnails(rows, modalities);
     expect(plan.missing).toEqual([{ tupleIndex: 1, modalityIndex: 0 }]);
     const cursor = new SweepCursor(plan.items);
-    expect([cursor.next(2)!.tupleIndex, cursor.next(2)!.tupleIndex, cursor.next(2)!.tupleIndex]).toEqual([2, 3, 0]);
+    expect([cursor.next({ tuple: 2 })!.tupleIndex, cursor.next({ tuple: 2 })!.tupleIndex, cursor.next({ tuple: 2 })!.tupleIndex]).toEqual([2, 3, 0]);
   });
 
-  it('a returned slot is handed out again exactly once, from rows both walks have already passed', () => {
+  it('a returned slot is handed out again exactly once, from cells the walk has already passed', () => {
     const { rows, modalities } = grid(6, 2);
     const plan = planThumbnails(rows, modalities);
     const cursor = new SweepCursor(plan.items);
     const key = (i: { tupleIndex: number; modalityIndex: number }) => `${i.tupleIndex}-${i.modalityIndex}`;
+    const aim = { tuple: 3 };
 
-    // A return into a row that still has siblings keeps the row modality-minor: 3-0 leads 3-1 again.
-    const first = cursor.next(3)!;
+    // A return of the focused tile is handed out first again — the walk restarts where the aim points.
+    const first = cursor.next(aim)!;
     expect(key(first)).toBe('3-0');
     cursor.putBack(first);
     expect(cursor.remaining).toBe(12);
-    expect(key(cursor.next(3)!)).toBe('3-0');
+    expect(key(cursor.next(aim)!)).toBe('3-0');
 
+    // The cross from (3,0): the row's other column and the column's rows, one arm then the other.
     const taken = [key(first)];
-    for (let i = 1; i < 8; i++) taken.push(key(cursor.next(3)!));
-    expect(taken).toEqual(['3-0', '3-1', '4-0', '4-1', '2-0', '2-1', '5-0', '5-1']);
-    // Both walks are now past rows 4 and 2: nothing would ever revisit them.
+    for (let i = 1; i < 8; i++) taken.push(key(cursor.next(aim)!));
+    expect(taken).toEqual(['3-0', '3-1', '4-0', '2-0', '5-0', '1-0', '0-0', '4-1']);
+    // The walk is past both of these — one on the row arm, one already dispatched off the cross.
     const above = plan.items.find(i => key(i) === '4-1')!;
-    const below = plan.items.find(i => key(i) === '2-1')!;
+    const below = plan.items.find(i => key(i) === '3-1')!;
     cursor.putBack(above);
     cursor.putBack(below);
     expect(cursor.remaining).toBe(6);
 
     const seen: string[] = [];
     let guard = 0;
-    while (cursor.remaining > 0 && guard++ < 100) seen.push(key(cursor.next(3)!));
+    while (cursor.remaining > 0 && guard++ < 100) seen.push(key(cursor.next(aim)!));
     expect(seen.length).toBe(6);
-    expect(seen.sort()).toEqual(['0-0', '0-1', '1-0', '1-1', '2-1', '4-1']);
-    expect(cursor.next(3)).toBeUndefined();
+    expect(seen.sort()).toEqual(['0-1', '1-1', '2-1', '3-1', '4-1', '5-1']);
+    expect(cursor.next(aim)).toBeUndefined();
   });
 
   it('every slot is handed out exactly once however often the centre jumps', () => {
@@ -119,7 +119,7 @@ describe('sweep cursor: centre-out order (real thumbnailPlan code)', () => {
     const centres = [0, 39, 12, 12, 12, 5, 38, 20, 0, 25, 25, 39, 1, 17, 17, 17, 3];
     const seen: string[] = [];
     for (let i = 0; cursor.remaining > 0; i++) {
-      const item = cursor.next(centres[i % centres.length]);
+      const item = cursor.next({ tuple: centres[i % centres.length] });
       seen.push(`${item!.tupleIndex}-${item!.modalityIndex}`);
     }
     expect(seen.length).toBe(40 * 6 - 3);
@@ -141,7 +141,7 @@ describe('sweep runner: bounded dispatch and coverage under a moving centre (rea
         peak = Math.max(peak, outstanding);
         pending.push(() => { outstanding--; resolve(jpeg(7)); });
       }),
-    }, () => undefined, { chunk: 8, centre: () => 0 });
+    }, () => undefined, { chunk: 8, centre: () => ({ tuple: 0 }) });
 
     expect(peak).toBe(8);
     // Settle them all; the refill keeps the bound on every wave, never the whole 120-slot grid.
@@ -189,7 +189,7 @@ describe('sweep runner: bounded dispatch and coverage under a moving centre (rea
         asked.push(item.tupleIndex);
         pending.push(() => resolve(jpeg(5)));
       }),
-    }, () => undefined, { chunk: 2, centre: () => centre });
+    }, () => undefined, { chunk: 2, centre: () => ({ tuple: centre }) });
 
     // Settling one slot refills exactly one dispatch, so the aim is re-read between rows.
     const step = async (n: number) => {
@@ -199,15 +199,17 @@ describe('sweep runner: bounded dispatch and coverage under a moving centre (rea
       }
     };
 
+    // The focused tile, then its row's other column: the cross's row arm goes first.
     expect(asked).toEqual([40, 40]);
     await step(2);
-    expect(asked.slice(2)).toEqual([41, 41]);
+    // Then the column arm, forward first on the distance tie.
+    expect(asked.slice(2)).toEqual([41, 39]);
     await step(2);
-    expect(asked.slice(4)).toEqual([39, 39]);
-    // The user jumps to row 5: the next dispatches leave row 42 alone and re-aim there.
+    expect(asked.slice(4)).toEqual([42, 38]);
+    // The user jumps to row 5: the next dispatches leave row 37 alone and re-aim there.
     centre = 5;
     await step(6);
-    expect(asked.slice(6)).toEqual([5, 5, 6, 6, 4, 4]);
+    expect(asked.slice(6)).toEqual([5, 5, 6, 4, 7, 3]);
     let guard = 0;
     while (pending.length && guard++ < 5000) await step(1);
     await sweep;
@@ -233,7 +235,7 @@ describe('sweep runner: bounded dispatch and coverage under a moving centre (rea
         centre = centres[++dispatches % centres.length];
         return Promise.resolve(jpeg(9));
       },
-    }, post, { chunk: 4, centre: () => centre });
+    }, post, { chunk: 4, centre: () => ({ tuple: centre }) });
 
     const expected = new Set(plan.items.map(i => `${i.tupleIndex}-${i.modalityIndex}`));
     expect(delivered.size).toBe(expected.size);
@@ -326,11 +328,12 @@ describe('sweep runner: a re-aim drops the queued dispatches (real thumbnailPlan
     const plan = planThumbnails(rows, modalities);
     const rig = poolRig();
     let centre = 60;
-    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => centre });
+    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => ({ tuple: centre }) });
     await flush();
 
     // SWEEP_CHUNK dispatched, 4 of them running: the other 28 are the queue the field log showed.
-    expect(rig.started).toEqual([60, 60, 60, 60]);
+    // Dispatch order is the cross from (60, m0): the row's four columns interleaved with rows 61, 59.
+    expect(rig.started).toEqual([60, 60, 61, 60]);
     expect(plan.items.length).toBe(480);
 
     // The user jumps to row 10 with all 32 outstanding — the moment the defect was reported at.
@@ -360,7 +363,7 @@ describe('sweep runner: a re-aim drops the queued dispatches (real thumbnailPlan
     const rig = poolRig();
     const centres = [30, 5, 59, 17, 0, 42, 12, 55, 23, 8, 36, 1, 59, 0];
     let centre = centres[0];
-    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => centre });
+    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => ({ tuple: centre }) });
     await flush();
 
     let guard = 0;
@@ -401,7 +404,7 @@ function lcg(seed: number): () => number {
   };
 }
 
-/** Centres a host could really produce, including the ones no fixed schedule bothers with. */
+/** Rows a host could really produce, including the ones no fixed schedule bothers with. */
 function hostileCentre(rand: () => number, tuples: number): number {
   const roll = rand();
   if (roll < 0.08) return Number.NaN;
@@ -413,9 +416,49 @@ function hostileCentre(rand: () => number, tuples: number): number {
   return Math.floor(rand() * tuples);
 }
 
+/** A shuffled display order — what `[` / `]` produces, and what makes column distance differ from index distance. */
+function shuffledOrder(rand: () => number, mods: number): number[] {
+  const order = Array.from({ length: mods }, (_, m) => m);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
+/**
+ * The whole aim, hostile on BOTH axes: the row cases above, plus a column that may be absent,
+ * out of range, fractional or NaN, a strip that may be permuted or truncated, a hidden set that
+ * may cover every column, and a cross radius that may be zero, negative, NaN or past the grid.
+ * Coverage may not depend on any of it.
+ */
+function hostileAim(rand: () => number, tuples: number, mods: number): SweepAim {
+  const aim: SweepAim = { tuple: hostileCentre(rand, tuples) };
+  const roll = rand();
+  if (roll < 0.1) aim.modality = Number.NaN;
+  else if (roll < 0.2) aim.modality = mods + Math.floor(rand() * 5);
+  else if (roll < 0.3) aim.modality = -1 - Math.floor(rand() * 5);
+  else if (roll < 0.4) aim.modality = rand() * mods;
+  else if (roll < 0.85) aim.modality = Math.floor(rand() * mods);
+  const strip = rand();
+  if (strip < 0.3) aim.modalityOrder = shuffledOrder(rand, mods);
+  else if (strip < 0.4) aim.modalityOrder = shuffledOrder(rand, mods).slice(0, Math.max(0, mods - 1));
+  else if (strip < 0.5) aim.modalityOrder = shuffledOrder(rand, mods + 2);
+  const hide = rand();
+  if (hide < 0.35) aim.hidden = Array.from({ length: mods }, (_, m) => m).filter(() => rand() < 0.5);
+  else if (hide < 0.4) aim.hidden = Array.from({ length: mods }, (_, m) => m);
+  const reach = rand();
+  if (reach < 0.1) aim.radius = 0;
+  else if (reach < 0.2) aim.radius = -Math.floor(rand() * 10);
+  else if (reach < 0.3) aim.radius = Number.NaN;
+  else if (reach < 0.45) aim.radius = 1 + Math.floor(rand() * tuples);
+  else if (reach < 0.55) aim.radius = tuples * 10;
+  return aim;
+}
+
 const slotKey = (i: { tupleIndex: number; modalityIndex: number }): string => `${i.tupleIndex}-${i.modalityIndex}`;
 
-describe('sweep cursor: seeded fuzz over hostile centres (real thumbnailPlan code)', () => {
+describe('sweep cursor: seeded fuzz over hostile aims (real thumbnailPlan code)', () => {
   it('hands out every planned slot exactly once across 350 seeded schedules', () => {
     const rand = lcg(20260821);
     let sawNonEmpty = 0;
@@ -433,7 +476,7 @@ describe('sweep cursor: seeded fuzz over hostile centres (real thumbnailPlan cod
       const seen: string[] = [];
       // One extra turn of the loop than there are slots: a cursor that never ends is a hang, not a pass.
       for (let guard = 0; guard <= plan.items.length; guard++) {
-        const item = cursor.next(hostileCentre(rand, tuples));
+        const item = cursor.next(hostileAim(rand, tuples, mods));
         if (!item) break;
         seen.push(slotKey(item));
       }
@@ -442,7 +485,7 @@ describe('sweep cursor: seeded fuzz over hostile centres (real thumbnailPlan cod
       expect(new Set(seen).size, `round ${round}: no slot twice`).toBe(seen.length);
       expect(new Set(seen), `round ${round}: none missed`).toEqual(new Set(plan.items.map(slotKey)));
       expect(cursor.remaining, `round ${round}`).toBe(0);
-      expect(cursor.next(0), `round ${round}: exhausted stays exhausted`).toBeUndefined();
+      expect(cursor.next({ tuple: 0 }), `round ${round}: exhausted stays exhausted`).toBeUndefined();
       if (plan.items.length > 0) sawNonEmpty++;
     }
     // Non-vacuous: the rounds really did have slots to hand out.
@@ -482,12 +525,12 @@ describe('sweep runner: seeded fuzz over moving centres and failing reads (real 
         } else if (m.type === 'thumbnailProgress') progress.push(m.current);
       };
 
-      let centre = hostileCentre(rand, tuples);
+      let centre = hostileAim(rand, tuples, mods);
       const silent: string[] = [];
       await runThumbnailSweep(plan, {
         makeThumbnail: (item) => {
-          // The centre moves on every dispatch, so the pump re-aims into work it has already handed out.
-          centre = hostileCentre(rand, tuples);
+          // The aim moves on every dispatch — both axes — so the pump re-aims into work it has already handed out.
+          centre = hostileAim(rand, tuples, mods);
           census.dispatched++;
           const roll = rand();
           if (roll < 0.15) { census.errorRejections++; return Promise.reject(new Error(`decode failed ${slotKey(item)}`)); }

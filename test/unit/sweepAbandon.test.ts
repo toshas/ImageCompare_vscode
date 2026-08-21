@@ -109,7 +109,7 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
     const { rows, modalities } = grid(TUPLES, MODS);
     const plan = planThumbnails(rows, modalities);
     const rig = poolRig();
-    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => 60, abandoned: () => rig.closed });
+    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => ({ tuple: 60 }), abandoned: () => rig.closed });
     await flush();
     expect(plan.items.length).toBe(TUPLES * MODS);
     expect(rig.started.length).toBe(BULK_SLOTS);
@@ -132,7 +132,7 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
     const { rows, modalities } = grid(TUPLES, MODS);
     const plan = planThumbnails(rows, modalities);
     const rig = poolRig();
-    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => 60, abandoned: () => rig.closed });
+    const sweep = runThumbnailSweep(plan, rig.io, rig.post, { centre: () => ({ tuple: 60 }), abandoned: () => rig.closed });
     await flush();
 
     // No dropQueued: the already-submitted chunk drains, and nothing beyond it is dispatched.
@@ -152,7 +152,7 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
     const plan = planThumbnails(rows, modalities);
     const rig = poolRig();
     rig.closed = true;
-    await withDeadline(runThumbnailSweep(plan, rig.io, rig.post, { centre: () => 0, abandoned: () => rig.closed }), 5000);
+    await withDeadline(runThumbnailSweep(plan, rig.io, rig.post, { centre: () => ({ tuple: 0 }), abandoned: () => rig.closed }), 5000);
     expect(rig.started).toEqual([]);
     expect(rig.delivered.size).toBe(0);
   });
@@ -163,7 +163,7 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
     // Re-aim: the same pool.cancel, but the host is live — every dropped slot comes back and is read.
     const live = poolRig();
     let centre = 60;
-    const liveSweep = runThumbnailSweep(planThumbnails(rows, modalities), live.io, live.post, { centre: () => centre, abandoned: () => live.closed });
+    const liveSweep = runThumbnailSweep(planThumbnails(rows, modalities), live.io, live.post, { centre: () => ({ tuple: centre }), abandoned: () => live.closed });
     await flush();
     centre = 5;
     await live.drain();
@@ -175,7 +175,7 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
 
     // Close: the same cancel, and the dropped slots are gone for good.
     const dead = poolRig();
-    const deadSweep = runThumbnailSweep(planThumbnails(rows, modalities), dead.io, dead.post, { centre: () => 60, abandoned: () => dead.closed });
+    const deadSweep = runThumbnailSweep(planThumbnails(rows, modalities), dead.io, dead.post, { centre: () => ({ tuple: 60 }), abandoned: () => dead.closed });
     await flush();
     closeHost(dead);
     await dead.drain();

@@ -176,6 +176,32 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(report.modalityOrder).not.toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  // The same report carries the carousel's screenful, which is the radius the open-time sweep's
+  // cross reaches to (docs/loading-architecture.md: sweep-cross-then-row-major). It is a DOM
+  // measurement, so this layer is the only one that can see it — the mutation harness runs Vitest
+  // suites only, and the host side of the same rule is pinned there instead
+  // (test/unit/sweepProviderCentre.test.ts, "stops the cross at the screenful the webview
+  // reported"). Without a live report the sweep silently falls back to a constant that is wrong by
+  // an order of magnitude at either end of the tile-size range.
+  test('tupleFullyLoaded reports the carousel screenful the sweep uses as its cross radius', async ({ page }) => {
+    await loadPartial(page);
+    const report = await page.evaluate(() =>
+      (window as any).__ic_outbound.filter((m: any) => m && m.type === 'tupleFullyLoaded').at(-1));
+    // Measured off the rendered carousel, not off the webview's own helper: how many rows of the
+    // height the tiles actually have fit in the pane the user sees.
+    const geometry = await page.evaluate(() => {
+      const el = document.getElementById('carousel') as HTMLElement;
+      const thumb = parseFloat(getComputedStyle(el).getPropertyValue('--thumb-size'));
+      return { paneHeight: el.clientHeight, rowHeight: thumb + 2 };
+    });
+    const fit = geometry.paneHeight / geometry.rowHeight;
+    expect(geometry.paneHeight).toBeGreaterThan(0);
+    // Non-vacuous: the harness carousel really shows several rows, so a hard-coded 1 would fail.
+    expect(fit).toBeGreaterThan(3);
+    expect(report.visibleRows).toBeGreaterThanOrEqual(Math.floor(fit));
+    expect(report.visibleRows).toBeLessThanOrEqual(Math.ceil(fit));
+  });
+
   test('flipping to a sibling inside the dwell window loads it at once', async ({ page }) => {
     await loadPartial(page);
     const start = await outboundLength(page);

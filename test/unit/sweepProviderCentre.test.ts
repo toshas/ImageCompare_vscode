@@ -58,6 +58,8 @@ interface Rig {
   posts: any[];
   /** Rows getThumbnail has been called for, in call order. */
   asked: number[];
+  /** The same calls as `modality-row`, so the COLUMN the sweep aims at is visible too. */
+  askedSlots: string[];
   resolvers: Array<() => void>;
   maxConcurrent: number;
 }
@@ -68,8 +70,9 @@ function makeRig(): Rig {
   __setConfig('maxConcurrentReads', POOL_WIDTH);
   const posts: any[] = [];
   const asked: number[] = [];
+  const askedSlots: string[] = [];
   const resolvers: Array<() => void> = [];
-  const rig: Rig = { provider: undefined, state: undefined, posts, asked, resolvers, maxConcurrent: 0 };
+  const rig: Rig = { provider: undefined, state: undefined, posts, asked, askedSlots, resolvers, maxConcurrent: 0 };
   rigs.push(rig);
   let live = 0;
 
@@ -78,6 +81,7 @@ function makeRig(): Rig {
     getThumbnail: (uri: Uri) =>
       new Promise<Buffer>(resolve => {
         asked.push(Number(/frame(\d+)/.exec(uri.path)![1]));
+        askedSlots.push(`${/imgs\/([^/]+)\//.exec(uri.path)![1]}-${/frame(\d+)/.exec(uri.path)![1]}`);
         live++;
         rig.maxConcurrent = Math.max(rig.maxConcurrent, live);
         resolvers.push(() => { live--; resolve(Buffer.alloc(4)); });
@@ -133,8 +137,44 @@ describe('open-time sweep aims at the provider\'s live current tuple', () => {
     const rig = makeRig();
     rig.provider.generateAllThumbnails(rig.state);
     await settle();
-    // Rows 20 (both modalities), then 21, then 19 — not row 0, which scanline order would have taken.
-    expect(rig.asked.slice(0, 6)).toEqual([20, 20, 21, 21, 19, 19]);
+    // The tile the panel opened on and its row's other modality, then the rows either side of it in
+    // that same column — not row 0, which scanline order would have taken.
+    expect(rig.asked.slice(0, 6)).toEqual([20, 20, 21, 19, 22, 18]);
+  });
+
+  it('aims at the column the webview reports, translated out of display space', async () => {
+    const rig = makeRig();
+    // The strip as the user rearranged it: ['ours', 'gt'], with the user on display position 0 —
+    // which is ORIGINAL modality 1. A host that passed the display index on would aim at 'gt'.
+    await rig.provider.handlePanelMessage(rig.state, {
+      type: 'tupleFullyLoaded',
+      tupleIndex: OPEN_AT,
+      modalityOrder: [1, 0],
+      currentDisplayIndex: 0,
+      hiddenModalities: []
+    });
+    rig.provider.generateAllThumbnails(rig.state);
+    await settle();
+    // The focused tile, its row's other column, then that same column in the rows either side.
+    expect(rig.askedSlots.slice(0, 4)).toEqual([`ours-${OPEN_AT}`, `gt-${OPEN_AT}`, `ours-${OPEN_AT + 1}`, `ours-${OPEN_AT - 1}`]);
+  });
+
+  it('stops the cross at the screenful the webview reported, then fills row-major', async () => {
+    const rig = makeRig();
+    // A carousel one row tall: the cross may reach exactly one row either side of the focused tile.
+    await rig.provider.handlePanelMessage(rig.state, {
+      type: 'tupleFullyLoaded',
+      tupleIndex: OPEN_AT,
+      modalityOrder: [0, 1],
+      currentDisplayIndex: 0,
+      hiddenModalities: [],
+      visibleRows: 1
+    });
+    rig.provider.generateAllThumbnails(rig.state);
+    await settle();
+    // Cross: the tile, its row's other modality, rows 21 and 19 in that column — and stop. Then
+    // row-major centre-out: the rest of 21, the rest of 19, then rows 22 and 18 whole.
+    expect(rig.asked.slice(0, 10)).toEqual([20, 20, 21, 19, 21, 19, 22, 22, 18, 18]);
   });
 
   it('keeps at most SWEEP_CHUNK slots in flight, not the whole grid', async () => {
@@ -166,7 +206,9 @@ describe('open-time sweep aims at the provider\'s live current tuple', () => {
     await navigate(rig, JUMP_TO);
     for (const r of rig.resolvers.splice(0, 4)) r();
     await settle();
-    expect(rig.asked.slice(dispatchedBefore, dispatchedBefore + 4)).toEqual([3, 3, 4, 4]);
+    // The cross from (3, gt): the tile itself, its row's other modality, then rows 4 and 2 in that
+    // column — row 3 was outside the radius of the aim the panel opened on, so it is untouched.
+    expect(rig.asked.slice(dispatchedBefore, dispatchedBefore + 4)).toEqual([3, 3, 4, 2]);
 
     let guard = 0;
     while (rig.resolvers.length && guard++ < 500) {

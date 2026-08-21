@@ -1267,14 +1267,22 @@ function loadTuple(index: TupleIndex) {
   }, LOAD_DEBOUNCE_MS);
 }
 
-/** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column). */
+/** Carousel rows one screenful high — the radius the sweep's cross reaches to (docs/loading-architecture.md: sweep-cross-then-row-major). */
+function visibleCarouselRows(): number {
+  const rowH = carouselRowHeight();
+  if (!isMultiTupleMode || rowH <= 0) return 1;
+  return Math.max(1, Math.ceil(carouselEl.clientHeight / rowH));
+}
+
+/** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column), the sweep aims its cross at it (docs/loading-architecture.md: sweep-cross-then-row-major). */
 function postTupleFullyLoaded(tupleIndex: TupleIndex) {
   vscode.postMessage({
     type: 'tupleFullyLoaded',
     tupleIndex,
     modalityOrder: modalityOrder.slice(),
     currentDisplayIndex: currentModalityIndex,
-    hiddenModalities: Array.from(hiddenModalities)
+    hiddenModalities: Array.from(hiddenModalities),
+    visibleRows: visibleCarouselRows()
   });
 }
 

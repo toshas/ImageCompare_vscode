@@ -143,7 +143,8 @@ describe('a re-aimed provider sweep drops the work it has already queued', () =>
     rig.provider.generateAllThumbnails(rig.state);
     await settle();
     // 32 dispatched; only the pool's 4 bulk slots are reading, the rest are queued behind them.
-    expect(rig.asked).toEqual([OPEN_AT, OPEN_AT, OPEN_AT + 1, OPEN_AT + 1]);
+    // The cross interleaves the two arms: the opened row's other modality, then the rows either side of it.
+    expect(rig.asked).toEqual([OPEN_AT, OPEN_AT, OPEN_AT + 1, OPEN_AT - 1]);
     expect((rig.provider as any).pool.pending).toBe(SWEEP_CHUNK - BULK_SLOTS);
 
     // The real message path, dwell included, with all 32 slots outstanding.
