@@ -27,9 +27,10 @@ const repoRoot = join(scriptDir, '..');
 
 /**
  * Each mutation names the file it edits and the suite that must kill it. Every
- * suite imports the real source, so a mutation hits src/* — except the standalone-artifact
- * freshness rule at the end, which IS test infrastructure (test/webview/standaloneArtifact.ts) and
- * decides whether the webview layer serves a current, complete page. All suites live
+ * suite imports the real source, so a mutation hits src/* — except the two rules at the end that
+ * ARE test infrastructure (test/webview/standaloneArtifact.ts, test/webview/playwright.config.ts):
+ * whether the webview layer serves a current, complete page, and how that layer sizes itself and
+ * lays out its reports on a host CI never runs on. All suites live
  * under test/unit/ and are run through Vitest (the tuple-matching and pngText
  * mutations are killed there; the old in-test copies are gone).
  */
@@ -1940,7 +1941,7 @@ const mutations = [
     killedBy: 'dispose test (a closed panel leaves nothing queued)'
   },
 
-  // ── Standalone artifact freshness: the one non-src file here, because "built once by
+  // ── Standalone artifact freshness: a non-src file, because "built once by
   //    globalSetup" is only safe while "already built" stays an honest question (docs/testing.md) ──
   {
     name: 'standalone artifact: freshness downgraded to an existence check (any artifact counts as current)',
@@ -2005,6 +2006,25 @@ const mutations = [
     find: "  if (!newest) return { state: 'unverifiable', detail: 'no build input was found' };",
     replace: '  /* mutated: no inputs found means nothing is newer */',
     killedBy: 'no-inputs test (finding no build input at all is not evidence of freshness)'
+  },
+
+  // ── Webview suite sizing/report layout: the rules CI structurally cannot pin, because on a
+  //    runner cpus() and availableParallelism() agree and the wrong call stays green (docs/testing.md) ──
+  {
+    name: 'playwright config: worker count sized from the reported core count again',
+    file: 'test/webview/playwright.config.ts',
+    suite: 'test/unit/playwrightConfig.test.ts',
+    find: 'os.availableParallelism() / 2',
+    replace: 'os.cpus().length / 2',
+    killedBy: 'worker-sizing test (256 cores reported, 4 usable must size 2 workers, not 128)'
+  },
+  {
+    name: 'playwright config: outputDir dropped back to the default that parents the HTML report',
+    file: 'test/webview/playwright.config.ts',
+    suite: 'test/unit/playwrightConfig.test.ts',
+    find: "  outputDir: './test-results',\n",
+    replace: '',
+    killedBy: 'report-layout test (the html report must not sit inside the test output folder)'
   }
 ];
 

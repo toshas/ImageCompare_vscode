@@ -2008,6 +2008,16 @@
               "match": "mutation harness isolation"
             }
           ]
+        },
+        {
+          "id": "webview-suite-worker-sizing",
+          "name": "Webview suite sizes its workers from usable parallelism, not the reported core count, and keeps the HTML report outside the test output folder",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "webview suite worker sizing"
+            }
+          ]
         }
       ]
     }
