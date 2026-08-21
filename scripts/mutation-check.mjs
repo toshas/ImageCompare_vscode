@@ -107,6 +107,14 @@ const mutations = [
     replace: '    if ((type & (vscode.FileType.File | vscode.FileType.SymbolicLink)) !== 0 && isImageFile(name)) {',
     killedBy: 'broken-symlink test (a dangling link, type 64, must be skipped silently)'
   },
+  {
+    name: 'symlink: thumbnail cache-age sweep back to strict equality',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbCacheExpiry.test.ts',
+    find: '        if ((type & vscode.FileType.File) !== 0) {',
+    replace: '        if (type === vscode.FileType.File) {',
+    killedBy: 'symlinked-cache-entry test (an entry listing as 65 must still expire by age)'
+  },
 
   // ── Scan IO: the directory listings overlap in input order (docs/tuple-matching.md: dir-listings-overlap) ──
   {

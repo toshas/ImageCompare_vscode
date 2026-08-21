@@ -1073,6 +1073,14 @@
             {
               "suite": "unit",
               "match": "a pack deleted under a live session is republished by the close"
+            },
+            {
+              "suite": "unit",
+              "match": "a symlinked cache entry expires by age"
+            },
+            {
+              "suite": "integration",
+              "match": "a symlinked cache entry lists as File|SymbolicLink and still expires by age"
             }
           ]
         }
@@ -1875,6 +1883,10 @@
             {
               "suite": "webview",
               "match": "standalone poll executes a modality dir rename as remove-then-adopt"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone poll orders a same-cycle dir rename remove-then-adopt within one cycle"
             },
             {
               "suite": "webview",

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, it, expect } from 'vitest';
-import { Uri, __resetChannels, __resetConfig, __setConfig } from '../mocks/vscode';
+import { FileType, Uri, workspace, __resetChannels, __resetConfig, __setConfig } from '../mocks/vscode';
 import { ThumbnailService } from '../../src/thumbnailService';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { makeSolidPng } from '../fixtures/synthetic';
@@ -68,6 +68,21 @@ async function seedCache(storage: string, images: Uri[]): Promise<void> {
   for (const u of images) await svc.getThumbnail(asUri(u), 64);
   await svc.flush();
   svc.dispose();
+}
+
+// Windows without SeCreateSymbolicLinkPrivilege / Developer Mode cannot make file symlinks; the
+// linked-entry test below skips there, exactly as test/unit/symlinkScan.test.ts does.
+function canSymlink(): boolean {
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-cacheexpiry-probe-'));
+  try {
+    fs.writeFileSync(path.join(probe, 'a'), '');
+    fs.symlinkSync(path.join(probe, 'a'), path.join(probe, 'a-link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
 }
 
 describe('thumbnail cache expiry (real ThumbnailService, real cache dir)', () => {
@@ -160,5 +175,44 @@ describe('thumbnail cache expiry (real ThumbnailService, real cache dir)', () =>
     expect(packExists(cacheDir)).toBe(false);
     expect(jpgNames(cacheDir)).toEqual([]);
     svc.dispose();
+  });
+
+  // The sweep classifies its listing with `(type & FileType.File) !== 0`, never `===`: a cache entry
+  // that is a symlink lists as File|SymbolicLink (65), so equality would silently exempt it and the
+  // age cap would never apply to it. Reachable at Layer 1 because the sweep's whole vscode surface is
+  // readDirectory/stat/delete, which the fs-backed mock types exactly as the real API does — the real
+  // API's typing itself is pinned in test/integration/scan.test.ts and (for this dir) in
+  // test/integration/cacheSweep.test.ts. (docs/tuple-matching.md: entry-type-is-a-bitmask)
+  it.skipIf(!canSymlink())('a symlinked cache entry expires by age, never exempted by the SymbolicLink bit', async () => {
+    const { storage, cacheDir } = makeBed(0);
+
+    // A stale entry reachable only through a link, its target outside the cache dir so the link is
+    // the only thing the sweep can act on.
+    const target = path.join(storage, 'linked-target.jpg');
+    fs.writeFileSync(target, Buffer.from('not-really-a-jpeg'));
+    fs.utimesSync(target, THIRTY_DAYS_AGO, THIRTY_DAYS_AGO);
+    fs.symlinkSync(target, path.join(cacheDir, 'linked.jpg'), 'file');
+    fs.lutimesSync(path.join(cacheDir, 'linked.jpg'), THIRTY_DAYS_AGO, THIRTY_DAYS_AGO);
+
+    // Controls: a plain stale entry (must die too) and a fresh one (must survive).
+    fs.writeFileSync(path.join(cacheDir, 'plain-stale.jpg'), Buffer.from('x'));
+    fs.utimesSync(path.join(cacheDir, 'plain-stale.jpg'), THIRTY_DAYS_AGO, THIRTY_DAYS_AGO);
+    fs.writeFileSync(path.join(cacheDir, 'fresh.jpg'), Buffer.from('x'));
+
+    // The premise the bit test exists for: the entry carries File *and* SymbolicLink, so `=== File` skips it.
+    const entries = await workspace.fs.readDirectory(Uri.file(cacheDir));
+    const linked = entries.find(([name]) => name === 'linked.jpg');
+    expect(linked).toBeDefined();
+    expect(linked![1] & FileType.File).toBe(FileType.File);
+    expect(linked![1] & FileType.SymbolicLink).toBe(FileType.SymbolicLink);
+    expect(linked![1]).not.toBe(FileType.File);
+
+    const svc = newService(storage);
+    await svc.cleanupOldCache();
+    svc.dispose();
+
+    expect(fs.readdirSync(cacheDir).sort()).toEqual(['fresh.jpg']);
+    // The link died, not its target: the sweep unlinks the entry it listed.
+    expect(fs.existsSync(target)).toBe(true);
   });
 });

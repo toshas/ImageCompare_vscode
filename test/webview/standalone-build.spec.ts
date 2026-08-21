@@ -807,3 +807,103 @@ test('standalone re-open picks up a modality dir added while the comparison was 
   expect(state.modalityPaths).toEqual(['/reopenfix/gt', '/reopenfix/mask', '/reopenfix/pred']);
   expect(state.tupleCount).toBe(2);
 });
+
+/**
+ * The same rename, pinned deterministically: one poll cycle, both halves of the rename already on
+ * disk before it runs.
+ *
+ * The spec above can be satisfied for the wrong reason. Its rename mutates a live fixture while the
+ * 150 ms poll is running, so `pred`'s disappearance and `aaa_pred`'s images routinely land in
+ * DIFFERENT cycles — and a two-cycle split emits modalityRemoved then modalityAdded whatever the
+ * order of the two blocks inside a cycle is. Measured on this box: with adoption moved ahead of the
+ * removals in `runPollCycle`, that spec still passed 18 runs out of 20 at --workers=4.
+ *
+ * So this one removes the split instead of observing it. `pollIntervalMs` is set to a sentinel that
+ * an init script intercepts: the interval the adapter arms is captured rather than started (every
+ * other `setInterval` passes through untouched). `FileSystemObserver`, the adapter's only other
+ * cycle trigger, is taken off `window` too — headless Chromium ships none today, so that is a guard
+ * against a future one rather than a change of behaviour, and the production path already falls
+ * back to interval-only when it is absent. No cycle can run until the spec calls the captured
+ * callback itself, which it does exactly once, after the whole rename is on disk. One cycle
+ * therefore sees the removal AND the adoption, and the wire order it produces is the block order in
+ * `runPollCycle` and nothing else. (docs/file-watching.md: new-modality-dir-adopted)
+ */
+test('standalone poll orders a same-cycle dir rename remove-then-adopt within one cycle', async ({ page }) => {
+  const HELD_POLL_MS = 424242;
+  await page.addInitScript((sentinel) => {
+    const realSetInterval = window.setInterval.bind(window);
+    const w = window as unknown as { __ic_cycle?: () => void; setInterval: unknown };
+    w.setInterval = (fn: TimerHandler, ms?: number, ...rest: unknown[]): number => {
+      if (ms === sentinel) {
+        w.__ic_cycle = fn as () => void;
+        return -1; // a held timer: clearInterval on an unknown id is a no-op, so stopPolling still works
+      }
+      return realSetInterval(fn as TimerHandler, ms, ...rest);
+    };
+    Object.defineProperty(window, 'FileSystemObserver', { value: undefined, configurable: true });
+  }, HELD_POLL_MS);
+  await bootPolledFixture(page, 'renameonecycle', HELD_POLL_MS);
+
+  // The poll armed its interval through the seam and this spec now holds the only trigger.
+  expect(await page.evaluate(() => typeof (window as unknown as { __ic_cycle?: unknown }).__ic_cycle)).toBe('function');
+
+  // Both halves of the rename land on disk while no cycle can run.
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const fix = await root.getDirectoryHandle('renameonecycle');
+    await fix.removeEntry('pred', { recursive: true });
+    const renamed = await fix.getDirectoryHandle('aaa_pred', { create: true });
+    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, w, h);
+      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
+      return new Uint8Array(await blob.arrayBuffer());
+    };
+    const write = async (d: FileSystemDirectoryHandle, name: string, bytes: Uint8Array) => {
+      const fh = await d.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(bytes.slice().buffer as ArrayBuffer);
+      await w.close();
+    };
+    await write(renamed, 'scene_01_pred.png', await makePng(5, 4, '#00f'));
+    await write(renamed, 'scene_02_pred.png', await makePng(6, 5, '#ff0'));
+  });
+
+  // Nothing reacted: the timer is held and no observer is left to accelerate a cycle, so the
+  // events asserted below cannot come from a cycle that saw only one half of the rename.
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(
+    () => (window as unknown as { __ic_test: { getState(): { modalityPaths: string[] } } }).__ic_test.getState().modalityPaths,
+  )).toEqual(['/renameonecycle/gt', '/renameonecycle/pred']);
+  // Two separate assertions: arrayContaining would only fail if BOTH leaked, tolerating a half cycle.
+  const heldMsgs = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
+  expect(heldMsgs).not.toContain('modalityRemoved');
+  expect(heldMsgs).not.toContain('modalityAdded');
+
+  // Exactly one cycle, seeing both halves.
+  await page.evaluate(() => (window as unknown as { __ic_cycle: () => void }).__ic_cycle());
+
+  await expect
+    .poll(async () => page.evaluate(
+      () => (window as unknown as { __ic_test: { getState(): { modalityPaths: string[] } } }).__ic_test.getState().modalityPaths,
+    ), { timeout: 15000 })
+    .toEqual(['/renameonecycle/aaa_pred', '/renameonecycle/gt']);
+
+  const msgs = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
+  // One cycle produced both, in this order: removal first, adoption after (never a re-init).
+  expect(msgs.filter(m => m === 'modalityRemoved')).toHaveLength(1);
+  expect(msgs.filter(m => m === 'modalityAdded')).toHaveLength(1);
+  expect(msgs.indexOf('modalityRemoved')).toBeLessThan(msgs.indexOf('modalityAdded'));
+  expect(msgs.filter(m => m === 'init')).toHaveLength(1);
+
+  const state = await page.evaluate(
+    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
+  );
+  expect(state.modalityCount).toBe(2);
+  expect(state.tupleCount).toBe(2);
+  expect(state.currentTupleName).toBe('scene_01');
+});

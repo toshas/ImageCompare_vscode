@@ -128,7 +128,7 @@ messages with view state intact, plus the two-root switch producing no stale pos
 short injected `pollIntervalMs`) and the no-FSA drag-drop walker via the `openDroppedEntry` seam —
 see `docs/standalone.md` and `docs/file-watching.md`, "The standalone poll".
 
-Two of its poll specs exist because the obvious fixture cannot fail. `standalone poll re-verifies a
+Three of its poll specs exist because the obvious fixture cannot fail. `standalone poll re-verifies a
 removal with stat before reporting it` boots the adapter on a **lying directory handle** (the
 `wrapListing` option of `bootPolledFixture`: names in `window.__ic_hidden` are skipped by every
 `entries()` listing while `getFileHandle` still returns them), because a real OPFS removal is
@@ -138,6 +138,18 @@ observer` counts **live pollers** (page-level `setInterval`/`clearInterval` wrap
 injected interval, plus a stub `FileSystemObserver` counting constructions against disconnects),
 because the adapter's `state !== s` guards silence a leaked timer or observer without stopping it:
 the no-stale-posts spec beside it passes with the whole `stopPolling` call removed from `openRoot`.
+`standalone poll orders a same-cycle dir rename remove-then-adopt within one cycle` **holds the poll
+timer** rather than racing it: an init script captures the interval the adapter arms at a sentinel
+`pollIntervalMs` (every other `setInterval` passes through) and removes `FileSystemObserver`, so the
+only trigger left is the spec calling that callback by hand — once, after both halves of the rename
+are already on disk. The rename spec beside it mutates a live fixture under a 150 ms poll, so the
+removal and the adoption routinely land in *different* cycles, and a two-cycle split emits
+modalityRemoved-then-modalityAdded whatever the block order inside a cycle is. Measured with
+adoption moved ahead of the removals in `runPollCycle`, `--workers=4`, 20 runs each — and quote the
+invocation shape with the number, because it moves the escape rate threefold: the racing spec caught
+the reorder **14 of 20** whole-suite, 14 of 20 running only the two rename specs, and 18 of 20 under
+`--repeat-each=20`. So it escapes 10-30% of the time, not the 1-in-6 first reported. The held-timer
+spec failed 20 of 20 in every shape, and is 20 of 20 green with the adapter restored.
 
 ## The copy trap (historical)
 
@@ -237,6 +249,24 @@ the fix, the docs, and the CI check.
   against the shipped VS Code source instead. What stands in for a mutation on the code side: the
   rule the premise protects — the `type & FileType.File` gate in `listImagesIn` — stays covered by
   the `symlink: broken link accepted` mutation.
+- **The standalone poll's snapshot pruning.** `runPollCycle` ends by dropping `s.snapshots` entries
+  whose modality column is gone. Nothing pins that block and nothing at the wire level can: the
+  cycle that removes a column has already overwritten that dir's snapshot with `[]` (an unlistable
+  dir yields an empty listing), the only read of a snapshot is `s.snapshots.get(dir)` for a *live*
+  modality, and the only way a dir becomes live again is adoption — which re-seeds that same entry
+  before any cycle reads it. Deleting the block outright leaves all 62 webview specs green (checked,
+  not assumed). What remains is memory hygiene plus an early-race guard, observable only through a
+  new production seam (a snapshot-census hook on `__ic_standalone`) — a bigger change than the five
+  lines it would guard. Accepted as untested rather than closed with a test that cannot fail.
+- **`pruneOldSessions` in `extension.ts`.** The 30-day generated-session prune is module-private and
+  its only caller is the deferred 15s timer inside `activate`. A Layer 2 route does exist — activation
+  is lazy, and the sessions dir is discoverable through `TabInputCustom`'s uri, so a test could seed
+  an old session there and wait the timer out — but it is order-fragile (any earlier test that
+  activates burns the window) and costs 16s of wall clock, so it is unattractive rather than
+  impossible. Calling `activate` directly is what would break the activation test beside it. Its `type & FileType.File` gate is therefore the one `FileType` site in
+  `src/` with no test of any kind (docs/tuple-matching.md: entry-type-is-a-bitmask) — the sibling
+  sweep in `thumbnailService.cleanupOldCache` is pinned at Layer 1 (with a mutation) and Layer 2.
+  Pinning it needs the function exported, which is a production change, not a test one.
 - **The webview's pixels.** The Playwright layer drives the real bundle but asserts logic through
   the state hook — no pixel snapshots — so canvas rendering and visual layout are verified by eye
   (the demo gallery and the manual checks below).
@@ -583,6 +613,23 @@ the fix, the docs, and the CI check.
   eight mutations in `scripts/mutation-check.mjs`. The cap is pinned *exactly* (40 dirs must list 16 at a
   time, not "at most 16"): an upper bound alone left `DIR_LISTING_CONCURRENCY` free to fall to 11
   — a silent halving of the open-path parallelism — with every test and every mutation still green.
+
+- **Two of the poll round's own coverage gaps closed, two written down** *(test-only)* — the
+  verifier notes in `dev_backlog/poll-test-hardening.md`. (1) The standalone dir-rename spec pinned
+  cycle *order* probabilistically; a held-timer spec now fires exactly one cycle over a rename that
+  is already fully on disk (numbers under "The suites" above: the racing spec escapes 10-30% depending
+  on how the suite is invoked, the held-timer spec 0 of 20). (2) `entry-type-is-a-bitmask` was cited from `thumbnailService.cleanupOldCache` with no
+  test behind the citation: reverting that gate to `===` broke nothing. It is now killed by
+  `test/unit/thumbCacheExpiry.test.ts` ("a symlinked cache entry expires by age…", a real symlink in
+  a real cache dir through the fs-backed mock) plus the matching `symlink: thumbnail cache-age sweep
+  back to strict equality` mutation, with `test/integration/cacheSweep.test.ts` pinning the same
+  site against the **real** `vscode.workspace.fs` — the only layer that can say the real API types a
+  linked cache entry `File|SymbolicLink`. That integration file has never been run on a developer
+  machine here (no X server for Layer 2); it is type-checked via
+  `tsc -p test/integration/tsconfig.integration.json` and CI is its only proof, exactly like the
+  dangling-symlink premise in `scan.test.ts`. (3) and (4), the standalone snapshot prune and
+  `extension.ts`'s session prune, are recorded under "What nothing covers" above as accepted gaps
+  with the reason each cannot be pinned from a test.
 
 ## Viewing the generated reports
 
