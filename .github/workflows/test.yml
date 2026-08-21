@@ -36,6 +36,7 @@ jobs:
       - run: node scripts/check-invariants.mjs
       - run: node scripts/comment-lint.mjs
       - run: node scripts/check-sidedness.mjs
+      - run: node scripts/check-generated-output.mjs
       # A committed prerelease version means a local-alpha bump leaked (CLAUDE.md: Install Locally).
       - run: |
           node -e "const v=require('./package.json').version; if(v.includes('-')){console.error('package.json carries a local prerelease version '+v);process.exit(1)}"

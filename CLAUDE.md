@@ -233,12 +233,14 @@ npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
 node scripts/comment-lint.mjs       # no multi-line // blocks in production code
 node scripts/check-sidedness.mjs    # module sidedness (extension/standalone/shared) from real imports; no dead src/ modules
+node scripts/check-generated-output.mjs  # generators write only into ignored dirs (nothing to `git add .`)
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
 npm run compile                     # both webpack targets
 ```
 
-CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the three
-checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs all three
+CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
+checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but
+runs only in the pre-commit hook — it needs the gitignored `.words-to-check.txt`.) The `gates` job in `test.yml` runs all three
 `tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
 step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
 `npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
@@ -306,7 +308,7 @@ Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
 
 ## Publishing (GitHub Actions)
 
-Publishing is automated via GitHub Actions. The workflow first runs the `test` job (ubuntu) — compile, both checker scripts, the suites, the mutation check — then builds one VSIX per platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
+Publishing is automated via GitHub Actions. The workflow first runs the `test` job (ubuntu) — compile, the four checker scripts, the suites, the mutation check — then builds one VSIX per platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
 
 ### Release Checklist (for Claude)
 

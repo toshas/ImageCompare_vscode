@@ -35,10 +35,6 @@ test/demos/gallery/
 test/dashboard/dashboard.html
 test/dashboard/FEATURES.md
 
-# Playwright JSON written with a stale cwd — generated, and it embeds absolute paths
-test/webview/test/
-test/dashboard/results/
-
 # Local list of terms the pre-commit guard blocks — personal, never versioned
 .words-to-check.txt
 

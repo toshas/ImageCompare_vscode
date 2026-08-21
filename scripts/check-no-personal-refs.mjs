@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 // Fails if a forbidden identifier appears in any non-ignored file. Substring, case-insensitive.
 // Terms come from .words-to-check.txt (gitignored, one per line, # comments allowed) plus the
-// runtime user and group names. Run by .githooks/pre-commit (install: npm run hooks:install).
+// runtime user and group names and this machine's home/checkout PREFIXES (never a bare '/home/':
+// fixtures assert on invented absolute paths, and flagging those teaches --no-verify on day one).
+// Run by .githooks/pre-commit (install: npm run hooks:install).
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { userInfo } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 
 const WORDS_FILE = '.words-to-check.txt';
 // A short or generic runtime name would match ordinary source ("root" is in repoRoot, rootDir, …).
 const MIN_RUNTIME_LEN = 4;
+// '/home' or 'C:\' names no machine; two segments is the shortest prefix that identifies one, and
+// 8 chars keeps a degenerate '/home/u' from swallowing the fixture path '/home/u/data/results'.
+const MIN_PREFIX_SEGMENTS = 2;
+const MIN_PREFIX_LEN = 8;
 const GENERIC = new Set(['root', 'user', 'users', 'admin', 'ubuntu', 'node', 'runner', 'build', 'test', 'home', 'staff', 'wheel', 'docker']);
 
 const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
@@ -62,7 +68,27 @@ const runtimeTerms = [userInfo().username, runtimeGroup()].filter(Boolean).filte
   return true;
 });
 
-const terms = [...new Set([...fileTerms, ...runtimeTerms].map(t => t.toLowerCase()))];
+/** This machine's home dir and checkout root, as literal prefixes (both separator spellings). */
+function machinePrefixes(paths) {
+  const out = [];
+  for (const p of paths) {
+    const norm = (p || '').replace(/[\\/]+$/, '');
+    const segs = norm.split(/[\\/]/).filter(Boolean);
+    // Deliberately NOT the word filters above: a prefix is specific because it is a path, so
+    // '/home/bob' must survive even though 'bob' is too short to be a term on its own.
+    if (segs.length < MIN_PREFIX_SEGMENTS || norm.length < MIN_PREFIX_LEN) {
+      if (norm) skipped.push(norm);
+      continue;
+    }
+    out.push(norm);
+    if (norm.includes('\\')) out.push(norm.replace(/\\/g, '/'));
+  }
+  return out;
+}
+
+const prefixTerms = machinePrefixes([homedir(), repoRoot]);
+
+const terms = [...new Set([...fileTerms, ...runtimeTerms, ...prefixTerms].map(t => t.toLowerCase()))];
 
 const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
   cwd: repoRoot, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024
@@ -92,7 +118,7 @@ for (const rel of files) {
 
 const note = skipped.length ? ` (skipped as too short or generic: ${skipped.join(', ')})` : '';
 if (hits.length === 0) {
-  console.log(`OK: ${terms.length} term(s) absent from ${files.length} non-ignored files${note}.`);
+  console.log(`OK: ${terms.length} term(s) (${prefixTerms.length} machine prefix) absent from ${files.length} non-ignored files${note}.`);
   process.exit(0);
 }
 
