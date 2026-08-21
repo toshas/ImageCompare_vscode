@@ -39,6 +39,22 @@ function makeBed(imageCount: number): { svc: ThumbnailService; cacheDir: string;
 
 const asUri = (u: Uri) => u as unknown as import('vscode').Uri;
 
+// The per-entry cache write is fire-and-forget by design (`saveToDiskCache`, deliberately not
+// awaited: the caller must never block on a cache fill). A test that reads the disk tier therefore
+// has to wait for that write instead of racing it — under whole-suite IO contention it lands after
+// the assertion roughly 13% of the time. Deadline stays under Vitest's 5s so this error, not a bare
+// timeout, names what failed; a write that never lands still fails the test.
+async function waitForCachedJpeg(cacheDir: string, deadlineMs = 4000): Promise<string> {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    for (const name of fs.readdirSync(cacheDir)) {
+      if (name.endsWith('.jpg') && fs.statSync(path.join(cacheDir, name)).size > 0) return name;
+    }
+    if (Date.now() >= until) throw new Error(`no per-entry .jpg landed in ${cacheDir} within ${deadlineMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function totalCount(stats: ReturnType<ThumbnailService['thumbTierStats']>): number {
   return THUMB_TIERS.reduce((n, tier) => n + stats[tier].count, 0);
 }
@@ -119,11 +135,12 @@ describe('thumbnail tier accounting (real ThumbnailService)', () => {
   });
 
   it('debug on: a per-entry JPEG with no pack counts as disk', async () => {
-    const { svc, storage, images } = makeBed(1);
+    const { svc, cacheDir, storage, images } = makeBed(1);
     __setConfig('debug', true);
     const sub = initDebugLog();
 
     await svc.getThumbnail(asUri(images[0]), 64); // writes the per-entry .jpg, publishes no pack
+    await waitForCachedJpeg(cacheDir); // the unawaited write is what the disk tier below reads
     svc.clearMemoryCache();
     svc.dispose();
 

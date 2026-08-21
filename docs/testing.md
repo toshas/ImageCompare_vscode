@@ -354,6 +354,13 @@ the fix, the docs, and the CI check.
 
 ## Findings (caught by this testbed)
 
+- **A test raced a deliberately unawaited cache write** *(fixed)* — `thumbTierStats`'s disk-tier test
+  read the tier counter before `saveToDiskCache`'s fire-and-forget write had landed, so it failed 2 of
+  15 full `npm test` runs under whole-suite IO contention (and deterministically with 25 ms injected
+  into that write). The write stays unawaited — the caller must never block on a cache fill — and the
+  test now waits for the per-entry `.jpg` before reading the tier, failing by name if it never lands.
+  Green with 25 ms and 250 ms injected; still fails if a disk hit is attributed to any other tier.
+
 - **Four Playwright workers raced one standalone build output** *(fixed, latent)* — the standalone
   spec built `dist/standalone/image_compare.html` in `beforeAll`, so at `--workers=4` four builds
   wrote the page other workers were serving (spied writes: 4 per invocation, 270 ms apart, a read 12 ms
