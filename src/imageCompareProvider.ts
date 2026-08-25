@@ -1778,10 +1778,10 @@ ${lead}
         this.debugMsg(state, `fs.watch event: ${eventType} ${filename} in ${dir}`);
         if (eventType === 'rename' && filename) {
           const filePath = path.join(fsDir, filename);
-          // 'rename' = appeared or vanished; probe async, a sync stat blocks the extension host.
+          // 'rename' = appeared or vanished; probed async (a sync stat blocks the extension host) and through the link (docs/file-watching.md: existence-probes-follow-the-link).
           setTimeout(() => {
             if (state.disposed) return;
-            fs.promises.access(filePath).then(
+            fs.promises.stat(filePath).then(
               () => {
                 if (state.disposed) return;
                 // On mounts where the VS Code watcher is silent, this is the only create signal (docs/file-watching.md: new-modality-dir-adopted).
@@ -1927,15 +1927,15 @@ ${lead}
         this.pool
           .submit(async () => {
             try {
-              // Async, never accessSync: a sync sweep blocks the host for seconds (docs/loading-architecture.md: no-sync-blocking).
-              await fs.promises.access(uri.fsPath);
+              // Async, never statSync: a sync sweep blocks the host for seconds (docs/loading-architecture.md: no-sync-blocking); `stat`, never `access` (docs/file-watching.md: existence-probes-follow-the-link).
+              await fs.promises.stat(uri.fsPath);
               return;
             } catch {
               // True only at this instant: re-verify before reporting (docs/file-watching.md: sweep-reverifies-before-report).
             }
             if (state.disposed) return;
             try {
-              await fs.promises.access(uri.fsPath);
+              await fs.promises.stat(uri.fsPath); // the same probe, for the same reason (docs/file-watching.md: existence-probes-follow-the-link)
               return; // came back — it was a rewrite, not a delete
             } catch {
               // still gone

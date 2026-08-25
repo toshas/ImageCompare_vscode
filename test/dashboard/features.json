@@ -978,6 +978,10 @@
             {
               "suite": "unit",
               "match": "costs one pooled task per watched dir, not one per file"
+            },
+            {
+              "suite": "unit",
+              "match": "whose existence probe reports the link, not its target"
             }
           ]
         },
@@ -1004,6 +1008,10 @@
             {
               "suite": "unit",
               "match": "a delete it reports carries the tracked URI"
+            },
+            {
+              "suite": "unit",
+              "match": "still lands as a delete, though the probe calls it present"
             }
           ]
         }

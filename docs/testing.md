@@ -386,6 +386,28 @@ the fix, the docs, and the CI check.
   `RelativePattern` too — and is left open with this reason rather than closed with a test that cannot
   fail. (`docs/file-watching.md: watched-dirs-are-uri-paths`)
 
+- **A `node:fs` existence probe that answers differently on Windows — the second one this session**
+  *(fixed)* — the sweep asked `fs.promises.access` whether a deletion candidate was still there, twice
+  (the check and the re-verification), and the `fs.watch` delete backup asked it the same question. On
+  Windows that call reports the attributes of a *symbolic link itself*, so a tracked file replaced by a
+  dangling link reads as **present**: the sweep returned early and never reported the deletion, and the
+  backup routed a vanished file into the *arrival* branch. `test/unit/pollCost.test.ts`'s C3b — a real
+  dangling symlink, whose name a listing still returns — was the witness, green on POSIX and red on
+  Windows CI, because POSIX rejects `access` and `stat` alike for such a link and **no filesystem a
+  Linux runner can build distinguishes the two calls**. Fixed by probing with `stat` at all three sites
+  (docs/file-watching.md: existence-probes-follow-the-link); the standalone poll had always
+  re-verified with `stat`, so this was also a divergence between the two products.
+  The durable lesson is the *class*, not the call: this is the **second** time in one session that a
+  `node:fs` API was handed something a POSIX runner cannot judge — the first was `fs.watch` given a URI
+  path (the finding above), which threw on Windows only. Both were invisible to every green suite for
+  the same reason, and both were closed the same way: **fake the platform's verdict at the `node:fs`
+  seam, never the filesystem**. `vi.mock('node:fs', …)` replacing exactly one function — `watch` there,
+  `promises.access` here, and here only for paths a test lists as lying — leaves the real symlink, the
+  real listing and the real provider in play. Without that stub the mutations below are no-ops on Linux
+  and would survive; with it they are killed. Three mutations in `scripts/mutation-check.mjs`, one per
+  probe, each verified SURVIVING with the two new tests reverted. When a `node:fs` call's *contract*
+  differs across platforms, assume the POSIX runner cannot see it and stub the seam.
+
 - **One message, two consumers with opposite latency needs: the sweep chased a held key** *(fixed)* —
   `setCurrentTuple` is posted ungated on every navigation so `cancelImageLoads` can kill stale
   full-image loads at once, and the open-time sweep took its centre from the same field. Holding Down

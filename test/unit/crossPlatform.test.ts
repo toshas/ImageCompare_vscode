@@ -99,11 +99,24 @@ describe('matchTuplesWithTrie case behavior is explicit', () => {
 // (docs/file-watching.md: watched-dirs-are-uri-paths)
 
 // Hoisted above the imports, so the provider's `import * as fs from 'node:fs'` resolves to this.
-// Only `watch` is replaced; every other fs call in the module stays real.
+// Only `watch` and `promises.access` are replaced; every other fs call in the module stays real, and
+// `access` lies only for the paths a test has listed.
+//
+// The second fake platform behaviour in this file, and the same class of trap as the first: a
+// `node:fs` call whose verdict differs on Windows. On Windows the probe behind `fs.access`
+// (GetFileAttributesW) reports the attributes of a *symbolic link itself*, so a name that is now a
+// dangling link reads as PRESENT there; POSIX rejects `access` and `stat` alike for such a name, so
+// nothing a Linux runner can put on disk distinguishes a probe that follows the link from one that
+// does not. Faking the verdict is the only way to test the difference here.
+// (docs/file-watching.md: existence-probes-follow-the-link)
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  const g = globalThis as unknown as { __icWatchCalls: Array<{ path: string; cb: (e: string, f: string) => void }> };
+  const g = globalThis as unknown as {
+    __icWatchCalls: Array<{ path: string; cb: (e: string, f: string) => void }>;
+    __icAccessLies: Set<string>;
+  };
   g.__icWatchCalls = [];
+  g.__icAccessLies = new Set<string>();
   return {
     ...actual,
     default: actual,
@@ -111,11 +124,22 @@ vi.mock('node:fs', async (importOriginal) => {
       g.__icWatchCalls.push({ path: String(p), cb });
       return { on: () => undefined, close: () => undefined };
     },
+    promises: {
+      ...actual.promises,
+      access: async (p: Parameters<typeof actual.promises.access>[0], mode?: number): Promise<void> => {
+        if (g.__icAccessLies.has(String(p))) return;
+        return actual.promises.access(p, mode);
+      },
+    },
   };
 });
 
 const watchCalls = (): Array<{ path: string; cb: (e: string, f: string) => void }> =>
   (globalThis as unknown as { __icWatchCalls: Array<{ path: string; cb: (e: string, f: string) => void }> }).__icWatchCalls;
+
+/** Paths whose `fs.access` resolves though the bytes are gone — the Windows verdict on a dangling symlink. */
+const accessLies = (): Set<string> =>
+  (globalThis as unknown as { __icAccessLies: Set<string> }).__icAccessLies;
 
 /** The provider's own `watchDirectory`, plus the panel state it needs and the deletes it reports. */
 function watcherBed() {
@@ -159,6 +183,24 @@ describe('the fs.watch delete backup is fed filesystem paths, not URI paths', ()
     bed.watch('/data/exp1/GT');
     expect(watchCalls()[0].path).toBe('/data/exp1/GT');
     bed.done();
+  });
+
+  it('a name that became a dangling link still lands as a delete, though the probe calls it present (Windows)', async () => {
+    const bed = watcherBed();
+    const dir = Uri.file('C:\\data\\exp1\\GT').path;
+    bed.watch(dir);
+    // Exactly the string the backup probes: path.join(Uri.file(dir).fsPath, filename).
+    accessLies().add(path.join(Uri.file(dir).fsPath, 'frame01.png'));
+    try {
+      watchCalls()[0].cb('rename', 'frame01.png');
+      await new Promise(r => setTimeout(r, 200));
+      // A probe that stops at the link takes the *appeared* branch here and the delete is never
+      // reported — on Windows only, which is why this file fakes the verdict rather than the disk.
+      expect(bed.deleted).toEqual([`${dir}/frame01.png`]);
+    } finally {
+      accessLies().clear();
+      bed.done();
+    }
   });
 
   it('a delete it reports carries the tracked URI, drive-letter case included', async () => {

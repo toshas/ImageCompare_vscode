@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig } from '../mocks/vscode';
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { Priority, WorkPool } from '../../src/workPool';
@@ -13,6 +13,37 @@ import { makeSolidPng } from '../fixtures/synthetic';
 // tracked file, every 10s, while ~6000 thumbnails waited behind them. The same cycle already reads
 // every directory, so the deletion candidates are derivable from the listing it has in hand.
 // (docs/file-watching.md: sweep-derives-deletions-from-listings)
+
+// Hoisted above the imports, so the provider's `import * as fs from 'node:fs'` resolves to this. Only
+// `promises.access` is replaced, and only for the paths a test has explicitly listed as lying: every
+// other fs call in the module — this file's own mkdtemp/symlink/rm included — stays real.
+//
+// The lie IS the platform. On Windows the probe behind `fs.access` (GetFileAttributesW) reports the
+// attributes of a *symbolic link itself*, so a tracked file replaced by a dangling link reads as
+// PRESENT there while its bytes are unreachable; POSIX rejects `access` and `stat` alike for such a
+// link, which is exactly why C3b above passes on Linux against code that fails on Windows CI. Faking
+// the probe's verdict — not the filesystem, which stays real, symlink and all — is the only way this
+// runner can tell a probe that follows the link from one that does not.
+// (docs/file-watching.md: existence-probes-follow-the-link)
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const g = globalThis as unknown as { __icAccessLies: Set<string> };
+  g.__icAccessLies = new Set<string>();
+  return {
+    ...actual,
+    default: actual,
+    promises: {
+      ...actual.promises,
+      access: async (p: Parameters<typeof actual.promises.access>[0], mode?: number): Promise<void> => {
+        if (g.__icAccessLies.has(String(p))) return;
+        return actual.promises.access(p, mode);
+      },
+    },
+  };
+});
+
+/** Paths whose `fs.access` resolves though the bytes are gone — the Windows verdict on a dangling symlink. */
+const accessLies = (): Set<string> => (globalThis as unknown as { __icAccessLies: Set<string> }).__icAccessLies;
 
 const CHANNEL = 'ImageCompare';
 const tmpRoots: string[] = [];
@@ -124,6 +155,7 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
   });
 
   afterEach(() => {
+    accessLies().clear();
     disposeDebugLog();
     __resetConfig();
     __resetChannels();
@@ -216,6 +248,29 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
     expect(fs.readdirSync(path.dirname(victim))).toContain(path.basename(victim));
     await runSweep(bed);
     expect(deleteLines().some(l => l.includes(asLogged(victim)))).toBe(true);
+    finish(bed);
+  });
+
+  // C3b as Windows runs it. Same real dangling symlink; the only fake is the probe's verdict, which
+  // there reports the link and not its target. Without that the sweep's existence checks are
+  // indistinguishable on this runner — `access` and `stat` both reject — and the deletion goes
+  // unreported on Windows only. The other direction (a candidate that is really still there must NOT
+  // be reported) is pinned by the two tests above, which run under this same mock with nothing lying.
+  it('a dangling symlink whose existence probe reports the link, not its target (Windows), is still reported gone', async () => {
+    const bed = makeBed(2, 1);
+    await runSweep(bed);
+    const victim = bed.files[1];
+    const target = path.join(path.dirname(victim), 'target-that-goes-away.png');
+    fs.writeFileSync(target, makeSolidPng(4, 4, [9, 9, 9]));
+    fs.rmSync(victim);
+    fs.symlinkSync(target, victim);
+    fs.rmSync(target);
+    // Exactly what the provider probes: the tracked URI's fsPath.
+    accessLies().add(Uri.file(victim).fsPath);
+    await runSweep(bed);
+    expect(deleteLines().some(l => l.includes(asLogged(victim)))).toBe(true);
+    // The survivor of the same directory is untouched: a probe that follows the link still finds it.
+    expect(deleteLines().some(l => l.includes(asLogged(bed.files[0])))).toBe(false);
     finish(bed);
   });
 });

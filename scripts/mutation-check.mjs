@@ -1354,6 +1354,30 @@ const mutations = [
     killedBy: 'unwatched-dir test (a tracked file no listing covers must keep its per-file check)'
   },
   {
+    name: "provider: sweep's existence check stops at the link (a dangling symlink reads present on Windows)",
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '              await fs.promises.stat(uri.fsPath);\n              return;',
+    replace: '              await fs.promises.access(uri.fsPath);\n              return;',
+    killedBy: 'dangling-symlink-with-a-lying-probe test (the check must resolve the target, not the name)'
+  },
+  {
+    name: "provider: sweep's RE-verification stops at the link (the deletion is dropped at the second probe)",
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '              await fs.promises.stat(uri.fsPath); // the same probe, for the same reason',
+    replace: '              await fs.promises.access(uri.fsPath); // the same probe, for the same reason',
+    killedBy: 'dangling-symlink-with-a-lying-probe test (both probes must resolve the target)'
+  },
+  {
+    name: 'provider: fs.watch delete backup stops at the link (a vanished file is routed to the arrival path)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/crossPlatform.test.ts',
+    find: '            fs.promises.stat(filePath).then(',
+    replace: '            fs.promises.access(filePath).then(',
+    killedBy: 'dangling-link backup test (the appeared-or-vanished probe must resolve the target)'
+  },
+  {
     name: 'provider: fs.watch handed the URI path (the delete backup never armed on Windows)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/crossPlatform.test.ts',

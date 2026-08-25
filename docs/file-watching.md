@@ -408,7 +408,19 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   diverge here.
 - **`sweep-reverifies-before-report`** — the sweep re-verifies before reporting a deletion. A batched
   "missing" observation — a name a listing lost, or a file whose own check failed — is stale by the
-  time it is acted on, so the report happens only after a second `access` still fails.
+  time it is acted on, so the report happens only after a second probe still fails. Both of the
+  sweep's probes are `stat`; the standalone's single probe always was (`existence-probes-follow-the-link`).
+- **`existence-probes-follow-the-link`** — every "is this file still there?" probe in the extension
+  resolves the *target*, not the name: `fs.promises.stat`, never `fs.promises.access`. On Windows the
+  call behind `access` reports the attributes of a symbolic link **itself**, so a tracked file
+  replaced by a dangling link reads as present there, and the deletion is never reported; on POSIX
+  both calls reject, which is what hides the difference from every runner but Windows. Three sites:
+  the sweep's per-candidate check and its re-verification (`sweep-reverifies-before-report`), and the
+  `fs.watch` delete backup's appeared-or-vanished branch, where the same verdict routes a vanished
+  file into the *arrival* path instead. The standalone poll already re-verifies with `stat`
+  (`sweep-derives-deletions-from-listings`); this is the rule that keeps the two products from
+  diverging. A probe faked at the `node:fs` seam is the only way a non-Windows runner can see this
+  (docs/testing.md, Findings).
 - **`duplicate-reports-idempotent`** — duplicate reports are idempotent. The same delete from watcher
   + `fs.watch` + sweep produces one state change.
 - **`watched-dirs-are-uri-paths`** — `watchedDirs`, `watchersByDir` and the sweep's per-directory
