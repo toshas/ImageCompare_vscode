@@ -1354,6 +1354,30 @@ const mutations = [
     killedBy: 'unwatched-dir test (a tracked file no listing covers must keep its per-file check)'
   },
   {
+    name: 'provider: fs.watch handed the URI path (the delete backup never armed on Windows)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/crossPlatform.test.ts',
+    find: '      const fsWatcher = fs.watch(fsDir, (eventType, filename) => {',
+    replace: '      const fsWatcher = fs.watch(dir, (eventType, filename) => {',
+    killedBy: 'Windows-watched-dir test (node must be handed a drive-rooted path, not /C:/...)'
+  },
+  {
+    name: 'provider: fs.watch delete rebuilds its URI from the filesystem path (drive-letter case flips)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/crossPlatform.test.ts',
+    find: '                const fileUri = vscode.Uri.file(`${dir}/${filename}`);',
+    replace: '                const fileUri = vscode.Uri.file(filePath);',
+    killedBy: 'reported-delete test (the URI must equal the tracked one, drive-letter case included)'
+  },
+  {
+    name: 'provider: sweep groups tracked files by filesystem path (every file becomes a stray on Windows)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/crossPlatform.test.ts',
+    find: '          const cut = img.uri.path.lastIndexOf(\'/\');',
+    replace: '          const cut = img.uri.fsPath.lastIndexOf(\'/\');',
+    killedBy: 'Windows sweep-grouping test (one pooled task per watched dir, not per file)'
+  },
+  {
     name: 'pollPlan: rename pairing guesses instead of using matchDeletedFile',
     file: 'src/pollPlan.ts',
     suite: 'test/unit/pollPlan.test.ts',

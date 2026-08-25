@@ -974,12 +974,16 @@
             {
               "suite": "unit",
               "match": "a tracked file under no listed directory keeps its own existence check"
+            },
+            {
+              "suite": "unit",
+              "match": "costs one pooled task per watched dir, not one per file"
             }
           ]
         },
         {
           "id": "match-crossplatform",
-          "name": "Path disambiguation (POSIX/Windows parity)",
+          "name": "Path disambiguation, and the URI-vs-filesystem path space at the node fs seam (POSIX/Windows parity)",
           "tests": [
             {
               "suite": "unit",
@@ -988,6 +992,18 @@
             {
               "suite": "unit",
               "match": "Windows drive-letter paths disambiguate"
+            },
+            {
+              "suite": "unit",
+              "match": "a Windows watched dir reaches node as a drive-rooted path"
+            },
+            {
+              "suite": "unit",
+              "match": "a POSIX watched dir is handed through byte for byte"
+            },
+            {
+              "suite": "unit",
+              "match": "a delete it reports carries the tracked URI"
             }
           ]
         }

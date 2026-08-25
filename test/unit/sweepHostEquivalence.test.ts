@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { Uri, __resetConfig, __setConfig } from '../mocks/vscode';
+import { Uri, workspace, __resetConfig, __setConfig } from '../mocks/vscode';
 import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
 import { poolWidth, WorkPool } from '../../src/workPool';
@@ -241,7 +241,17 @@ async function standaloneHost(): Promise<Host> {
   // vscode shim), so a literal specifier would drag it into tsconfig.test.json's program and fail
   // the gates job on errors that are not the test's.
   const adapterModule = '../../standalone/adapter';
+  const shimModule = '../../standalone/shims/vscode';
   await import(adapterModule);
+  // Vitest's `vscode` alias points src/fileService.ts at test/mocks/vscode.ts, whose workspace.fs
+  // reads the REAL filesystem — so the standalone's own scan bypassed its backend here and worked
+  // only while the virtual root ('/' + handle name) happened to name a real directory, which is true
+  // on POSIX and impossible on Windows (no native path starts with '/C:/'). In the browser that scan
+  // goes through the backend, because there `vscode` IS the shim. Point the mock's fs at the shim's
+  // for this host's lifetime and it does here too — and the handle name goes back to being a name.
+  const shimFs = (await import(shimModule) as { workspace: { fs: Record<string, unknown> } }).workspace.fs;
+  const mockFs = { ...(workspace.fs as unknown as Record<string, unknown>) };
+  Object.assign(workspace.fs as unknown as Record<string, unknown>, shimFs);
   const api = browser.api();
   const seam = ((globalThis as unknown as { window: { __ic_standalone: { open(h: unknown): Promise<void>; pollIntervalMs: number } } }).window).__ic_standalone;
   // The adapter's own test seam, used to push the external-change poll out of this test's way: it is
@@ -249,9 +259,10 @@ async function standaloneHost(): Promise<Host> {
   seam.pollIntervalMs = 60 * 60 * 1000;
 
   // The adapter's own reads, gated: the sweep's dispatch order is the order they are asked for.
-  // createFsaBackend roots every path at `/<handle name>`, so the handle is named for the temp dir
-  // itself and the paths the real scan produces resolve straight back through it.
-  const handle = gatedHandle(root.slice(1), root, (name, dir) => new Promise<void>(resolve => {
+  // createFsaBackend roots every path at `/<handle name>`, and every path the scan produces resolves
+  // back through the handle, so the name is a NAME — a real FSA handle's name is a directory's, never
+  // a path, and nothing here may depend on the temp tree's own shape.
+  const handle = gatedHandle('ic-equiv-standalone', root, (name, dir) => new Promise<void>(resolve => {
     asked.push(rowOf(name));
     askedSlots.push(`${dir}-${rowOf(name)}`);
     resolvers.push(resolve);
@@ -272,7 +283,14 @@ async function standaloneHost(): Promise<Host> {
       for (const r of resolvers.splice(0, n)) r();
       await settle(4);
     },
-    dispose: () => { for (const r of resolvers.splice(0)) r(); }
+    dispose: () => {
+      for (const r of resolvers.splice(0)) r();
+      // Restore every key we replaced, not the happy-path subset: a throw between splice and
+      // dispose would otherwise leave the shared mock's fs pointing at this host's backend.
+      for (const k of Object.keys(mockFs)) {
+        (workspace.fs as unknown as Record<string, unknown>)[k] = (mockFs as Record<string, unknown>)[k];
+      }
+    }
   };
 }
 

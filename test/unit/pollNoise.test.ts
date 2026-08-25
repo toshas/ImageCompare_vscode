@@ -52,7 +52,7 @@ function makeBed(): Bed {
     disposed: false,
     visible: true,
     deleteSweepRunning: false,
-    watchedDirs: new Set([base, modDir]),
+    watchedDirs: new Set([Uri.file(base).path, Uri.file(modDir).path]),
     baseUri: Uri.file(base),
     barrenDirs: new Map(),
     adoptingDirs: new Set(),

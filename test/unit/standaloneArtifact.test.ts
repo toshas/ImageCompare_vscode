@@ -40,6 +40,11 @@ const setMtime = (file: string, ms: number): void => {
 
 const T0 = 1_700_000_000_000;
 
+/** A repo-relative path in the platform's own form — what `path.relative` returns, and so what
+ * `newerInput` carries. The field is only ever interpolated into a human message, never parsed, so
+ * the harness keeps `path.relative`'s contract and the assertions come to it. */
+const nativeRel = (posix: string): string => path.join(...posix.split('/'));
+
 /** A tree with all the usual inputs older than the artifact. */
 function freshTree(extra: Record<string, string> = {}): string {
   const root = makeTree({
@@ -80,17 +85,17 @@ describe('standalone artifact freshness', () => {
     ['tsconfig.standalone.json'],
     ['package.json'],
     ['dist/webview.js'],
-  ])('reports stale when %s is newer than the artifact', (rel) => {
+  ])('reports stale when %s is newer than the artifact', (input) => {
     const root = freshTree();
-    setMtime(path.join(root, rel), T0 + 9000);
-    expect(standaloneArtifactState(root)).toEqual({ state: 'stale', newerInput: rel });
+    setMtime(path.join(root, input), T0 + 9000);
+    expect(standaloneArtifactState(root)).toEqual({ state: 'stale', newerInput: nativeRel(input) });
   });
 
   it('treats an input that shares the artifact mtime as stale (a build reads before it writes)', () => {
     const root = freshTree();
     const artifactMs = fs.statSync(artifactPath(root)).mtimeMs;
     setMtime(path.join(root, 'src', 'webviewShell.ts'), artifactMs);
-    expect(standaloneArtifactState(root)).toEqual({ state: 'stale', newerInput: 'src/webviewShell.ts' });
+    expect(standaloneArtifactState(root)).toEqual({ state: 'stale', newerInput: nativeRel('src/webviewShell.ts') });
   });
 
   it.each([

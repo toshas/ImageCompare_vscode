@@ -355,6 +355,37 @@ the fix, the docs, and the CI check.
 
 ## Findings (caught by this testbed)
 
+- **The poll's dir grouping silently degraded to per-file on Windows — and the fs.watch backup never
+  armed there at all** *(fixed)* — `watchedDirs`, `watchersByDir` and the sweep's per-directory
+  grouping are keyed in URI-path space (`/C:/data/exp1/GT`); node's `fs` takes filesystem paths. On
+  POSIX the two are the same string, so the whole layer of tests above could not see the difference,
+  and `test/unit/crossPlatform.test.ts` — the one suite that feeds Windows-shaped input on purpose —
+  covered only naming and matching, never the watcher or the sweep. Two consequences, both shipped:
+  `fs.watch` was handed the URI path, which on Windows resolves `/C:/…` to `C:` as a *path component*
+  NTFS cannot hold, so the call threw for every watched dir, was swallowed by its own `catch`, and no
+  release ever had the delete backup on Windows (`test/unit/openRollup.test.ts`'s handle census read
+  0 there and 3 everywhere else — the same bug from the other end); and `test/unit/pollCost.test.ts`
+  hand-built `watchedDirs` from `path.join`, so on Windows every tracked file missed the lookup and
+  became a *stray*, putting the sweep back on one existence check per file — 29 tasks where 4 were
+  expected, the 7407-task flood that suite exists to forbid, reported as a bed defect rather than a
+  product one. `crossPlatform.test.ts` now drives the real `watchDirectory` and the real
+  `runDeleteSweep` with Windows-shaped URIs from a POSIX runner and pins what node is handed, what
+  URI a reported delete carries (built from the tracked key, never re-parsed from `fsPath`, which
+  lowercases the drive letter), and that a cycle still costs one pooled task per directory; three
+  mutations, each surviving without those tests. `test/mocks/vscode.ts`'s `fsPath` now lowercases the
+  drive letter as vscode-uri does, so the round-trip is visibly not the identity on a POSIX runner.
+  What is **not** mutation-covered: the three `watchedDirs` producers themselves. On Linux
+  `uri.fsPath === uri.path` for every path a test can create, so a producer drifting into filesystem
+  space is a no-op here, so no mutation of *those producers* bites on a POSIX runner (synthetic
+  `/C:/` state is constructible at Layer 1 — the consumers are pinned that way); the invariant citation
+  (`docs/file-watching.md: watched-dirs-are-uri-paths`) at each of the three sites and the consumer
+  tests above are what stand in for it. Also **not** covered: UNC. Real vscode carries a `\\server\share`
+  tree's server in the URI's *authority*, which `watchedDirs` (built from `uri.path`) never holds and
+  the mock's `Uri` has no field for, so no assertion here could speak to it; the gap is wider than
+  this fix — `Uri.file(dir).with({ scheme })` drops the authority for the VS Code watcher's
+  `RelativePattern` too — and is left open with this reason rather than closed with a test that cannot
+  fail. (`docs/file-watching.md: watched-dirs-are-uri-paths`)
+
 - **One message, two consumers with opposite latency needs: the sweep chased a held key** *(fixed)* —
   `setCurrentTuple` is posted ungated on every navigation so `cancelImageLoads` can kill stale
   full-image loads at once, and the open-time sweep took its centre from the same field. Holding Down

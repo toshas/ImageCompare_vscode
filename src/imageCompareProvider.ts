@@ -273,7 +273,7 @@ export class ImageCompareProvider {
         }
       }
 
-      // Watched dirs: base (mode 1), each modality dir (mode 2), plus every leaf dir holding images.
+      // Watched dirs: base (mode 1), each modality dir (mode 2), plus every leaf dir holding images — keyed by `.path`, never a native path (docs/file-watching.md: watched-dirs-are-uri-paths).
       const watchedDirs = new Set<string>();
       if (baseUri) {
         watchedDirs.add(baseUri.path);
@@ -1688,6 +1688,7 @@ ${lead}
         recordDirListing(state.barrenDirs, dirUri.path, stat.mtime, hasImages);
         if (!hasImages) return;
 
+        // `.path`, like every other producer of this set (docs/file-watching.md: watched-dirs-are-uri-paths).
         if (!state.watchedDirs.has(dirUri.path)) {
           state.watchedDirs.add(dirUri.path);
           this.watchDirectory(state, dirUri.path, scheme, true);
@@ -1724,6 +1725,7 @@ ${lead}
       ?? (state.baseUri ? vscode.Uri.joinPath(state.baseUri, modality) : undefined);
     if (!dirUri) return;
 
+    // Keyed in URI space like watchedDirs, so the two agree on every platform (docs/file-watching.md: watched-dirs-are-uri-paths).
     const dir = dirUri.path;
     const rec = state.watchersByDir.get(dir);
     if (!rec) return;
@@ -1769,11 +1771,13 @@ ${lead}
 
     // Backs up VS Code's onDidDelete, which doesn't fire on some platform/filesystem combos.
     if (!isLeaf || scheme !== 'file') return;
+    // node's fs takes filesystem paths; `dir` is a URI path, and on Windows the two differ (docs/file-watching.md: watched-dirs-are-uri-paths).
+    const fsDir = vscode.Uri.file(dir).fsPath;
     try {
-      const fsWatcher = fs.watch(dir, (eventType, filename) => {
+      const fsWatcher = fs.watch(fsDir, (eventType, filename) => {
         this.debugMsg(state, `fs.watch event: ${eventType} ${filename} in ${dir}`);
         if (eventType === 'rename' && filename) {
-          const filePath = path.join(dir, filename);
+          const filePath = path.join(fsDir, filename);
           // 'rename' = appeared or vanished; probe async, a sync stat blocks the extension host.
           setTimeout(() => {
             if (state.disposed) return;
@@ -1782,12 +1786,13 @@ ${lead}
                 if (state.disposed) return;
                 // On mounts where the VS Code watcher is silent, this is the only create signal (docs/file-watching.md: new-modality-dir-adopted).
                 if (state.baseUri && dir === state.baseUri.path) {
-                  void this.adoptNewModalityDir(state, vscode.Uri.file(filePath), filename);
+                  void this.adoptNewModalityDir(state, vscode.Uri.file(`${dir}/${filename}`), filename);
                 }
               },
               () => {
                 if (state.disposed) return;
-                const fileUri = vscode.Uri.file(filePath);
+                // Built from `dir`, never from `filePath`: fsPath lowercases the drive letter, so the round trip would name a URI no tracked image equals (docs/file-watching.md: watched-dirs-are-uri-paths).
+                const fileUri = vscode.Uri.file(`${dir}/${filename}`);
                 this.debugMsg(state, `fs.watch delete: ${filePath}`);
                 this.handleFileDeleted(state, fileUri);
               }
@@ -1873,6 +1878,7 @@ ${lead}
       const strays: vscode.Uri[] = [];
       for (const tuple of state.scanResult.tuples) {
         for (const img of tuple.images) {
+          // Both sides in URI space, so the lookup hits on Windows too (docs/file-watching.md: watched-dirs-are-uri-paths).
           const cut = img.uri.path.lastIndexOf('/');
           const known = knownByDir.get(img.uri.path.substring(0, cut));
           if (known) known.set(img.uri.path.substring(cut + 1), img.uri);
@@ -2362,7 +2368,7 @@ ${lead}
     );
 
     if (state.baseUri && !state.disposed) {
-      const newDir = vscode.Uri.joinPath(state.baseUri, modalityName).path;
+      const newDir = vscode.Uri.joinPath(state.baseUri, modalityName).path; // `.path`: same space as the rest of the set (docs/file-watching.md: watched-dirs-are-uri-paths)
       const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme;
       // Setup runs once at open, so a dir discovered later must be watched here or never (docs/file-watching.md: watched-dirs-have-watchers).
       if (scheme && !state.watchedDirs.has(newDir)) {

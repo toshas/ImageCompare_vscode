@@ -40,9 +40,11 @@ export class Uri {
   }
 
   get fsPath(): string {
-    // Mirror real vscode: a drive-letter path '/C:/x' maps to a filesystem path 'C:/x'
-    // (node's fs accepts forward slashes on Windows); POSIX paths pass through unchanged.
-    return /^\/[a-zA-Z]:/.test(this.path) ? this.path.slice(1) : this.path;
+    // Mirror real vscode: a drive-letter path '/C:/x' maps to a filesystem path 'c:/x' — the leading
+    // slash goes and the drive letter is LOWERCASED, exactly as vscode-uri's uriToFsPath does, so a
+    // round-trip through fsPath is visibly not the identity here either. Separators stay forward
+    // slashes (node's fs accepts them on Windows); POSIX paths pass through unchanged.
+    return /^\/[a-zA-Z]:/.test(this.path) ? this.path[1].toLowerCase() + this.path.slice(2) : this.path;
   }
 
   toString(): string {

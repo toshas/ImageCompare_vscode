@@ -411,6 +411,20 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   time it is acted on, so the report happens only after a second `access` still fails.
 - **`duplicate-reports-idempotent`** — duplicate reports are idempotent. The same delete from watcher
   + `fs.watch` + sweep produces one state change.
+- **`watched-dirs-are-uri-paths`** — `watchedDirs`, `watchersByDir` and the sweep's per-directory
+  grouping are keyed in **URI path** space (`uri.path` — `/C:/data/exp1/GT` on Windows), never in
+  filesystem space. Every producer takes its key from a `.path`; every consumer that hands a watched
+  dir to node's `fs` converts once, with `Uri.file(dir).fsPath`, and builds any URI it reports back
+  from the *original* key rather than from that filesystem path — `fsPath` lowercases the drive
+  letter, so the round trip yields a URI no tracked image equals and the delete is reported against a
+  slot that does not exist. On POSIX the two spaces are the same string, which is the whole trap:
+  every consequence of mixing them is invisible to a test that does not feed Windows-shaped input,
+  and both consequences shipped. `fs.watch` was given the URI path, so on Windows it raised on
+  `/C:/…` (which resolves to `C:` as a *path component*) for every watched dir and the delete backup
+  never armed on any release; and a bed that hand-built `watchedDirs` from `path.join` made every
+  tracked file a stray, putting the sweep back on one existence check per file
+  (`sweep-derives-deletions-from-listings`) with no test able to see it.
+  `test/unit/crossPlatform.test.ts` pins both from a POSIX runner.
 - **`watched-dirs-have-watchers`** — every entry in `watchedDirs` has a live watcher behind it.
   Watcher setup runs once per panel, so a directory discovered later must create its own watcher at
   that moment or stay inert until the panel is reopened.

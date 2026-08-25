@@ -20,6 +20,16 @@ afterAll(() => {
   for (const r of tmpRoots) fs.rmSync(r, { recursive: true, force: true });
 });
 
+// Two spaces meet in this bed and they are NOT the same string on Windows. `watchedDirs` and every
+// tracked `img.uri.path` are URI paths (`/C:/Users/.../mod0`), which is what the provider builds them
+// from; `path.join` and the debug log's `uri.fsPath` are filesystem paths (`c:/Users/.../mod0`). A bed
+// that hand-built `watchedDirs` from `path.join` made every tracked file a *stray* on Windows, and the
+// sweep silently degraded to one pooled task per FILE — the exact flood this suite exists to forbid,
+// invisible because the bed lied rather than because the provider did.
+const uriPath = (nativePath: string): string => Uri.file(nativePath).path;
+/** A tracked file as the delete log names it: the provider prints `uri.fsPath`, so the test must too. */
+const asLogged = (nativePath: string): string => Uri.file(nativePath).fsPath;
+
 interface Bed {
   provider: ImageCompareProvider;
   state: Record<string, unknown>;
@@ -57,7 +67,7 @@ function makeBed(tuples: number, modalities: number): Bed {
     disposed: false,
     visible: true,
     deleteSweepRunning: false,
-    watchedDirs: new Set([base, ...dirs]),
+    watchedDirs: new Set([base, ...dirs].map(uriPath)),
     baseUri: Uri.file(base),
     barrenDirs: new Map(),
     adoptingDirs: new Set(),
@@ -146,7 +156,7 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
     fs.rmSync(bed.files[3]);
     await runSweep(bed);
     expect(deleteLines()).toHaveLength(1);
-    expect(deleteLines()[0]).toContain(bed.files[3]);
+    expect(deleteLines()[0]).toContain(asLogged(bed.files[3]));
     finish(bed);
   });
 
@@ -158,7 +168,7 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
     const lines = deleteLines();
     expect(lines).toHaveLength(3);
     for (const f of bed.files.filter(f => f.startsWith(bed.dirs[1] + path.sep))) {
-      expect(lines.some(l => l.includes(f))).toBe(true);
+      expect(lines.some(l => l.includes(asLogged(f)))).toBe(true);
     }
     finish(bed);
   });
@@ -186,11 +196,11 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
   it('a tracked file under no listed directory keeps its own existence check', async () => {
     const bed = makeBed(2, 1);
     // No listing pass covers this dir, so the per-file fallback is the only thing that can see it.
-    (bed.state.watchedDirs as Set<string>).delete(bed.dirs[0]);
+    (bed.state.watchedDirs as Set<string>).delete(uriPath(bed.dirs[0]));
     await runSweep(bed);
     fs.rmSync(bed.files[0]);
     await runSweep(bed);
-    expect(deleteLines().some(l => l.includes(bed.files[0]))).toBe(true);
+    expect(deleteLines().some(l => l.includes(asLogged(bed.files[0])))).toBe(true);
     finish(bed);
   });
 
@@ -205,7 +215,7 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
     fs.rmSync(target); // the link survives in the listing; only its target is gone
     expect(fs.readdirSync(path.dirname(victim))).toContain(path.basename(victim));
     await runSweep(bed);
-    expect(deleteLines().some(l => l.includes(victim))).toBe(true);
+    expect(deleteLines().some(l => l.includes(asLogged(victim)))).toBe(true);
     finish(bed);
   });
 });
