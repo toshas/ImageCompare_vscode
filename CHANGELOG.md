@@ -42,6 +42,14 @@ All notable changes to the ImageCompare extension will be documented in this fil
   inside local builds. CI releases were never affected
 - **Prefetch is scoped to the visible column**; invalidated slots never repaint stale thumbnails;
   abandoned sweeps stop reading
+- **Cropping in the standalone build**, which had never worked in any release: the shared crop flow
+  calls `Buffer.isBuffer`, and the browser `Buffer` shim did not provide it, so every image failed
+  and the page reported "Failed to crop any images". A gate now checks that every call a bundled
+  module makes on a shim actually exists on it
+- **Deletion detection on Windows**: `fs.watch` was handed a URI path, which `path.win32.resolve`
+  turns into `\C:\...` — a drive letter as a path component — so watchers never armed. Separately,
+  three existence probes used `fs.access`, which on Windows reports the link rather than its target,
+  so a file that became a dangling symlink was never reported gone
 
 ### Internal
 - The mutation harness runs against a sandboxed copy, so a killed run can no longer leave mutated

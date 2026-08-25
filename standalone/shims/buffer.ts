@@ -1,4 +1,4 @@
-/** Minimal browser Buffer: exactly the subset pngText.ts and ppmxParser.ts use, injected as the global by scripts/build-standalone.mjs (docs/standalone.md). */
+/** Minimal browser Buffer: exactly the subset the bundled src/ modules use, injected as the global by scripts/build-standalone.mjs; scripts/check-sidedness.mjs gate (d) is what keeps "exactly" true (docs/standalone.md: shim-covers-bundled-calls). */
 
 type MiniEncoding = 'utf8' | 'utf-8' | 'latin1' | 'binary' | 'ascii';
 
@@ -65,5 +65,7 @@ const BufferShim = MiniBuffer as unknown as typeof globalThis.Buffer;
 BufferShim.from = miniFrom as unknown as typeof BufferShim.from;
 BufferShim.alloc = ((size: number) => new MiniBuffer(size)) as unknown as typeof BufferShim.alloc;
 BufferShim.concat = miniConcat as unknown as typeof BufferShim.concat;
+// `false` for a plain Uint8Array is the load-bearing half: it is what makes cropFlow wrap raw canvas bytes before pngText reads them (docs/standalone.md: shim-covers-bundled-calls).
+BufferShim.isBuffer = ((v: unknown) => v instanceof MiniBuffer) as unknown as typeof BufferShim.isBuffer;
 
 export { BufferShim as Buffer };

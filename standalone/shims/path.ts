@@ -1,4 +1,4 @@
-/** Browser shim of node `path` (POSIX only) — just the surface sessionFile.ts and the adapter touch (docs/standalone.md). */
+/** Browser shim of node `path` (POSIX only) — just the surface sessionFile.ts and the adapter touch, kept complete by scripts/check-sidedness.mjs gate (d) (docs/standalone.md: shim-covers-bundled-calls). */
 
 export function isAbsolute(p: string): boolean {
   return p.startsWith('/');

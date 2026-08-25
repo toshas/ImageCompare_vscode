@@ -1224,6 +1224,22 @@ const mutations = [
     killedBy: 'tEXt round-trip test (written bytes must read back the six-integer crop meta)'
   },
   {
+    name: 'shim: browser Buffer loses isBuffer (the standalone crop regression)',
+    file: 'standalone/shims/buffer.ts',
+    suite: 'test/unit/shimParity.test.ts',
+    find: 'BufferShim.isBuffer = ((v: unknown) => v instanceof MiniBuffer) as unknown as typeof BufferShim.isBuffer;',
+    replace: '/* mutated: no isBuffer */',
+    killedBy: 'shim-parity suite (the shared crop flow, run on the real shim, must not answer cropError)'
+  },
+  {
+    name: 'shim: isBuffer answers true for plain Uint8Array (raw canvas bytes reach pngText unwrapped)',
+    file: 'standalone/shims/buffer.ts',
+    suite: 'test/unit/shimParity.test.ts',
+    find: '((v: unknown) => v instanceof MiniBuffer)',
+    replace: '((v: unknown) => v instanceof Uint8Array)',
+    killedBy: 'shim-parity suite (plain bytes must be wrapped, or pngInjectText has no readUInt32BE to call)'
+  },
+  {
     name: 'exportDeck: comparison_NN numbering stage bypassed (fixed name saved)',
     file: 'src/pptxDeck.ts',
     suite: 'test/unit/exportDeck.test.ts',

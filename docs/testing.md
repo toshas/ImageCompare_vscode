@@ -865,6 +865,30 @@ the fix, the docs, and the CI check.
   a one-word edit. Guarded by `scripts/check-generated-output.mjs`, which was re-armed with the
   original `_OUTPUT_NAME` value and confirmed to go red on both of its halves.
 
+- **Standalone cropping was broken 100% of the time, and 274 mutations over 578 tests could not see
+  it** *(fixed)* — `src/cropFlow.ts` is SHARED, and it calls `Buffer.isBuffer`; `standalone/shims/buffer.ts`
+  attached only `from`, `alloc` and `concat`, so in the browser the call threw, `cropFlow`'s own
+  per-image `catch` swallowed it, every modality returned `undefined` and the user got
+  `Crop failed: Failed to crop any images` — for every crop since the shared crop flow landed
+  (`6ad145e`, the standalone's first commit: standalone cropping has never worked). **The class, not the
+  typo:** shared code compiles against node's `Buffer`/`path`/`vscode` **types** and runs against a
+  hand-rolled **shim**, and nothing proved the two agree. `tsc` cannot: the types are node's. The unit
+  layer could not either — a test importing `cropFlow` gets node's real `Buffer`, so the bug is
+  invisible at exactly the layer that pins the crop transcript, which is why `test/unit/crop*` is
+  green with the shim's `isBuffer` deleted (verified: both new mutations SURVIVE when judged by
+  `test/unit/crop`). Two things close it. `test/unit/shimParity.test.ts` runs the real `performCrop`
+  with `globalThis.Buffer` stubbed to the real shim — the same substitution esbuild's `inject` makes
+  for the bundle — against a `renderCrop` returning a plain `Uint8Array`, as a canvas blob does; it
+  reproduces `cropError` on the unfixed shim and kills both mutations. And `scripts/check-sidedness.mjs`
+  gate (d) makes the class mechanical: it walks the standalone bundle's closure (which it already
+  derives) and resolves every `Buffer.x` / `path.x` / `vscode.a.b` chain against the shim's **real**
+  runtime surface, obtained by bundling and evaluating the shim with esbuild rather than parsing it.
+  Confirmed red on the unfixed tree, naming `src/cropFlow.ts` and `Buffer.isBuffer`, and it is
+  noise-free on the current tree: 26 bundled modules, 3 shims, exactly the one true gap. What it does
+  **not** check is behaviour — a shim static that exists and lies is a test's job, which is why the
+  mutation that flips `isBuffer` to answer `true` for a plain `Uint8Array` is there too.
+  (`docs/standalone.md: shim-covers-bundled-calls`)
+
 ## The generated-output rule
 
 **A generator writes only into a directory `.gitignore` already covers — and it writes.** Not a style

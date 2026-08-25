@@ -96,7 +96,9 @@ the complement and needs no doc list.
 `npm run build:standalone` → `dist/standalone/image_compare.html`. The script
 (`scripts/build-standalone.mjs`) type-checks `standalone/` via `tsconfig.standalone.json`, esbuild-bundles
 the adapter with `vscode` and node `path` aliased to `standalone/shims/` (a minimal hand-rolled `Buffer`
-subset is injected as the global; `process.platform` is defined to `linux` for `sessionFile`), runs
+subset is injected as the global; `process.platform` is defined to `linux` for `sessionFile`) — the
+shims are minimal by design and `scripts/check-sidedness.mjs` gate (d) is what keeps "minimal" from
+becoming "incomplete" (see `shim-covers-bundled-calls`) — runs
 `npm run compile` if `dist/webview.js` is missing (rerun it yourself if the bundle is stale), and hands
 everything to `standalone/compose.mjs`, which inlines shell + both bundles into the one page. The
 version shown on the landing page is injected from `package.json` at build time. Crop metadata is
@@ -223,6 +225,19 @@ edited by hand, and the README it receives says so.
 - **`crop-plan-shared`** — crop file naming (`_cropNN`, max across every modality directory) and
   rect scaling/clamping live only in `src/cropPlan.ts`; both products call it, so a crop written
   by one is numbered and dimensioned exactly as the other would.
+- **`shim-covers-bundled-calls`** — `standalone/shims/{buffer,path,vscode}.ts` must provide every
+  member the modules in the standalone bundle actually call. A shared `src/` module typechecks
+  against node's real `Buffer`/`path`/`vscode` **types** while the browser runs it against these
+  hand-written shims, so a missing member compiles clean, passes every unit test (node's real
+  `Buffer` is what a Vitest import gets) and throws only in a user's browser, mid-action, inside
+  whatever `catch` happens to be around it. `Buffer.isBuffer` was missing from the day the shared
+  crop flow landed and made standalone cropping fail on every image, reported only as
+  "Failed to crop any images". `scripts/check-sidedness.mjs` gate (d) resolves every `Buffer.x`,
+  `path.x` and `vscode.a.b` chain in the bundle's closure against the shim's real runtime surface
+  (the shim is bundled and evaluated, never parsed). Presence is all a gate can prove; a shim member
+  that exists and behaves differently from node's is a **test's** job — `test/unit/shimParity.test.ts`
+  runs the real shared flow with `globalThis.Buffer` replaced by the real shim, which is the only
+  layer that can see such a difference.
 - **`standalone-single-file`** — the built page is one `.html` with everything inlined; its only
   network dependency is the pptxgenjs CDN script, loaded lazily on first export. A build that
   emits sidecar files or adds network dependencies breaks the artifact's only deployment story

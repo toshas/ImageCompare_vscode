@@ -1,4 +1,4 @@
-/** Browser shim of the `vscode` surface the bundled src/ modules touch; IO is delegated to a registered StandaloneFs backend (docs/standalone.md). */
+/** Browser shim of the `vscode` surface the bundled src/ modules touch, kept complete by scripts/check-sidedness.mjs gate (d); IO is delegated to a registered StandaloneFs backend (docs/standalone.md: shim-covers-bundled-calls). */
 
 export class Uri {
   private constructor(

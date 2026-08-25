@@ -10,10 +10,17 @@
 // (the convention is stated in the doc), and this checker is what keeps it honest;
 // (c) a host may supply DATA to a shared runner, never a DECISION — see POLICY_SEAMS below. Gate (c)
 // lives here because its precondition is exactly what this script already derives: the module the
-// hosts must delegate to has to be genuinely SHARED, which only the real import graph can say.
+// hosts must delegate to has to be genuinely SHARED, which only the real import graph can say;
+// (d) shim parity — every `Buffer.x` / `path.x` / `vscode.a.b` the standalone bundle's own closure
+// touches must exist on the shim it runs against. Same reason as (c): the closure is this script's
+// output. Shared modules typecheck against node's real types and run against the hand-rolled shims,
+// so a missing static compiles clean and throws in the browser, at the user's click. The surface is
+// read by bundling and evaluating the real shim (esbuild, as the build does), never by parsing it;
+// presence only, never behaviour — behaviour is a test's job (docs/standalone.md).
 // Run: node scripts/check-sidedness.mjs        (--print emits the full module table)
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import esbuild from 'esbuild';
 
 const DOC = 'docs/standalone.md';
 
@@ -29,6 +36,13 @@ const POLICY_SEAMS = [
     hosts: ['src/imageCompareProvider.ts', 'standalone/adapter.ts'],
     why: 'where the user is, is host data; WHEN the aim settles is policy (docs/loading-architecture.md: sweep-centre-dwells)',
   },
+];
+// Gate (d): the browser bundle's entry, and the shims esbuild aliases/injects into it (scripts/build-standalone.mjs).
+const BUNDLE_ENTRY = 'standalone/adapter.ts';
+const SHIMS = [
+  { name: 'Buffer', file: 'standalone/shims/buffer.ts', pick: m => m.Buffer },
+  { name: 'path', file: 'standalone/shims/path.ts', pick: m => m, spec: 'path' },
+  { name: 'vscode', file: 'standalone/shims/vscode.ts', pick: m => m, spec: 'vscode' },
 ];
 const ROOTS = {
   extension: ['src/extension.ts'],
@@ -133,6 +147,58 @@ for (const seam of POLICY_SEAMS) {
   }
 }
 
+// Gate (d): the shim's real runtime surface — bundled and evaluated exactly as scripts/build-standalone.mjs does.
+const loadShim = async file => {
+  const out = await esbuild.build({ entryPoints: [file], bundle: true, format: 'cjs', platform: 'neutral', write: false });
+  const mod = { exports: {} };
+  new Function('module', 'exports', out.outputFiles[0].text)(mod, mod.exports);
+  return mod.exports;
+};
+
+// Member chains off a binding: `x.a.b` -> ['a','b']; the lookbehind keeps `foo.path.join` and quoted text out.
+const chainsOff = (text, binding) =>
+  [...text.matchAll(new RegExp(`(?<![.\\w$'"])${binding}((?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)+)`, 'g'))]
+    .map(m => m[1].replace(/\s+/g, '').split('.').filter(Boolean));
+
+// What a file calls through one shim: namespace imports contribute chains, named imports one member each; a global shim needs no import.
+const shimCalls = (text, shim) => {
+  if (!shim.spec) return chainsOff(text, shim.name);
+  const out = [];
+  for (const m of text.matchAll(new RegExp(`\\bimport\\s+\\*\\s+as\\s+([A-Za-z_$][\\w$]*)\\s+from\\s*['"]${shim.spec}['"]`, 'g'))) out.push(...chainsOff(text, m[1]));
+  for (const m of text.matchAll(new RegExp(`\\bimport\\s+(type\\s+)?\\{([^}]*)\\}\\s*from\\s*['"]${shim.spec}['"]`, 'g'))) {
+    if (m[1]) continue; // type-only imports are erased, like the edges above
+    for (const part of m[2].split(',')) {
+      const named = part.trim().split(/\s+as\s+/)[0].trim();
+      if (named) out.push([named]);
+    }
+  }
+  return out;
+};
+
+const bundleClosure = [...reach([BUNDLE_ENTRY]).keys()].filter(f => f.endsWith('.ts') && !f.startsWith('standalone/shims/')).sort();
+// An empty closure means the entry moved, not that nothing calls a shim: exiting 0 there is the vacuous pass this gate exists to prevent.
+if (bundleClosure.length === 0) problems.push(`SHIM-CLOSURE: ${BUNDLE_ENTRY} reached no modules — the standalone entry moved and gate (d) inspected nothing`);
+for (const shim of SHIMS) {
+  const surface = shim.pick(await loadShim(shim.file));
+  if (surface === undefined) {
+    problems.push(`SHIM-LOAD: ${shim.file} exported no ${shim.name} surface to check`);
+    continue; // every chain below would report against nothing; the line above is the whole answer
+  }
+  for (const f of bundleClosure) {
+    for (const chain of shimCalls(stripped(f), shim)) {
+      let cur = surface, seen = shim.name;
+      for (const step of chain) {
+        if (cur === undefined || cur === null || cur[step] === undefined) {
+          problems.push(`SHIM-GAP:  ${f} calls ${seen}.${step}, which ${shim.file} does not provide — it is in the standalone bundle, so this throws in the browser`);
+          break;
+        }
+        cur = cur[step];
+        seen += `.${step}`;
+      }
+    }
+  }
+}
+
 const counts = {};
 for (const { cat } of table) counts[cat] = (counts[cat] ?? 0) + 1;
 console.log(Object.entries(counts).map(([k, v]) => `${k}=${v}`).join('  '));
@@ -144,6 +210,9 @@ if (problems.length) {
   console.error('fix the doc or the import that changed sidedness. `--print` shows the full derived table.');
   console.error('A HOST-POLICY line means a host decided something a shared runner asks it for: move the decision');
   console.error('into the shared module both hosts import, and leave the host supplying data and primitives only.');
+  console.error('A SHIM-GAP line means the standalone bundle calls something its browser shim does not have:');
+  console.error('add it to the shim, or stop calling it from a module the standalone ships. tsc cannot see this —');
+  console.error("the module typechecks against node's real Buffer/path/vscode and only the browser runs the shim.");
   process.exit(1);
 }
-console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral.`);
+console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral; ${bundleClosure.length} bundled modules call nothing the ${SHIMS.length} shims lack.`);

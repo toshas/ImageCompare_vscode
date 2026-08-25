@@ -365,6 +365,10 @@
             {
               "suite": "unit",
               "match": "injects the crop meta as a readable tEXt chunk"
+            },
+            {
+              "suite": "unit",
+              "match": "reports cropComplete when renderCrop returns plain Uint8Array bytes"
             }
           ]
         },
@@ -2021,6 +2025,20 @@
             {
               "suite": "unit",
               "match": "standalone artifact freshness"
+            }
+          ]
+        },
+        {
+          "id": "standalone-shim-parity",
+          "name": "Browser shims provide every member the bundled shared modules call",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "provides every Buffer static the shared modules call"
+            },
+            {
+              "suite": "unit",
+              "match": "isBuffer discriminates shim buffers from plain Uint8Array"
             }
           ]
         },
