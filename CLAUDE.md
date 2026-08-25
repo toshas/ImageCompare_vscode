@@ -332,34 +332,55 @@ Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
 
 ## Publishing (GitHub Actions)
 
-Publishing is automated via GitHub Actions. The workflow first runs the `test` job (ubuntu) — compile, the four checker scripts, the suites, the mutation check — then builds one VSIX per platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
+Publishing is automated via GitHub Actions. A tag runs **two** gating jobs before anything is
+packaged, and `build` needs both: `test` (ubuntu — compile, the four checker scripts, the suites,
+the mutation check) and `test-full`, which is `uses: ./.github/workflows/test.yml` and therefore
+runs the whole three-OS matrix. Naming only the ubuntu job here once led to the false conclusion
+that a tag could publish a build that fails on Windows; it cannot. Then it builds one VSIX per
+platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
 
 ### Release Checklist (for Claude)
 
-When the user asks to "release" or "prepare a release", perform ALL of the following steps automatically:
+**A release starts on a branch and is tagged only once CI is green.** Never bump-commit-tag in one
+pass on `main`.
 
-1. **Read current version** from `package.json` — this is the baseline
-2. **Bump version** — increment patch version in `package.json` (e.g., 0.1.8 → 0.1.9)
-3. **Update `CHANGELOG.md`** — add a new `## [X.Y.Z]` section describing all changes since the last release (check `git log` and `git diff` against the last tag)
-4. **Compile and verify** — `npm run compile` must succeed with no errors
-5. **Commit all changes** (version bump + changelog + code):
-   ```bash
-   git add package.json CHANGELOG.md src/ ...
-   git commit -m "Release vX.Y.Z - short description"
-   git push
-   ```
-6. **Create and push a tag** (this triggers the CI publish workflow):
-   ```bash
-   git tag vX.Y.Z
-   git push --tags
-   ```
+The reason is narrower than it looks, and worth stating so nobody "optimizes" the branch step away:
+a tag would *not* publish a broken build — `publish.yml`'s `build` job declares
+`needs: [test, test-full]`, and `test-full` is `uses: ./.github/workflows/test.yml`, which runs the
+full three-OS matrix. So a red Windows suite stops the release before anything is packaged. What a
+premature tag costs is a **public tag pointing at a commit that fails CI**, and a burned version
+number: recovering means deleting a pushed tag or skipping to the next patch. The branch step turns
+that into an ordinary red build on a branch nobody has released from.
+
+When the user asks to "release" or "prepare a release":
+
+1. **Work on a branch**, never directly on `main`. If the work is already on one, stay there.
+2. **Read the current version** from `package.json` — the baseline.
+3. **Bump the version** in `package.json`. Patch for fixes; minor when behaviour changed or
+   anything user-visible was added.
+4. **Update `CHANGELOG.md`** — a `## [X.Y.Z]` section covering everything since the last tag
+   (`git log`, `git diff` against it).
+5. **Run the full local battery** (Verification, above). `npm run test:integration` cannot run on a
+   box with no X server — say so rather than reporting it passed.
+6. **Commit and push the branch.** Do NOT tag yet.
+7. **Wait for CI on the branch to go green** — `test.yml` runs `gates`, `engines-floor` and the
+   three-OS `test` matrix on every push. **This is the step that exists because the local battery
+   is Linux-only**: a Windows-only defect is invisible until this runs, and one shipped undetected
+   for several releases precisely this way — see the Findings list in docs/testing.md.
+8. **Fix anything red and push again.** Repeat until green. A release is not "nearly ready" while
+   any platform is red.
+9. **Merge to `main`** once green.
+10. **Tag and push the tag** from `main` — `git tag vX.Y.Z && git push --tags`. This is what
+    triggers `publish.yml`, and it is the first irreversible step: it publishes to the VS Code
+    Marketplace and Open VSX, neither of which lets you unpublish a version cleanly.
+
+**Tagging is a separate, explicit instruction.** "Push the branch" does not authorise a tag; ask, or
+wait to be told.
 
 ### Release Checklist (manual verification after CI)
 
-7. **Verify CI** — check GitHub Actions for green builds on all 6 platforms
-8. **Verify marketplace listings** — confirm the new version appears on both VS Code Marketplace and Open VSX
-
-The workflow will automatically build for all 6 platforms and publish to both Open VSX and VS Code Marketplace.
+11. **Verify the publish run** — green builds on all 6 platform targets.
+12. **Verify both marketplaces** — the new version live on VS Code Marketplace and Open VSX.
 
 ### What the CI does for each platform
 
