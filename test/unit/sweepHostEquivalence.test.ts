@@ -52,6 +52,8 @@ const fileName = (t: number): string => `frame${String(t).padStart(2, '0')}.png`
 interface Host {
   /** Rows the sweep has asked to read, in dispatch order. */
   asked: number[];
+  /** The same reads as `<modality>-<row>`, so the COLUMN the sweep aims at is visible too. */
+  askedSlots: string[];
   /** Sweep-key drops, i.e. re-aims (docs/loading-architecture.md: sweep-cancels-on-reaim). */
   reaims(): number;
   /** A webview -> host message, through the host's real message path. */
@@ -68,6 +70,7 @@ async function providerHost(): Promise<Host> {
   tmpRoots.push(root);
   __setConfig('maxConcurrentReads', POOL_WIDTH);
   const asked: number[] = [];
+  const askedSlots: string[] = [];
   const resolvers: Array<() => void> = [];
 
   const provider = new ImageCompareProvider({ globalStorageUri: Uri.file(root) } as never);
@@ -75,6 +78,7 @@ async function providerHost(): Promise<Host> {
     getThumbnail: (uri: Uri) =>
       new Promise<Buffer>(resolve => {
         asked.push(rowOf(uri.path));
+        askedSlots.push(`${/imgs\/([^/]+)\//.exec(uri.path)![1]}-${rowOf(uri.path)}`);
         resolvers.push(() => resolve(Buffer.alloc(4)));
       }),
     loadFullImage: async () => ({ bytes: new Uint8Array(10), mime: 'image/png', width: 4, height: 4 }),
@@ -126,6 +130,7 @@ async function providerHost(): Promise<Host> {
 
   return {
     asked,
+    askedSlots,
     reaims: () => drops.n - dropsAtOpen,
     send: msg => (provider as never as { handlePanelMessage(s: unknown, m: unknown): Promise<void> }).handlePanelMessage(state, msg),
     finish: async n => {
@@ -142,7 +147,7 @@ async function providerHost(): Promise<Host> {
 // ---- Host B: the real standalone adapter ----
 
 /** A File System Access directory handle over a real temp tree, whose file reads the test releases one by one. */
-function gatedHandle(rootName: string, dirPath: string, onRead: (name: string) => Promise<void>): unknown {
+function gatedHandle(rootName: string, dirPath: string, onRead: (name: string, dir: string) => Promise<void>): unknown {
   const mk = (name: string, p: string): unknown => ({
     kind: 'directory',
     name,
@@ -161,7 +166,7 @@ function gatedHandle(rootName: string, dirPath: string, onRead: (name: string) =
           return {
             name: n,
             async arrayBuffer() {
-              await onRead(n);
+              await onRead(n, path.basename(p));
               return fs.readFileSync(c).buffer;
             }
           };
@@ -229,6 +234,7 @@ async function standaloneHost(): Promise<Host> {
   }
 
   const asked: number[] = [];
+  const askedSlots: string[] = [];
   const resolvers: Array<() => void> = [];
   const browser = stubBrowser();
   // Runtime-computed on purpose: standalone/ compiles under tsconfig.standalone.json (DOM lib, the
@@ -245,8 +251,9 @@ async function standaloneHost(): Promise<Host> {
   // The adapter's own reads, gated: the sweep's dispatch order is the order they are asked for.
   // createFsaBackend roots every path at `/<handle name>`, so the handle is named for the temp dir
   // itself and the paths the real scan produces resolve straight back through it.
-  const handle = gatedHandle(root.slice(1), root, name => new Promise<void>(resolve => {
+  const handle = gatedHandle(root.slice(1), root, (name, dir) => new Promise<void>(resolve => {
     asked.push(rowOf(name));
+    askedSlots.push(`${dir}-${rowOf(name)}`);
     resolvers.push(resolve);
   }));
   await seam.open(handle);
@@ -258,6 +265,7 @@ async function standaloneHost(): Promise<Host> {
 
   return {
     asked,
+    askedSlots,
     reaims: () => drops.n - dropsAtOpen,
     send: async msg => { api.postMessage(msg); await settle(2); },
     finish: async n => {
@@ -308,16 +316,35 @@ async function heldKey(host: Host): Promise<Trace> {
   return { atOpen, duringBurst, reaimsDuringBurst, afterDwell: host.asked.slice(settledAt, settledAt + 4), reaims: host.reaims() };
 }
 
+// The other half of "where the user is": the COLUMN. It reaches a host only in a report the webview
+// sends, so a click that reports nothing leaves the aim on the column it already had — the field
+// case, where a tile clicked in the 5th column of an unloaded row watched column 0 fill instead.
+// Both products read the same reports, so the same script must move both. The strip is rearranged
+// (['ours', 'gt']) so a host that forwards the display index on aims at 'gt' and fails here too.
+// (docs/loading-architecture.md: click-reports-its-column, docs/tuple-matching.md: wire-index-is-original)
+async function clickedColumn(host: Host): Promise<{ straggled: number; column: string[] }> {
+  await host.send({ type: 'setCurrentModality', modalityOrder: [1, 0], currentDisplayIndex: 0, hiddenModalities: [] });
+  const from = host.askedSlots.length;
+  for (let i = 0; i < 4; i++) await host.finish(4);
+  const after = host.askedSlots.slice(from, from + 16);
+  // Reads that had already STARTED cannot be dropped (docs/loading-architecture.md: sweep-cancels-on-reaim),
+  // so the old column trails the re-aim by a bounded flush; everything after it is the new aim's.
+  const straggled = after.findIndex(slot => slot.startsWith('ours-'));
+  return { straggled, column: after.slice(straggled) };
+}
+
 describe('the sweep aim is one policy: both hosts answer a held key identically', () => {
   it('drives the same burst through the real provider and the real standalone adapter', async () => {
     const provider = await providerHost();
     const providerTrace = await heldKey(provider);
+    const providerClick = await clickedColumn(provider);
     provider.dispose();
     await settle(4);
     vi.useRealTimers();
 
     const standalone = await standaloneHost();
     const standaloneTrace = await heldKey(standalone);
+    const standaloneClick = await clickedColumn(standalone);
     standalone.dispose();
     await settle(4);
 
@@ -337,6 +364,20 @@ describe('the sweep aim is one policy: both hosts answer a held key identically'
       expect(trace.reaimsDuringBurst).toBe(0);
       expect(trace.afterDwell).toEqual([49, 49, 50, 48]);
       expect(trace.reaims).toBe(1);
+    }
+
+    // Same policy, same click: the reported column moves the aim in both, and identically.
+    expect(standaloneClick).toEqual(providerClick);
+    for (const click of [providerClick, standaloneClick]) {
+      expect(click.straggled).toBeLessThanOrEqual(POOL_WIDTH);
+      // The symptom, inverted: after the click the sweep spends its reads in the column the click
+      // named, not in the one it was already filling.
+      expect(click.column.length).toBeGreaterThanOrEqual(16 - POOL_WIDTH);
+      expect(click.column.every(slot => slot.startsWith('ours-'))).toBe(true);
+      // And in the cross's own order within that column: away from the aimed row 49, forward first
+      // on the tie (docs/loading-architecture.md: sweep-cross-then-row-major).
+      const nearest = ['ours-50', 'ours-48', 'ours-51', 'ours-47'];
+      expect(click.column.filter(slot => nearest.includes(slot))).toEqual(nearest);
     }
   });
 });

@@ -456,6 +456,11 @@ export class ImageCompareProvider {
         }
         break;
 
+      case 'setCurrentModality':
+        // A clicked column aims the sweep at once; `tupleFullyLoaded` can be a whole cold tuple away (docs/loading-architecture.md: click-reports-its-column).
+        state.sweepAim.noteStrip(message);
+        break;
+
       case 'tupleFullyLoaded': {
         // The strip as displayed is also the sweep's column aim — the one report that carries it (docs/loading-architecture.md: thumbnails-centre-out).
         state.sweepAim.noteStrip(message);

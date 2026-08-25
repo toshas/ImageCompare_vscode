@@ -566,6 +566,10 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
     case 'exportPptx':
       await handleExportPptx(s, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
       break;
+    case 'setCurrentModality':
+      // Same report, same aim: neither product may learn the clicked column later than the other (docs/loading-architecture.md: click-reports-its-column).
+      s.sweepAim.noteStrip(message);
+      break;
     case 'tupleFullyLoaded': {
       // No prefetch here, but the same report carries the sweep's column aim (docs/loading-architecture.md: thumbnails-centre-out).
       s.sweepAim.noteStrip(message);

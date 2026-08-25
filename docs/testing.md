@@ -380,6 +380,22 @@ the fix, the docs, and the CI check.
   one; verified by running it against the ff11b92 and 32f73a0 trees, where it names both hosts and
   quotes the offending line (`docs/standalone.md: host-supplies-data-not-policy`).
 
+- **A clicked column never reached either host, so the sweep filled column 0** *(fixed)* — the aim's
+  column travelled in `tupleFullyLoaded`, which the webview posts only once **every** modality of a
+  tuple has arrived; a tuple arrival requests the on-screen column and its nearest siblings only, so
+  on the field's 265x136 grid that report is a whole cold tuple away or never comes. Clicking a tile
+  in the 5th column of an un-arrived row therefore changed nothing the extension could see, and the
+  sweep kept filling the column it already had — the strip's first, which is the same fallback a host
+  that reports nothing gets, and why the symptom reads as "always column 0". A carousel tile click
+  now posts `setCurrentModality` (the strip, no claim about loading — `tupleFullyLoaded` also drives prefetch)
+  and both hosts feed it to the same `noteStrip`. Both products reproduced it, since both read the
+  same reports: the webview half is pinned in `test/webview/tuple-load.spec.ts` (a click on an
+  uncached row reports the column, and reports it as a display position within the order it also
+  sends, on a rearranged strip), the host half in `test/unit/sweepHostEquivalence.test.ts`, which
+  requires the same clicked column out of both **real** hosts — with a mutation per host, each
+  surviving without that assertion. The webview post itself has no mutation: the harness runs Vitest
+  only, so Layer 3 stands in for it, exactly as it does for the reported `visibleRows` radius.
+
 - **Two comparison tabs shared one FIFO, so the second one indexed nothing for a chunk** *(fixed)* —
   on the real pool and the real sweep runner, a second 746x10 tab joining a running sweep waited 28
   reads (8 batches, ~11 s at the field's cold cost) for its first slot and then took 12 % of the next

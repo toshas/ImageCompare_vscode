@@ -68,6 +68,9 @@ async function requestsSince(page: Page, start: number): Promise<any[]> {
 const outboundLength = (page: Page): Promise<number> =>
   page.evaluate(() => (window as any).__ic_outbound.length);
 
+const getStateOf = (page: Page): Promise<any> =>
+  page.evaluate(() => (window as any).__ic_test.getState());
+
 test.describe('tuple arrival asks for one image, not the whole tuple', () => {
   test('a navigation requests only the modality on screen', async ({ page }) => {
     await loadPartial(page);
@@ -200,6 +203,56 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(fit).toBeGreaterThan(3);
     expect(report.visibleRows).toBeGreaterThanOrEqual(Math.floor(fit));
     expect(report.visibleRows).toBeLessThanOrEqual(Math.ceil(fit));
+  });
+
+  // The field case, at the layer that owns it: the column reaches the extension only in a report the
+  // webview sends, and the one report that carried it waits for EVERY modality of the tuple to
+  // arrive — on a 265x136 grid that report is a whole cold tuple away, so a tile clicked in another
+  // column left the sweep aiming where it already was (column 0, the strip's first). Nothing on the
+  // host side can notice a report that was never sent. The post is a webview measurement, so this
+  // layer is the only one that can see it — the mutation harness runs Vitest suites only, and the
+  // host half of the same rule is pinned there instead (test/unit/sweepHostEquivalence.test.ts,
+  // "drives the same burst through the real provider and the real standalone adapter", whose clicked-
+  // column phase has a mutation per host).
+  // (docs/loading-architecture.md: click-reports-its-column)
+  test('clicking a tile in another column reports that column at once, not when the tuple loads', async ({ page }) => {
+    await loadPartial(page);
+    const start = await outboundLength(page);
+    // Tuple 4 is uncached and its column 3 is not the one on screen: the two halves of the repro.
+    await page.locator('.carousel-row[data-tuple-index="4"] .carousel-thumb[data-modality="3"]').click();
+    const since = await page.evaluate((s) => (window as any).__ic_outbound.slice(s), start);
+
+    const report = since.find((m: any) => m && m.type === 'setCurrentModality');
+    expect(report).toBeTruthy();
+    const state = await getStateOf(page);
+    expect(report.currentDisplayIndex).toBe(3);
+    expect(report.currentDisplayIndex).toBe(state.currentModalityIndex);
+    expect(report.modalityOrder).toEqual(state.modalityOrder);
+    expect(report.hiddenModalities).toEqual(state.hiddenModalities);
+    // Non-vacuous: the tuple it landed on is nowhere near loaded, so the report that used to carry
+    // the column has not fired and cannot fire for a long time.
+    expect(since.some((m: any) => m && m.type === 'tupleFullyLoaded')).toBe(false);
+    expect(state.currentTupleIndex).toBe(4);
+  });
+
+  // Display position is not the modality index: the report has to say which position the user is on
+  // in the order it also reports, or a rearranged strip aims the sweep at whatever column happens to
+  // sit at that original position (docs/tuple-matching.md: wire-index-is-original).
+  test('the reported column is the display position within the reported order, on a rearranged strip', async ({ page }) => {
+    await loadPartial(page);
+    // Move the on-screen column one place right: the strip becomes [1, 0, 2, ...].
+    await pressAndCapture(page, ['BracketRight']);
+    const order = (await getStateOf(page)).modalityOrder;
+    expect(order.slice(0, 2)).toEqual([1, 0]);
+
+    const start = await outboundLength(page);
+    // Display position 0 now shows original modality 1 — the tile addressed by what it shows.
+    await page.locator('.carousel-row[data-tuple-index="4"] .carousel-thumb[data-modality="1"]').click();
+    const report = await page.evaluate((s) =>
+      (window as any).__ic_outbound.slice(s).find((m: any) => m && m.type === 'setCurrentModality'), start);
+    expect(report, 'the click posted no setCurrentModality').toBeTruthy();
+    expect(report.currentDisplayIndex).toBe(0);
+    expect(report.modalityOrder).toEqual(order);
   });
 
   test('flipping to a sibling inside the dwell window loads it at once', async ({ page }) => {

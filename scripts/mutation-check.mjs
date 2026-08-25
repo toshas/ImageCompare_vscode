@@ -994,6 +994,30 @@ const mutations = [
     killedBy: 'host-equivalence test (the same held key must produce the same trace in both products)'
   },
   {
+    name: 'sweep aim: the provider drops the clicked column (its sweep keeps filling the old one)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/sweepHostEquivalence.test.ts',
+    find: `      case 'setCurrentModality':
+        // A clicked column aims the sweep at once; \`tupleFullyLoaded\` can be a whole cold tuple away (docs/loading-architecture.md: click-reports-its-column).
+        state.sweepAim.noteStrip(message);
+        break;
+`,
+    replace: '',
+    killedBy: 'clicked-column test (a tile clicked in another column must move the aim before the tuple loads)'
+  },
+  {
+    name: 'sweep aim: the standalone drops the clicked column (only the extension re-aims)',
+    file: 'standalone/adapter.ts',
+    suite: 'test/unit/sweepHostEquivalence.test.ts',
+    find: `    case 'setCurrentModality':
+      // Same report, same aim: neither product may learn the clicked column later than the other (docs/loading-architecture.md: click-reports-its-column).
+      s.sweepAim.noteStrip(message);
+      break;
+`,
+    replace: '',
+    killedBy: 'clicked-column test (both hosts must answer the same click with the same column)'
+  },
+  {
     name: 'standalone: setCurrentTuple never reaches the aim policy (its sweep stops re-aiming at all)',
     file: 'standalone/adapter.ts',
     suite: 'test/unit/sweepHostEquivalence.test.ts',

@@ -1794,6 +1794,14 @@
             {
               "suite": "unit",
               "match": "drives the same burst through the real provider and the real standalone adapter"
+            },
+            {
+              "suite": "webview",
+              "match": "clicking a tile in another column reports that column at once"
+            },
+            {
+              "suite": "webview",
+              "match": "the reported column is the display position within the reported order"
             }
           ]
         },

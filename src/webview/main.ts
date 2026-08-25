@@ -1274,6 +1274,17 @@ function visibleCarouselRows(): number {
   return Math.max(1, Math.ceil(carouselEl.clientHeight / rowH));
 }
 
+/** Reports the strip the moment a click picks a column — `tupleFullyLoaded` waits for a whole tuple, which on a wide cold session is far away (docs/loading-architecture.md: click-reports-its-column). */
+function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
+  vscode.postMessage({
+    type: 'setCurrentModality',
+    modalityOrder: modalityOrder.slice(),
+    currentDisplayIndex: displayModalityIndex,
+    hiddenModalities: Array.from(hiddenModalities),
+    visibleRows: visibleCarouselRows()
+  });
+}
+
 /** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column), the sweep aims its cross at it (docs/loading-architecture.md: sweep-cross-then-row-major). */
 function postTupleFullyLoaded(tupleIndex: TupleIndex) {
   vscode.postMessage({
@@ -1626,7 +1637,9 @@ function handleCarouselClick(e: MouseEvent) {
   }
   const img = target.closest('.carousel-thumb') as HTMLElement | null;
   if (img) {
-    goToTupleAndModality(tupleIdx, asDisplay(parseInt(img.dataset.displayIndex ?? '0', 10)));
+    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: click-reports-its-column).
+    const clicked = parseInt(img.dataset.displayIndex ?? '', 10);
+    if (Number.isInteger(clicked)) goToTupleAndModality(tupleIdx, asDisplay(clicked));
     return;
   }
   if (tupleIdx !== currentTupleIndex) loadTuple(tupleIdx);
@@ -1642,6 +1655,8 @@ function scrollCarouselToCurrentTuple() {
 }
 
 function goToTupleAndModality(tupleIdx: TupleIndex, modalityIdx: DisplayModalityIndex) {
+  // Unconditional: the clicked column is the sweep's aim even when it is the one already on screen, which no report may have carried yet (docs/loading-architecture.md: click-reports-its-column).
+  postCurrentModality(modalityIdx);
   if (tupleIdx === currentTupleIndex) {
     if (modalityIdx !== currentModalityIndex) {
       previousModalityIndex = currentModalityIndex;

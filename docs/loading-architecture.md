@@ -446,9 +446,18 @@ settled tuple (below) and the un-permuting of the column both live in that share
 hosts contribute a `setTimeout`/`clearTimeout` pair and nothing else
 (`docs/standalone.md: host-supplies-data-not-policy`). The column half comes from `tupleFullyLoaded`, the one message that carries
 `modalityOrder`, `currentDisplayIndex` and `hiddenModalities`; both products forward it, so the
-standalone gets this order too rather than a row-only variant. That report fires on tuple arrival,
-so a *modality* switch inside an already-loaded tuple does not re-aim the sweep — the same gap
-prefetch has today, and deliberately not closed here. A column inserted or removed mid-sweep leaves
+standalone gets this order too rather than a row-only variant. That report is not enough on its own,
+and the field case is why: it fires only when *every* modality of the tuple has arrived, which on a
+265×136 grid is a whole cold tuple away and, since a tuple arrival only ever requests the on-screen
+column and its nearest siblings, may not happen at all. A tile clicked in the 5th column of an
+un-arrived row therefore left the aim on the column it already had — column 0, the strip's first,
+which is what a host with no report at all gets. So a **carousel tile click reports its own column**,
+in a `setCurrentModality` message carrying the same strip and nothing else, sent the moment the tile
+is clicked and independent of any load; both hosts feed it to the same `noteStrip`. The gap is
+narrowed, not closed: a column switched from the keyboard or a pill still waits for
+`tupleFullyLoaded`, and the keyboard half is deliberate — `[`/`]`, the arrows and the digits repeat,
+and an undwelled re-aim per repeat is the churn `sweep-centre-dwells` exists to prevent, while a
+click is a settled destination by construction. A column inserted or removed mid-sweep leaves
 the reported strip stale until the next report, which can only *mis-order* what is left: the plan is
 fixed at open and every settle re-addresses to the file's live slot
 (`docs/tuple-matching.md: revalidate-slot-before-write`), so no slot is lost by it. The decision — what any of it means for order
@@ -1201,6 +1210,21 @@ mount latency — but the same shape applies, so neither product can quietly div
   modality index aims at whatever column happens to sit at that original position, which on an
   un-rearranged strip is silently correct and on a rearranged one is silently wrong
   (`docs/tuple-matching.md: wire-index-is-original`).
+- **`click-reports-its-column`** — the aim's column is reported when the user *picks* it, not when
+  the tuple it belongs to finishes loading. `tupleFullyLoaded` fires only once every modality of a
+  tuple has arrived, so on a wide cold session it is far away or never comes, and until then the aim
+  keeps whatever column it last had — the strip's first, i.e. column 0, when it never had one. A
+  carousel tile click therefore posts `setCurrentModality` — the strip as displayed, unconditionally,
+  even when the clicked column is already on screen, because no report may have carried it yet. A pill
+  or keyboard switch still does not: a narrowed gap, not a closed one, described above. **Both**
+  hosts forward it to the same `SweepAimPolicy.noteStrip`, which un-permutes it
+  (`docs/tuple-matching.md: wire-index-is-original`). Three sites, each silently leaving the sweep
+  filling a column nobody is looking at: the post (`webview/main.ts`) and the two host handlers
+  (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that drops the message reproduces the
+  bug in that product alone, which is exactly the asymmetry the shared policy was made to prevent
+  (`docs/standalone.md: host-supplies-data-not-policy`). The report claims nothing about loading, so
+  it must not be `tupleFullyLoaded` with a lie in it: that message also drives prefetch
+  (`prefetch-scoped-to-the-visible-column`).
 - **`sweep-cross-then-row-major`** — the order from that aim, and every tie-break in it. The focused
   tile, then its **cross** (the focused row's other columns and the focused column's other rows)
   taken **one slot from each arm in turn** — never one arm drained before the other, which is the
