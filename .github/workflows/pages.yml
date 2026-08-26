@@ -1,0 +1,60 @@
+name: Pages
+
+# Split out of test.yml deliberately. As a job there it carried
+# `if: github.ref == 'refs/heads/main'`, so every PR and every tag run reported it as SKIPPED —
+# which GitHub emails about as "not all jobs were successful" — and its declared `pages: write` /
+# `id-token: write` had to be granted by publish.yml's workflow_call even though the `if:` meant it
+# could never run on a tag. Its own trigger states the same rule with neither consequence.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pages:
+    name: publish dashboard + gallery to Pages
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - run: xvfb-run -a npm run test:dashboard
+      - run: npm run test:demos
+      - run: npm run build:standalone
+      - name: Assemble site
+        run: |
+          mkdir -p _site/dashboard _site/gallery _site/standalone
+          cp test/dashboard/dashboard.html _site/dashboard/index.html
+          cp -r test/demos/gallery/. _site/gallery/
+          cp dist/standalone/image_compare.html _site/standalone/index.html
+          cat > _site/index.html <<'HTML'
+          <!DOCTYPE html><meta charset="utf-8"><title>ImageCompare — test reports</title>
+          <body style="font-family:sans-serif;max-width:40em;margin:4em auto">
+          <h1>ImageCompare</h1>
+          <p><a href="dashboard/">Feature coverage dashboard</a> — which features are pinned by which tests, from real runs.</p>
+          <p><a href="gallery/">Demo gallery</a> — captioned clips of every feature, freshly recorded.</p>
+          <p><a href="standalone/">Standalone ImageCompare</a> — the whole comparer as one page: open it and pick a folder (Chrome/Edge for full features).</p>
+          </body>
+          HTML
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5

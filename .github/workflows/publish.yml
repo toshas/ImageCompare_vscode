@@ -58,12 +58,6 @@ jobs:
   # The full 3-OS three-layer matrix must also be green before any release build (workflow_call into test.yml).
   test-full:
     uses: ./.github/workflows/test.yml
-    # A called workflow's jobs get only what the caller grants, and the grant is validated when the
-    # file is parsed — test.yml's `pages` job declares these even though its `if:` keeps it off a tag.
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
 
   build:
     needs: [test, test-full]
@@ -227,13 +221,22 @@ jobs:
       - name: Poll Open VSX for the released version and scan the served VSIX
         run: |
           VER=$(node -p "require('./package.json').version")
+          # Poll the TARGET we are about to download, not the namespace default: Open VSX publishes
+          # each target platform independently and the bare endpoint answers for whichever is
+          # default (darwin-arm64 today), so it goes green while linux-x64 is still 404ing.
+          API="https://open-vsx.org/api/obukhovai/image-compare/linux-x64"
           for i in $(seq 1 40); do
-            LIVE=$(curl -s https://open-vsx.org/api/obukhovai/image-compare | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" || true)
+            LIVE=$(curl -s "$API/$VER" | python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || true)
             [ "$LIVE" = "$VER" ] && break
             sleep 30
           done
-          [ "$LIVE" = "$VER" ] || { echo "Open VSX never served $VER (last: $LIVE)"; exit 1; }
-          curl -sL -o served.vsix "https://open-vsx.org/api/obukhovai/image-compare/linux-x64/$VER/file/obukhovai.image-compare-$VER@linux-x64.vsix"
+          [ "$LIVE" = "$VER" ] || { echo "Open VSX never served linux-x64 $VER (last: '$LIVE')"; exit 1; }
+          # Ask the API for the download url rather than constructing it, and --fail so an error
+          # page is a non-zero exit instead of a BadZipFile three lines later.
+          URL=$(curl -s "$API/$VER" | python3 -c "import json,sys; print((json.load(sys.stdin).get('files') or {}).get('download',''))")
+          [ -n "$URL" ] || { echo "Open VSX served no download url for linux-x64 $VER"; exit 1; }
+          curl -fsSL -o served.vsix "$URL"
+          file served.vsix | grep -qi zip || { echo "not a zip: $(file -b served.vsix)"; head -c 200 served.vsix; exit 1; }
           python3 - <<'PY'
           import zipfile
           names = zipfile.ZipFile('served.vsix').namelist()
