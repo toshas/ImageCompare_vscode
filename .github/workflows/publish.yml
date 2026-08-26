@@ -58,6 +58,12 @@ jobs:
   # The full 3-OS three-layer matrix must also be green before any release build (workflow_call into test.yml).
   test-full:
     uses: ./.github/workflows/test.yml
+    # A called workflow's jobs get only what the caller grants, and the grant is validated when the
+    # file is parsed — test.yml's `pages` job declares these even though its `if:` keeps it off a tag.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
 
   build:
     needs: [test, test-full]
