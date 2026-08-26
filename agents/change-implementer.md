@@ -52,7 +52,7 @@ you); your job is to make the code match it:
 
 ## House rules that get changes rejected
 
-- Comments are one line in `src/` (`comment-lint.mjs` gates it); rationale goes in `docs/`.
+- Comments are one line in `src/` and `scripts/` (`comment-lint.mjs` gates both; `test/` is exempt); rationale goes in `docs/`.
 - Never test a copy — import the real module; extract a pure module rather than duplicating logic.
 - Assert behavior, not pixels — `window.__ic_test.getState()` and outbound-message checks only.
 - Minimize the diff: no renames, reformatting, or refactors the contract didn't ask for.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { WorkPool, Priority, TaskCancelled } from '../../src/workPool';
+import { WorkPool, Priority, TaskCancelled, poolWidth, usableParallelism } from '../../src/workPool';
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 5));
 // A controllable task: resolves when release() is called.
@@ -105,6 +105,7 @@ describe('bounded priority work pool (real workPool code)', () => {
     await tick();
     const order: string[] = [];
     // Submitted worst-first, so only the ordering can produce the expected sequence.
+    pool.submit(async () => { order.push('tail'); }, { priority: Priority.SIBLING_TAIL });
     pool.submit(async () => { order.push('poll'); }, { priority: Priority.POLL });
     pool.submit(async () => { order.push('bulk'); }, { priority: Priority.THUMBNAIL_BULK });
     pool.submit(async () => { order.push('thumb'); }, { priority: Priority.THUMBNAIL });
@@ -115,7 +116,7 @@ describe('bounded priority work pool (real workPool code)', () => {
     first.release();
     for (let i = 0; i < 8; i++) await tick();
     expect(order, `full priority ladder: ${JSON.stringify(order)}`)
-      .toEqual(['visible', 'sibling', 'export', 'prefetch', 'thumb', 'bulk', 'poll']);
+      .toEqual(['visible', 'sibling', 'export', 'prefetch', 'thumb', 'bulk', 'poll', 'tail']);
     // Export is user-initiated: ahead of speculation, behind the image on screen.
     expect(Priority.SIBLING < Priority.EXPORT && Priority.EXPORT < Priority.PREFETCH,
       'EXPORT must rank between SIBLING and PREFETCH').toBe(true);
@@ -298,7 +299,8 @@ describe('bounded priority work pool (real workPool code)', () => {
     let settled = 0;
     const promises: Promise<void>[] = [];
     for (let i = 0; i < N; i++) {
-      const priority = Math.floor(rng() * 7) as Priority;
+      // All eight classes, SIBLING_TAIL included — its "only when nothing else is queued" admission is the one that can wedge the pool.
+      const priority = Math.floor(rng() * 8) as Priority;
       const key = rng() < 0.2 ? `k${Math.floor(rng() * 5)}` : undefined;
       promises.push(
         pool
@@ -317,6 +319,42 @@ describe('bounded priority work pool (real workPool code)', () => {
     expect(pool.running === 0 && pool.pending === 0, `pool drains: ${pool.running}/${pool.pending}`).toBe(true);
   });
 
+  it('Test 18: the sibling tail never takes a slot another class has queued work for', async () => {
+    // Three speculative slots, two classes queued: the fair-share pick would split them. The tail is
+    // the one class that must not be shared with (docs/loading-architecture.md: sibling-tail-never-competes).
+    const pool = new WorkPool(4);
+    const gV = gate();
+    const bulk = [gate(), gate(), gate(), gate()];
+    const tail = [gate(), gate()];
+    let tailStarted = 0;
+    let bulkStarted = 0;
+    const pv = pool.submit(async () => { await gV.promise; }, { priority: Priority.VISIBLE });
+    const pbs = bulk.map((g) => pool.submit(async () => { bulkStarted++; await g.promise; }, { priority: Priority.THUMBNAIL_BULK }));
+    const pts = tail.map((g) => pool.submit(async () => { tailStarted++; await g.promise; }, { priority: Priority.SIBLING_TAIL }));
+    await tick();
+    expect(bulkStarted, `the sweep takes all three speculative slots, got ${bulkStarted}`).toBe(3);
+    expect(tailStarted, `the tail must wait while any other class is queued, ${tailStarted} started`).toBe(0);
+    // Even as sweep items complete, the slot goes back to the sweep's own queue.
+    bulk[0].release();
+    await tick();
+    expect(tailStarted, 'a freed slot returns to the sweep, not the tail').toBe(0);
+    gV.release();
+    bulk.forEach((g) => g.release());
+    tail.forEach((g) => g.release());
+    await Promise.all([pv, ...pbs, ...pts]);
+  });
+
+  it('Test 19: the tail does use genuinely idle capacity (it is deferred, not disabled)', async () => {
+    const pool = new WorkPool(4);
+    const tail = [gate(), gate()];
+    let started = 0;
+    const pts = tail.map((g) => pool.submit(async () => { started++; await g.promise; }, { priority: Priority.SIBLING_TAIL }));
+    await tick();
+    expect(started, `nothing else queued: the tail runs, got ${started}`).toBe(2);
+    tail.forEach((g) => g.release());
+    await Promise.all(pts);
+  });
+
   it('Test 6: result and error propagation', async () => {
     const pool = new WorkPool(2);
     const v = await pool.submit(async () => 42, { priority: Priority.VISIBLE });
@@ -324,5 +362,39 @@ describe('bounded priority work pool (real workPool code)', () => {
     let err: unknown;
     await pool.submit(async () => { throw new Error('boom'); }, { priority: Priority.VISIBLE }).catch((e) => (err = e));
     expect(err instanceof Error && (err as Error).message === 'boom', 'error should propagate').toBe(true);
+  });
+});
+
+// poolWidth is the one width rule both products feed their own parallelism count (extension:
+// os.availableParallelism, standalone: navigator.hardwareConcurrency); values pinned as external
+// literals from the measurement round (docs/loading-architecture.md: pool-width-hides-latency),
+// not read back out of the formula: the decode ceiling is libuv's 4 threads on every host, so
+// width past 4+2 buys no throughput (90 images: 2764ms at 6, 2794ms at 16) and costs interaction
+// latency (a VISIBLE decode 525ms at width 4, 2799ms at width 16).
+describe('poolWidth (shared width rule, real workPool code)', () => {
+  it('clamps the pool width: saturate libuv, floor 1, cap 6', () => {
+    expect(poolWidth(4), 'the measured 4-vCPU host lands in the optimal 5-6 band').toBe(5);
+    expect(poolWidth(8), 'a mid-size host stops at the libuv ceiling plus slack').toBe(6);
+    expect(poolWidth(3)).toBe(4);
+    expect(poolWidth(2), 'two cores leave no second core to overlap onto').toBe(1);
+    expect(poolWidth(1), 'a 1-core box still gets one slot').toBe(1);
+    expect(poolWidth(0), 'an unreported core count still gets one slot').toBe(1);
+    expect(poolWidth(17)).toBe(6);
+    expect(poolWidth(64), 'the cap is libuv-derived, not core-derived').toBe(6);
+  });
+
+  it('sizes from usable parallelism, not the logical-core count', () => {
+    expect(usableParallelism(4, 256), 'a cgroup/affinity-limited host: os.cpus() misreads by 64x').toBe(4);
+    expect(poolWidth(usableParallelism(4, 256)), 'that host gets 5, not the 16 os.cpus() bought').toBe(5);
+    expect(usableParallelism(undefined, 12), 'an old runtime falls back to the logical-core count').toBe(12);
+    expect(usableParallelism(0, 8), 'a zero reading is no reading').toBe(8);
+    expect(usableParallelism(undefined, undefined), 'neither reported: assume a small box').toBe(4);
+  });
+
+  it('an explicit width override wins over the auto rule', () => {
+    expect(poolWidth(4, 12), 'imageCompare.maxConcurrentReads=12 on an unconstrained box').toBe(12);
+    expect(poolWidth(4, 1)).toBe(1);
+    expect(poolWidth(4, 0), '0 means auto').toBe(5);
+    expect(poolWidth(4, -3), 'a nonsense override means auto').toBe(5);
   });
 });

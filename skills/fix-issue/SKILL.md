@@ -25,6 +25,18 @@ with, so it must stand on its own:
 If the report is ambiguous (no repro, multiple readings), ask one clarifying question before
 dispatching anything.
 
+## 1b. Locate before you formalize (orchestrator)
+
+When the report does not name a file and finding it means sweeping several directories or naming
+conventions, delegate that search to the **`Explore`** agent rather than grepping it into this
+context — it skips `CLAUDE.md` and git status deliberately, so it stays small, and it returns the
+conclusion instead of the file dumps. Use it for "where does X live"; do the targeted read yourself
+once you know where to look.
+
+Note the implementer cannot do this: `change-implementer`'s tool grant is Read/Glob/Grep/Bash/Edit/
+Write with no Agent tool, by design — an implementer that spawns helpers muddies who authored what.
+Discovery breadth is the orchestrator's job, and it belongs in the contract you hand over.
+
 ## 2. Pick the test layer (orchestrator)
 
 This repo has three (see [docs/testing.md](../../../docs/testing.md)):
@@ -60,6 +72,28 @@ Create a run directory (`.agent-runs/fix-<slug>/`, gitignored). Then:
 For a known-but-unfixed issue (reproduce now, fix later), the implementer encodes it as
 `it.fails(...)` (Vitest) so it flips to a hard failure the moment it's fixed — that is a legitimate
 single-agent outcome and needs no verifier round.
+
+### Overlapping rounds (worktrees)
+
+Within a round the pair is strictly sequential — the verifier reads what the implementer wrote. But
+**verify(N) and implement(N+1) are independent** when N+1 is a different backlog item, and running
+them concurrently is the only lever that overlaps agent wall time rather than shaving subprocess
+cost. Do it when the queue has more than one item left:
+
+1. Dispatch the verifier for round N against the **main checkout**, which holds N's uncommitted work.
+2. Dispatch the implementer for round N+1 with `isolation: "worktree"`. It branches from the last
+   **commit**, so it cannot see N's uncommitted changes — which is what makes the two safe.
+3. When N passes and is committed, merge N+1's worktree onto the new HEAD before dispatching its
+   verifier. **The verifier must run against the merged tree**, never the worktree in isolation, or
+   it certifies a state that will never exist.
+
+**The two files that collide, every time:** `scripts/mutation-check.mjs` and
+`test/dashboard/features.json`. Both are append-only in practice, so the merge is mechanical — but
+resolve it by hand and re-run the harness afterwards. `mutation-check.mjs` is what certifies every
+other round; a bad merge there invalidates evidence retroactively, silently.
+
+**Do not overlap when:** N and N+1 touch the same `src/` module (the merge stops being mechanical),
+or N is a REJECT fixup (its objections may change what N+1 should do). Serialise those.
 
 ## 4. Close out (orchestrator)
 

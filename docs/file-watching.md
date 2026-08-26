@@ -5,8 +5,14 @@ delete+create is told apart from a rename, and what must be re-indexed when a tu
 disappears.
 
 Code: `imageCompareProvider.ts` (`setupFileWatcher`, `handleFileDeleted` / `handleFileCreated` /
-`handleFileChanged`, `removeTuple`, `removeModality`, `handleNewFile`) and `watcherLogic.ts` (the
-pure decision helpers). Pinned by `test/unit/watcherLogic.test.ts` (Vitest), which imports the real source.
+`handleFileChanged`, `removeTuple`, `removeModality`, `handleNewFile`), `watcherLogic.ts` (the
+pure decision helpers), `pollPlan.ts` (the sweep/poll cycle's pure decisions: barren-dir listing
+policy, snapshot diffing, per-directory arrivals-and-candidates, rename pairing), `arrivalPlan.ts` (new-file placement: slot-fill vs new
+tuple), `adoptionPlan.ts` (modality-dir adoption: which dirs qualify, the imageful gate, the
+column-insert mutations and `modalityAdded` payload) and `removalPlan.ts` (the tuple-delete
+sequence and the per-slot removal commit). Pinned by `test/unit/watcherLogic.test.ts`,
+`test/unit/pollPlan.test.ts`, `test/unit/arrivalPlan.test.ts`, `test/unit/adoptionPlan.test.ts`
+and `test/unit/removalPlan.test.ts` (Vitest), which import the real source.
 
 Scheduling of the existence sweep (async, `POLL` priority, 10s, non-overlapping, visibility-gated)
 belongs to the loading architecture — see `docs/loading-architecture.md`, "Filesystem watching".
@@ -21,7 +27,7 @@ the storage happens to be. No single mechanism is reliable there, so three overl
 |---|---|---|
 | `vscode.FileSystemWatcher`, one per `watchedDirs` entry | any scheme | create, change, delete |
 | Node `fs.watch`, one per *leaf* dir (dirs directly holding images) plus mode 1's base dir | `file` scheme only | delete (derived); directory create (derived, base dir only) |
-| Existence sweep over every tracked URI, every watched leaf dir, plus the mode-1 base dir | `file` scheme only | delete; new file in a watched dir; new modality dir (mode 1) |
+| Existence sweep: one listing per watched leaf dir plus the mode-1 base dir, and an `access` per name that listing lost | `file` scheme only | delete; new file in a watched dir; new modality dir (mode 1) |
 
 Why more than one: VS Code's `onDidDelete` does not fire on some platform/filesystem combinations, so
 `fs.watch` backs it up. Its `rename` event says only "an entry appeared or vanished", so the handler
@@ -40,14 +46,40 @@ watcher. The pattern is `*`, never `**/*` — including mode 1's base dir, where
 every leaf directory already has its own watcher, so a recursive glob on the parent would report each
 file *twice*. The non-recursive pattern is a deduplication guard, and it forces the mode-1 caveat below.
 
-## The sweep must re-verify before reporting
+## What the sweep costs, and how it finds a deletion
 
-A sweep observation is only meaningful at the instant it is made: tasks are queued at `POLL` priority
-and picked up long after, and an in-place overwrite — which a training step does on every save — is
-delete-then-create, so a batched "missing" would delete a file that is already back. `runDeleteSweep`
-therefore `access`es a second time before reporting; if the file has returned it was a rewrite, not a
-deletion. Watcher-sourced deletes don't need this because the create that follows an overwrite cancels
-the pending delete (below).
+The cycle's first observation is the **directory listing it already performs** for arrivals. Each
+watched leaf dir is listed once; the names that listing lost — a tracked name it no longer reports
+*as a file* — are this cycle's deletion *candidates*, and only those are `access`ed
+(`planDirSweep`, `pollPlan.ts`). In the steady state a listing loses nothing, so a quiet cycle costs
+one pooled task per watched directory and **zero** per file. It used to cost one `fs.access` task
+per tracked file: a field log from a 746-tuple × 10-modality comparison on NFS shows a single cycle
+queueing 7 407 of them behind ~6 000 waiting thumbnails, every 10 s.
+
+Two cases the listing alone would get wrong, both handled explicitly:
+
+- **A directory that cannot be listed** (deleted, unmounted, permissions) yields no names at all, so
+  every tracked file *in that directory* falls back to its own `access` — the old behaviour, for
+  exactly those files. It is the fallback path, not the normal one: a dir that *vanished* under a
+  1 000-file column costs 1 000 checks once, and the files leave the state as their deletes commit.
+  A dir that is merely *unreadable* costs them every cycle for as long as it stays that way — nothing
+  commits, so nothing shrinks the set. That ceiling is the pre-change cost, never worse than it.
+- **A dangling symlink** keeps its name in the parent listing while its target is gone. It is still
+  caught, because the candidate rule is "not listed **as a file**", not "not listed": VS Code's disk
+  provider types a link by its *target*, so a broken link lists as `Unknown|SymbolicLink` and never
+  as `File` (the same bitmask `test/mocks/vscode.ts` mirrors, and the sweep only ever runs on the
+  `file` scheme, so no other provider's typing is in play). A cheaper alternative was considered and
+  rejected: keeping the full per-file `access` pass at every Nth cycle would have re-introduced the
+  whole flood periodically to cover a case the listing already covers.
+
+A candidate is only a candidate. A sweep observation is meaningful only at the instant it is made:
+tasks are queued at `POLL` priority and picked up long after, and an in-place overwrite — which a
+training step does on every save — is delete-then-create, so a batched "missing" would delete a file
+that is already back. `runDeleteSweep` therefore `access`es a candidate twice before reporting; if
+the file is there it was a rewrite (or a listing that lied), not a deletion. This is what makes the
+candidate rule safe to be *loose*: a transient stat failure on a network mount can type a live entry
+`Unknown`, and the cost of that is two `access` calls and no report. Watcher-sourced deletes don't
+need any of this because the create that follows an overwrite cancels the pending delete (below).
 
 ## Rename detection
 
@@ -63,6 +95,10 @@ A rename is indistinguishable from a delete followed by an unrelated create, so 
 3. Otherwise the timer fires and the image leaves the tuple — then one branch or the other, never
    both: a tuple that still holds images gets a `fileDeleted` to the webview, while one that just
    lost its last image is removed via `removeTuple` and the webview sees `tupleDeleted` instead.
+   The commit sequence itself — strip the image, clear its winner, tuple-empty vs `fileDeleted`,
+   then the column-empty follow-up — is `commitSlotRemoval` (`removalPlan.ts`), which the
+   standalone poll executes too; only the 500ms deferral and `recentlyDeleted` bookkeeping around
+   it are provider state.
 
 Entries live at most 2s (`cleanupRecentlyDeleted`, run lazily whenever a delete or create is
 processed). It is a ceiling, not the working window: committing a delete drops its own entry first,
@@ -103,8 +139,11 @@ and its index, cache key, and winner intact; the webview is told `fileRestored`.
 
 The trie matcher of `fileService.ts` (`docs/tuple-matching.md`) is a batch algorithm over a complete
 scan and does not run here, where a watcher event delivers one file against an already-built tuple
-list. So `handleNewFile` (`imageCompareProvider.ts`) implements its own placement heuristic — two
-matchers, two rule sets, one filename convention; change the convention and both must move.
+list. So `planArrival` (`arrivalPlan.ts`, driven by the provider's `handleNewFile` for every watcher
+arrival and by the standalone adapter for its crop writes) implements its own placement heuristic —
+two matchers, two rule sets, one filename convention; change the convention and both must move.
+`applyArrival` executes the plan's shared mutations (splice/push+sort, winner and current-index
+shifts) and builds the wire message; each product keeps only its own cache re-keying beside it.
 
 The heuristic scores every tuple and takes the longest match. A tuple scores its own name's length
 when that name is a substring of the new file's basename (`String.includes`), because a longer tuple
@@ -197,7 +236,8 @@ new files.
   definition, so a new one is a new column.
 - Modality dir deleted is recognised in `handleFileDeleted` by comparing the deleted path against
   `baseUri`+name (mode 1) or the `modalityDirs` mapping (mode 2) *before* the per-file search. The
-  same end state is reached from below by `checkModalityEmpty` once a modality's last file is gone.
+  same end state is reached from below by `commitSlotRemoval`'s column-empty follow-up once a
+  modality's last file is gone.
 
 Mode-1 new modality has **three** detectors, because the obvious one is the least reliable. The
 base-dir glob is non-recursive (above), so a create of `base/newmod/img.png` matches no watcher
@@ -254,6 +294,39 @@ it compares with a plain `localeCompare`, the scan with the natural (`{ numeric:
 comparator — so with columns `[mod2, mod10]` a new `mod3` is appended last and then moves to second
 on the next reopen. Cosmetic, and reopening is the fix.
 
+## The standalone poll
+
+The browser build has no filesystem watchers at all, so the standalone adapter's *only* detector is
+a poll — the same paradigm as the sweep, running every `pollIntervalMs` (default 4s, injectable via
+the `__ic_standalone` seam) at `POLL` priority through the shared pool, non-overlapping, writable
+(FSA) roots only: a read-only `webkitdirectory` root is a static `File` list with nothing to
+re-list, so it never polls. Each cycle lists every modality directory and diffs against the retained
+snapshot with `diffSnapshots` (`pollPlan.ts`) — the same derivation the provider's sweep now uses
+(`sweep-derives-deletions-from-listings`), including the unreadable-dir and not-a-`File` rules: the name-set diff comes first, and per-entry
+fingerprints (`getFile()`-derived mtime/size) are fetched only afterwards and only for entries that
+still exist — an entry missing a fingerprint is simply never `changed`, which is what makes the
+per-entry cost deferrable (`poll-diff-names-first`). Same-cycle removed/added pairs are matched as
+renames through `pairRenames` → `matchDeletedFile` — the atomic diff stands in for the provider's
+500ms window, so a cross-cycle rename degrades to delete + add. Execution is the shared machinery:
+removals commit through `commitSlotRemoval`, arrivals through `planArrival`/`applyArrival`, changes
+re-serve the slot like `handleFileChanged`, and a `results.txt` whose fingerprint moved (and was not
+our own write) is re-parsed and posted as `winnersReset`. When the browser has `FileSystemObserver`,
+an observer on the root only *accelerates* the next cycle (`poll-observer-accelerates`); observer
+setup errors degrade silently to interval-only.
+
+The poll also adopts modality directories that appear under the root after open — the counterpart
+of the provider's mode-1 sweep. After the cycle's removals execute, the root is re-listed;
+qualification (`newModalityDirCandidates`) and the imageful gate (`adoptableImages`) come from
+`adoptionPlan.ts`, and a qualifying dir gets the shared column insert (`applyModalityInsert`)
+followed by one shared arrival per file, its snapshot seeded with the dispatched names so the next
+cycle re-reports nothing. Adoption runs *after* removal execution on purpose: an on-disk directory
+rename is a dir delete plus a dir create, and this ordering makes it execute as remove-then-adopt
+in one cycle — the old column leaves through the emptied-column path, the new one is adopted at
+its sorted position, and the view state survives both. The retained snapshot map tracks the live
+dir set — entries whose column is gone are dropped at the end of the cycle, so a re-created dir
+adopts from scratch. FSA directory handles expose no mtime, so a barren candidate is simply
+re-listed each cycle rather than memoized; read-only roots still never poll at all.
+
 ## State tracking
 
 - `baseUri` — set in mode 1 only.
@@ -267,10 +340,22 @@ on the next reopen. Cosmetic, and reopening is the fix.
 
 `watcherLogic.test.ts` imports `watcherLogic.ts` directly and covers rename disambiguation
 (`matchDeletedFile`), index re-shifting on removal (`shiftIndexAfterRemoval`), and the
-insertion-position helpers (`tupleInsertIndex`, `modalityInsertIndex`). The provider-side glue
-around it imports `vscode` and is therefore untested; exercise it
+insertion-position helpers (`tupleInsertIndex`, `modalityInsertIndex`). `pollPlan.test.ts` pins the
+barren-dir budget/mtime policy, the name-first/lazy-fingerprint diff, the per-directory
+arrivals-and-candidates plan (including the unlistable-dir and not-a-file rules), and rename
+pairing; `pollCost.test.ts` drives the **real** `runDeleteSweep` over temp dirs and pins what one
+cycle costs (per directory, not per file) together with the three cases that must survive that:
+a real deletion, a directory that cannot be listed, and a tracked file turned dangling symlink.
+`arrivalPlan.test.ts` pins
+the placement heuristic and the arrival mutations/payloads; `adoptionPlan.test.ts` pins the
+adoption qualification/imageful gates and the column-insert mutations and payload;
+`removalPlan.test.ts` pins the delete
+step order, the pre-shifted emptied-column indices, the re-save-after-each-step transcript, and the
+`commitSlotRemoval` commit transcripts.
+The provider-side glue
+around them imports `vscode` and is therefore untested; exercise it
 by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to see `onDidCreate` /
-`fs.watch` / `poll delete detected` in the webview console.
+`fs.watch` / `poll delete detected` as `[IC-EXT]` lines in the "ImageCompare" output channel.
 
 ## Invariants
 
@@ -289,8 +374,16 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   Both create paths (exact-URI restore, rename match) remove the entry from `recentlyDeleted`.
 - **`rename-never-guessed`** — an ambiguous rename is not guessed. `matchDeletedFile` returns -1
   rather than pick among ≥2 candidates; slots only ever move on a unique signal.
-- **`reindex-in-lockstep`** — `loadedImages`, `winners` and `recentlyDeleted` are re-indexed in
-  lockstep with `scanResult.tuples` / `.modalities`. No splice may land without them.
+- **`reindex-in-lockstep`** — `loadedImages`, `winners`, `recentlyDeleted` and the two slot-keyed
+  *wire* structures — the transport park and the scrub-burst hold
+  (`docs/loading-architecture.md: speculation-yields-the-wire`, `held-payloads-always-flush`) — are
+  re-indexed in lockstep with `scanResult.tuples` / `.modalities`. No splice may land without them.
+  A row splice shifts them; a column splice renames every key, so they are dropped exactly as
+  `loadedImages` is cleared, at a cost of one re-request each (the bytes survive in `loadedImages` or
+  on disk). The wire structures are the worst of the set to leave stale: a cache read is discarded,
+  but a post lands in the webview and paints — under another file's label, for as long as the payload
+  sits parked, which a bulk sweep can stretch to tens of seconds on exactly the kind of directory a
+  training loop overwrites in place.
 - **`modality-index-is-global`** — modality indices crossing a boundary are global (into
   `scanResult.modalities`), never a position in the sparse `tuple.images` array — a tuple missing an
   earlier modality would otherwise resolve to the wrong column.
@@ -301,10 +394,49 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   before the current tuple, and discharges it by shifting `currentTupleIndex` with the splice on both
   sides (see the `handleNewFile` bullet above). A new path that shifts the current tuple's indices
   must re-send or be matched by a webview handler that does.
+- **`sweep-derives-deletions-from-listings`** — the existence sweep derives its deletion candidates
+  from the per-directory listing it already performs, never by stat-ing every tracked file: cost is
+  one pooled task per watched directory, plus one per candidate, and a quiet cycle has no
+  candidates. Two rules keep that from losing a deletion, and both are the shared planner's
+  (`planDirSweep`, `pollPlan.ts`), not the provider's: a directory that could not be listed falls
+  *its own* files back to per-file checks, and a name listed as anything other than a **file** — a
+  dangling symlink, typed by its missing target — is a candidate like a name that vanished
+  outright. Candidates are only candidates until `sweep-reverifies-before-report` confirms them,
+  which is what makes the loose rule safe. The standalone poll was always listing-derived and holds
+  the same two rules at its own listing site (an unreadable dir lists as no names; a non-`File`
+  entry is filtered out), re-verifying each candidate with `stat` — the two products must not
+  diverge here.
 - **`sweep-reverifies-before-report`** — the sweep re-verifies before reporting a deletion. A batched
-  "missing" observation is stale by the time it is acted on.
+  "missing" observation — a name a listing lost, or a file whose own check failed — is stale by the
+  time it is acted on, so the report happens only after a second probe still fails. Both of the
+  sweep's probes are `stat`; the standalone's single probe always was (`existence-probes-follow-the-link`).
+- **`existence-probes-follow-the-link`** — every "is this file still there?" probe in the extension
+  resolves the *target*, not the name: `fs.promises.stat`, never `fs.promises.access`. On Windows the
+  call behind `access` reports the attributes of a symbolic link **itself**, so a tracked file
+  replaced by a dangling link reads as present there, and the deletion is never reported; on POSIX
+  both calls reject, which is what hides the difference from every runner but Windows. Three sites:
+  the sweep's per-candidate check and its re-verification (`sweep-reverifies-before-report`), and the
+  `fs.watch` delete backup's appeared-or-vanished branch, where the same verdict routes a vanished
+  file into the *arrival* path instead. The standalone poll already re-verifies with `stat`
+  (`sweep-derives-deletions-from-listings`); this is the rule that keeps the two products from
+  diverging. A probe faked at the `node:fs` seam is the only way a non-Windows runner can see this
+  (docs/testing.md, Findings).
 - **`duplicate-reports-idempotent`** — duplicate reports are idempotent. The same delete from watcher
   + `fs.watch` + sweep produces one state change.
+- **`watched-dirs-are-uri-paths`** — `watchedDirs`, `watchersByDir` and the sweep's per-directory
+  grouping are keyed in **URI path** space (`uri.path` — `/C:/data/exp1/GT` on Windows), never in
+  filesystem space. Every producer takes its key from a `.path`; every consumer that hands a watched
+  dir to node's `fs` converts once, with `Uri.file(dir).fsPath`, and builds any URI it reports back
+  from the *original* key rather than from that filesystem path — `fsPath` lowercases the drive
+  letter, so the round trip yields a URI no tracked image equals and the delete is reported against a
+  slot that does not exist. On POSIX the two spaces are the same string, which is the whole trap:
+  every consequence of mixing them is invisible to a test that does not feed Windows-shaped input,
+  and both consequences shipped. `fs.watch` was given the URI path, so on Windows it raised on
+  `/C:/…` (which resolves to `C:` as a *path component*) for every watched dir and the delete backup
+  never armed on any release; and a bed that hand-built `watchedDirs` from `path.join` made every
+  tracked file a stray, putting the sweep back on one existence check per file
+  (`sweep-derives-deletions-from-listings`) with no test able to see it.
+  `test/unit/crossPlatform.test.ts` pins both from a POSIX runner.
 - **`watched-dirs-have-watchers`** — every entry in `watchedDirs` has a live watcher behind it.
   Watcher setup runs once per panel, so a directory discovered later must create its own watcher at
   that moment or stay inert until the panel is reopened.
@@ -313,15 +445,41 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   existence sweep all route to `adoptNewModalityDir`, because on a network or FUSE mount neither
   watcher fires and the sweep is the only detector left. Adoption is single-flight per directory
   (`adoptingDirs`) and re-lists the directory after arming its watcher, so a file written between the
-  two listings is still placed and concurrent detectors cannot each create the tuple.
+  two listings is still placed and concurrent detectors cannot each create the tuple. The decisions —
+  which dirs qualify (directory, never a dot dir, not already a column), the imageful gate, and the
+  column-insert mutations with the `modalityAdded` payload — live in `adoptionPlan.ts`, and the
+  standalone poll executes the same ones after its removals, which is what makes an on-disk dir
+  rename land as remove-then-adopt in a single cycle there.
 - **`barren-dirs-memoized`** — a base-dir child found to hold no images is remembered by mtime and not
   re-listed until it changes or a bounded number of sweeps has passed. The sweep runs every 10s and adoption reads the whole directory, so
   without this a large unrelated sibling — `checkpoints/`, `logs/` — is fully listed on every cycle,
   inside the pool's slot, on the mount least able to afford it. The memo is capped rather than
   absolute: object-store and SMB mounts can pin a directory's mtime, and treating that as proof of
   emptiness would hide a real modality forever on exactly the filesystems the sweep exists to serve.
+  The policy itself — skip-or-list, the budget tick, the memo record and its pruning — lives in
+  `pollPlan.ts` (`planSweepDirs` / `recordDirListing` / `pruneBarrenMemos`); the provider's
+  `adoptNewModalityDir` and `sweepForNewModalityDirs` only execute it.
 - **`watchers-released-with-modality`** — removing a **mode-1** modality releases that directory's
   watchers and its `watchedDirs` entry. Mode 2 deliberately keeps both: nothing re-adopts a directory
   there, so releasing would leave the column permanently deaf if it came back. A pipeline that rotates output directories would otherwise accumulate one
   watcher pair per directory until the inotify limit breaks watching for the whole editor, and a
   directory that is deleted and recreated would keep a handle bound to the dead inode.
+- **`poll-diff-names-first`** — a poll/sweep listing diff is decided on the name *set* first, and
+  fingerprints (mtime/size) are consulted only for names present on both sides, with a side missing
+  a fingerprint never yielding `changed`. This is what lets the browser adapter defer its per-entry
+  `getFile()` cost until after the name diff and skip it entirely for removed entries, and lets the
+  provider's sweep feed the same diff bare names and take *both* sides from it — additions to place,
+  removals to re-verify (`sweep-derives-deletions-from-listings`). Weakening the
+  missing-fingerprint rule turns every lazily fingerprinted file into a phantom "change" storm.
+- **`poll-observer-accelerates`** — a `FileSystemObserver` event only triggers the next poll cycle
+  earlier; it never mutates state itself. Observer records are treated as hints, not truth — the
+  same paradigm as the provider's watchers routing into shared paths — so a browser with a buggy or
+  absent observer behaves identically, just up to one interval later, and observer failures degrade
+  silently to interval-only polling.
+- **`delete-message-order`** — tuple deletion's wire order — `tupleDeleted` (index in original
+  space), the current-tuple refresh, then `modalityRemoved` for each modality the deletion emptied,
+  with a results re-save after *every* step, never one save at the end — is encoded once, in
+  `removalPlan.ts` (`planTupleRemoval` orders the steps and pre-shifts the emptied-column indices;
+  the step executors own each step's post/refresh/re-save order), and both products' delete
+  handlers execute it through injected IO. Neither product may post these messages outside the
+  planner's steps.

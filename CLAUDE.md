@@ -39,11 +39,25 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
   code beside it, and it is invisible to anyone reading the design. Put the explanation in the
   relevant `docs/` file and leave a one-line comment — ideally naming the doc. Applies to JSDoc too:
   state the contract, don't narrate the rationale. `node scripts/comment-lint.mjs` enforces it (a run
-  of 2+ consecutive `//` lines fails) and runs in CI. It reads only `src/**/*.ts`; tests live under
-  `test/`, outside that scope, which is the exemption they need — a comment explaining why a fixture
-  triggers an edge case is correctly co-located with the fixture. `scripts/`, `webpack.config.js` and
-  `.github/` are outside its scope entirely — the rule there is convention, not a gate. Banner (`// ----`) and directive (`// eslint-`, `// @ts-`)
-  runs are exempt too.
+  of 2+ consecutive `//` lines fails) and runs in CI. It reads `src/**/*.ts` **and**
+  `scripts/**/*.{mjs,js}` — the gate scripts are held to the rule they gate. `test/` is exempt **on
+  its merits, not by an accident of scope**: a comment explaining why a fixture triggers an edge case
+  is correctly co-located with the fixture, and the rule exists to keep *production* code from
+  carrying design prose that belongs in `docs/`. `webpack.config.js` and `.github/` stay outside —
+  convention there, not a gate. Exempt in both scanned scopes: banner (`// ----`) and directive
+  (`// eslint-`, `// @ts-`) runs. Exempt in `scripts/` **only**: the leading file-header block — the
+  `//` run starting at the file's first non-shebang, non-blank line and ending at the first
+  non-comment line, nothing else that is merely near the top. A gate script's header documents the
+  file, and `docs/` describes subsystems, not individual scripts, so it has no better home; `src/`
+  files say that in `/** */` JSDoc instead and so keep the plain threshold with no header carve-out.
+  The checker never looks inside `/** */` at all — deliberate, and stated in its own header, so the
+  "state the contract, don't narrate" half of the rule is review-enforced rather than gated.
+  Widening the gate to `test/` was **considered and declined** on measurement: 192 runs across 93
+  files, none of them the failure the rule exists to prevent, against 10 in `scripts/`. The reason
+  the scope matters at all is the diagnosis that produced this gate — **gates shape agent behaviour;
+  prose does not.** A rule expressed as a scoped gate is obeyed exactly to its scope: close-out
+  audits correctly reported "comment-lint: n/a, scans only `src/`" and moved on, and no amount of
+  wording here changed that. If a rule should hold somewhere, the *checker* has to say so.
 
 ## Architecture Overview
 
@@ -54,7 +68,11 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
 - **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
 - **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
+- **`pollPlan.ts`** - Pure (no vscode dependency): poll-cycle decisions — barren-dir listing policy, snapshot name/fingerprint diffing, same-cycle rename pairing — shared by the provider's existence sweep and the standalone poll → `docs/file-watching.md`
 - **`workPool.ts`** - Pure: the bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
+- **`transportBudget.ts`** - Pure (extension-only): backpressure for outbound image bytes — the pool orders *work*, this orders *bytes on the wire* so speculation cannot starve a remote session → `docs/loading-architecture.md`
+- **`debugLog.ts`** - Pure (no vscode dependency): the `imageCompare.debug` sink — cached flags, an injected line sink, elapsed stamping and the byte/tier/throughput formatters; shared with the standalone build → `docs/testing.md`, `docs/loading-architecture.md`
+- **`debugChannel.ts`** - The extension's half of that sink: the "ImageCompare" `OutputChannel` and the config-change refresh → `docs/testing.md`
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
 - **`webviewShell.ts`** - The webview's static HTML shell (styles + body), single source of truth for the production panel and the Playwright test harness (`test/webview/harness.ts`)
 - **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities → `docs/tuple-matching.md`
@@ -64,11 +82,28 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`modalityNames.ts`** - Pure (no vscode dependency): shortest-unique-tail naming of modality columns from directory paths → `docs/session-files.md`
 - **`thumbPack.ts`** - Pure (no vscode dependency): the thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
 - **`wireFormat.ts`** - Pure (no vscode dependency): image payload normalization for extension→webview transfer → `docs/loading-architecture.md`
+- **`resultsFile.ts`** - Pure (no vscode dependency): `results.txt` parse/serialize plus the persist flow (empty votes delete the file), shared with the standalone build → `docs/standalone.md`
+- **`cropPlan.ts`** - Pure (no vscode dependency): `_cropNN` output naming and crop-rect scale/clamp → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`cropFlow.ts`** - Pure (no vscode dependency): the whole crop sequence (`performCrop` — one name, relative rect, per-modality render/inject/write, arrivals, `cropComplete`, thumbnails) over per-product IO, shared with the standalone build → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`pptxDeck.ts`** - Pure (no vscode dependency): PPTX slide selection, parent/crop pairing and layout over an injected IO, `comparison_NN` export-file numbering, and the export flow (`exportDeck` — name, build, save, exactly one answer) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`prefetchPlan.ts`** - Pure (extension-only, no vscode): what a prefetch wave speculates on — the
+  tuple band `prefetchCount` names, the on-screen modality column plus the nearest siblings (reusing
+  `tupleLoadPlan`'s own rule), and the column-major issue order → `docs/loading-architecture.md`
+- **`sweepAimPolicy.ts`** - Pure (no vscode/DOM): where the open-time sweep aims and when that moves — the raw `setCurrentTuple` stream trailing-edge dwelled into a settled tuple, the strip un-permuted into a column, over host-supplied timer primitives; shared, so neither product can dwell differently → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`thumbnailPlan.ts`** - Pure (no vscode dependency): open-time thumbnail-sweep planning and running (slot order, missing slots, progress ticks, sweep wire traffic over injected IO), shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`imageServe.ts`** - Pure (no vscode dependency): full-image serving — passthrough-vs-convert branch, payload normalization, the single terminal reply, and the current-tuple refresh loop — shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`initPayload.ts`** - Pure (no vscode dependency): `init`-message assembly (dense tuples, positional color defaults, winners record, product version for the help modal), shared with the standalone build → `docs/standalone.md`
+- **`arrivalPlan.ts`** - Pure (no vscode dependency): new-file placement (slot-fill vs new tuple, shifts, wire payloads) for provider watcher arrivals and standalone crop writes → `docs/file-watching.md`, `docs/standalone.md`
+- **`adoptionPlan.ts`** - Pure (no vscode dependency): modality-dir adoption decisions (which dirs qualify, the imageful gate, the column-insert mutations and `modalityAdded` payload), shared by the provider's three detectors and the standalone poll → `docs/file-watching.md`, `docs/standalone.md`
+- **`removalPlan.ts`** - Pure (no vscode dependency): the tuple-delete sequence (step order, emptied columns, re-save points) and the whole delete flow (per-file disk deletes before the live-index re-plan), executed by both products through injected IO → `docs/file-watching.md`, `docs/standalone.md`
+- **`imageMime.ts`** - Pure (no vscode dependency): the passthrough-mime table → `docs/image-backends.md`
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
+- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
+- **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
 
 ## Design docs (`docs/`)
 
@@ -84,6 +119,7 @@ has none). Read one on demand — don't load them preemptively.
 | `docs/tuple-matching.md` | Touching how files are grouped into tuples/modalities: the trie matcher, tie-breaks, crop deprioritization, modality naming/order, or the sparse-vs-dense and original-vs-display index traps. |
 | `docs/image-backends.md` | Touching Sharp/Jimp/PPMX, `loadFullImage`, webpack externalization, or packaging. Documents which fallback tiers *actually* exist (not the aspirational chain) and why the CPU workaround is there. |
 | `docs/crop-and-pptx.md` | Touching crop or PowerPoint export: the relative-coordinate contract, the dual EXIF+tEXt metadata write, the `_cropNN` filename contract, or parent/crop slide pairing. |
+| `docs/standalone.md` | Touching the standalone browser build: `standalone/`, `scripts/build-standalone.mjs`, or any pure module the adapter shares with the provider (results format, crop plan, deck layout). |
 | `docs/testing.md` | Adding or changing a test, or trusting one: the three layers, what each suite pins, the copy-trap history, what nothing covers, and the manual checks. |
 
 Everything below is operating instructions — conventions, commands, release. Subsystem *design*
@@ -161,6 +197,7 @@ with Codex/other tools and the symlink convention breaks.
 npm install          # Install dependencies
 npm run watch        # Watch mode (rebuilds on changes)
 npm run compile      # One-off build
+npm run build:standalone  # Single-file browser build → dist/standalone/image_compare.html (docs/standalone.md)
 # Press F5 in VSCode to launch Extension Development Host
 ```
 
@@ -209,13 +246,25 @@ clip; bug fixes need a test, never a demo.
 npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
 npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
-node scripts/comment-lint.mjs       # no multi-line // blocks in production code
+node scripts/comment-lint.mjs       # no multi-line // blocks in src/ or scripts/ (test/ exempt)
+node scripts/check-sidedness.mjs    # module sidedness from real imports; no dead src/ modules; no host hand-building a shared runner's injected decision
+node scripts/check-generated-output.mjs  # generators write only into ignored dirs (nothing to `git add .`)
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
 npm run compile                     # both webpack targets
 ```
 
-CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the two
-checker scripts, the suites, the mutation check. The `gates` job in `test.yml` runs all three
+**Running the mutation harness.** It must run to completion and report its **own** exit status.
+Never signal it, never `pkill` it — the pattern matches your own shell, which is how a run was once
+orphaned onto SIGHUP — and never attach a tool deadline that can cut it: a full run is ~10 minutes
+and sits right at the 600 s agent tool ceiling, so it is over the line as often as under. Launch it
+detached, await its completion marker, and read the status it recorded. A run that was cut is **not**
+a pass: the `Mutations: N killed: K` summary and the only exit-0 path are both after the loop, so a
+truncated run prints no verdict at all. A `MUTATION_CHECK_TEST` subset run is never the gate — it
+says so itself and exits 2.
+
+CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
+checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but
+runs only in the pre-commit hook — it needs the gitignored `.words-to-check.txt`.) The `gates` job in `test.yml` runs all three
 `tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
 step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
 `npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
@@ -283,34 +332,55 @@ Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
 
 ## Publishing (GitHub Actions)
 
-Publishing is automated via GitHub Actions. The workflow first runs the `test` job (ubuntu) — compile, both checker scripts, the suites, the mutation check — then builds one VSIX per platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
+Publishing is automated via GitHub Actions. A tag runs **two** gating jobs before anything is
+packaged, and `build` needs both: `test` (ubuntu — compile, the four checker scripts, the suites,
+the mutation check) and `test-full`, which is `uses: ./.github/workflows/test.yml` and therefore
+runs the whole three-OS matrix. Naming only the ubuntu job here once led to the false conclusion
+that a tag could publish a build that fails on Windows; it cannot. Then it builds one VSIX per
+platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
 
 ### Release Checklist (for Claude)
 
-When the user asks to "release" or "prepare a release", perform ALL of the following steps automatically:
+**A release starts on a branch and is tagged only once CI is green.** Never bump-commit-tag in one
+pass on `main`.
 
-1. **Read current version** from `package.json` — this is the baseline
-2. **Bump version** — increment patch version in `package.json` (e.g., 0.1.8 → 0.1.9)
-3. **Update `CHANGELOG.md`** — add a new `## [X.Y.Z]` section describing all changes since the last release (check `git log` and `git diff` against the last tag)
-4. **Compile and verify** — `npm run compile` must succeed with no errors
-5. **Commit all changes** (version bump + changelog + code):
-   ```bash
-   git add package.json CHANGELOG.md src/ ...
-   git commit -m "Release vX.Y.Z - short description"
-   git push
-   ```
-6. **Create and push a tag** (this triggers the CI publish workflow):
-   ```bash
-   git tag vX.Y.Z
-   git push --tags
-   ```
+The reason is narrower than it looks, and worth stating so nobody "optimizes" the branch step away:
+a tag would *not* publish a broken build — `publish.yml`'s `build` job declares
+`needs: [test, test-full]`, and `test-full` is `uses: ./.github/workflows/test.yml`, which runs the
+full three-OS matrix. So a red Windows suite stops the release before anything is packaged. What a
+premature tag costs is a **public tag pointing at a commit that fails CI**, and a burned version
+number: recovering means deleting a pushed tag or skipping to the next patch. The branch step turns
+that into an ordinary red build on a branch nobody has released from.
+
+When the user asks to "release" or "prepare a release":
+
+1. **Work on a branch**, never directly on `main`. If the work is already on one, stay there.
+2. **Read the current version** from `package.json` — the baseline.
+3. **Bump the version** in `package.json`. Patch for fixes; minor when behaviour changed or
+   anything user-visible was added.
+4. **Update `CHANGELOG.md`** — a `## [X.Y.Z]` section covering everything since the last tag
+   (`git log`, `git diff` against it).
+5. **Run the full local battery** (Verification, above). `npm run test:integration` cannot run on a
+   box with no X server — say so rather than reporting it passed.
+6. **Commit and push the branch.** Do NOT tag yet.
+7. **Wait for CI on the branch to go green** — `test.yml` runs `gates`, `engines-floor` and the
+   three-OS `test` matrix on every push. **This is the step that exists because the local battery
+   is Linux-only**: a Windows-only defect is invisible until this runs, and one shipped undetected
+   for several releases precisely this way — see the Findings list in docs/testing.md.
+8. **Fix anything red and push again.** Repeat until green. A release is not "nearly ready" while
+   any platform is red.
+9. **Merge to `main`** once green.
+10. **Tag and push the tag** from `main` — `git tag vX.Y.Z && git push --tags`. This is what
+    triggers `publish.yml`, and it is the first irreversible step: it publishes to the VS Code
+    Marketplace and Open VSX, neither of which lets you unpublish a version cleanly.
+
+**Tagging is a separate, explicit instruction.** "Push the branch" does not authorise a tag; ask, or
+wait to be told.
 
 ### Release Checklist (manual verification after CI)
 
-7. **Verify CI** — check GitHub Actions for green builds on all 6 platforms
-8. **Verify marketplace listings** — confirm the new version appears on both VS Code Marketplace and Open VSX
-
-The workflow will automatically build for all 6 platforms and publish to both Open VSX and VS Code Marketplace.
+11. **Verify the publish run** — green builds on all 6 platform targets.
+12. **Verify both marketplaces** — the new version live on VS Code Marketplace and Open VSX.
 
 ### What the CI does for each platform
 
@@ -374,7 +444,14 @@ Four rules, each learned by breaking the install:
    *next-patch* base is load-bearing, both ways: semver puts `-alphaN` below its base release, so
    an alpha of the *current* version would be silently auto-updated back to the marketplace build,
    and a bare bumped patch (the old convention) outranks the next real release so auto-update
-   never delivers it. `vsce package` accepts the suffix.
+   never delivers it. `vsce package` accepts the suffix. **Use `npm run alpha -- <N>`** — it bumps
+   `package.json` (the single version source: the provider reads it at runtime, the standalone
+   stamps it at build time) and builds VSIX + standalone in one window so the pair always agree.
+   The bump then STAYS in the working tree for the whole testing period — a transient bump loses
+   the race against test-driven rebuilds, which re-stamp the base version (learned when an alpha
+   install shipped beside a stale `v0.3.0` standalone twice in one day). `npm run alpha -- --restore`
+   reverts before committing; the CI gates job fails on any committed prerelease version, so a
+   forgotten restore cannot ship.
 3. **Copy the `.vsix` to local disk first** (e.g. `/tmp`). Installing straight off a network mount is
    what makes rule 1 bite.
 4. **Interrupted leftovers can be unremovable until the window reloads.** The running extension host

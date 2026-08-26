@@ -35,6 +35,11 @@ jobs:
       - run: npx tsc --noEmit -p tsconfig.test.json
       - run: node scripts/check-invariants.mjs
       - run: node scripts/comment-lint.mjs
+      - run: node scripts/check-sidedness.mjs
+      - run: node scripts/check-generated-output.mjs
+      # A committed prerelease version means a local-alpha bump leaked (CLAUDE.md: Install Locally).
+      - run: |
+          node -e "const v=require('./package.json').version; if(v.includes('-')){console.error('package.json carries a local prerelease version '+v);process.exit(1)}"
       - run: npm test
       - run: node scripts/mutation-check.mjs
 
@@ -197,17 +202,20 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - run: xvfb-run -a npm run test:dashboard
       - run: npm run test:demos
+      - run: npm run build:standalone
       - name: Assemble site
         run: |
-          mkdir -p _site/dashboard _site/gallery
+          mkdir -p _site/dashboard _site/gallery _site/standalone
           cp test/dashboard/dashboard.html _site/dashboard/index.html
           cp -r test/demos/gallery/. _site/gallery/
+          cp dist/standalone/image_compare.html _site/standalone/index.html
           cat > _site/index.html <<'HTML'
           <!DOCTYPE html><meta charset="utf-8"><title>ImageCompare — test reports</title>
           <body style="font-family:sans-serif;max-width:40em;margin:4em auto">
           <h1>ImageCompare</h1>
           <p><a href="dashboard/">Feature coverage dashboard</a> — which features are pinned by which tests, from real runs.</p>
           <p><a href="gallery/">Demo gallery</a> — captioned clips of every feature, freshly recorded.</p>
+          <p><a href="standalone/">Standalone ImageCompare</a> — the whole comparer as one page: open it and pick a folder (Chrome/Edge for full features).</p>
           </body>
           HTML
       - uses: actions/configure-pages@v6

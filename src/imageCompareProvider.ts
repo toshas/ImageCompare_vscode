@@ -1,18 +1,33 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import PptxGenJS from 'pptxgenjs';
-import { scanForImages, readResultsFile, writeResultsFile, mapWinnersToIndices, disambiguateDirectoryNames, RESULTS_FILENAME } from './fileService';
+import { scanForImages, readResultsFile, mapWinnersToIndices, disambiguateDirectoryNames, RESULTS_FILENAME } from './fileService';
 import { applyLabels, parseSessionFile, serializeSessionFile } from './sessionFile';
 import { normalizeImageBytes } from './wireFormat';
-import { matchDeletedFile, modalityInsertIndex, shiftIndexAfterRemoval, tupleInsertIndex } from './watcherLogic';
-import { nextPanelKey, Priority, sharedWorkPool, TaskCancelled, WorkPool } from './workPool';
-import { ThumbnailService } from './thumbnailService';
+import { matchDeletedFile, shiftIndexAfterRemoval } from './watcherLogic';
+import { adoptableImages, applyModalityInsert, newModalityDirCandidates } from './adoptionPlan';
+import { planDirSweep, planSweepDirs, pruneBarrenMemos, recordDirListing, shouldLogPoolSnapshot } from './pollPlan';
+import { applyArrival, planArrival } from './arrivalPlan';
+import { commitSlotRemoval, deleteTupleFlow, removeModalityStep, removeTupleStep } from './removalPlan';
+import { DeckIo, DECK_IMAGE_MAX_DIM, DECK_JPEG_QUALITY, exportDeck } from './pptxDeck';
+import { persistResults } from './resultsFile';
+import { ImageServeIo, ImageServeReply, refreshTupleImages, serveImage } from './imageServe';
+import { performCrop } from './cropFlow';
+import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE } from './thumbnailPlan';
+import { buildInitPayload } from './initPayload';
+import { PrefetchScope, prefetchWavePlan } from './prefetchPlan';
+// Where the sweep aims and when that settles is the shared policy's, never this host's (docs/loading-architecture.md: sweep-centre-dwells).
+import { SweepAimPolicy } from './sweepAimPolicy';
+import { nextPanelKey, poolWidth, Priority, TaskCancelled, usableParallelism, WorkPool } from './workPool';
+import { TransportBudget, reindexSlotKeyedPosts, resolveTransportBudgetBytes } from './transportBudget';
+import { beginOpenMarks, debug, debugEnabled, debugVerbose, diffPackLoadStat, diffTierStats, formatBytes, formatOpenRollup, formatPackLoad, formatTierStats, itemsPerSecond, OpenMarks } from './debugLog';
+import { THUMBNAIL_MIME, ThumbnailService } from './thumbnailService';
 import { renderWebviewHtml } from './webviewShell';
 import { parsePpmx } from './ppmxParser';
 import {
   ScanResult,
-  TupleInfo,
   ImageTuple,
   ImageFile,
   WebViewMessage,
@@ -28,8 +43,16 @@ import {
 
 // Fallback existence sweep for filesystems whose watchers are unreliable (see docs/file-watching.md).
 const DELETE_POLL_INTERVAL_MS = 10000;
+/** Debug-only pool/wire snapshot cadence while an open-time sweep is draining (docs/testing.md). */
+const DEBUG_SNAPSHOT_INTERVAL_MS = 2000;
+/** Cap on debug lines queued for the webview console before 'ready'; the output channel keeps them all. */
+const PENDING_DEBUG_MAX = 200;
 /** Re-list a known-barren directory this often, so a mount with a frozen directory mtime still gets picked up. */
 const BARREN_RECHECK_SWEEPS = 6;
+/** Frees a speculative push's budget if its `postMessage` never settles, so a lost ack cannot park prefetch for the session. */
+const TRANSPORT_ACK_TIMEOUT_MS = 30000;
+/** Idle, not total: a sweep that has settled no slot for this long is presumed stuck and gives the wire back (docs/loading-architecture.md: speculation-yields-the-wire). */
+const TRANSPORT_SWEEP_IDLE_TIMEOUT_MS = 30000;
 
 /**
  * Info about a recently deleted file (for rename detection)
@@ -49,6 +72,8 @@ interface PanelState {
   scanResult: ScanResult;
   loadedImages: Map<string, LoadedImage>;
   currentTupleIndex: TupleIndex;
+  /** This panel's sweep aim: raw reports in, a settled tile out — the shared policy, as the standalone's session has (docs/loading-architecture.md: sweep-centre-dwells, thumbnails-centre-out). */
+  sweepAim: SweepAimPolicy;
   fileWatchers: vscode.FileSystemWatcher[];
   nodeWatchers: fs.FSWatcher[];
   /** Per-directory, so a removed modality releases exactly its own (docs/file-watching.md: watchers-released-with-modality). */
@@ -70,14 +95,60 @@ interface PanelState {
   disposed: boolean; // panel closed — in-flight async work must stop touching this state
   visible: boolean; // panel is showing — hidden panels don't poll or prefetch
   deleteSweepRunning: boolean; // guards against overlapping existence sweeps
+  /** Last pool snapshot this panel's poll printed, so an idle window stops repeating it (docs/loading-architecture.md: idle-poll-logs-nothing-new). */
+  lastPoolSnapshot?: string;
   poolKey: string; // work-pool cancellation key scoping this panel's tasks
   prefetchWaveKey: string; // key of the current prefetch wave (cancelled when superseded)
   prefetchWaveCounter: number;
+  /** Live per-tuple image-load keys; leaving a tuple cancels its own (docs/loading-architecture.md: stale-tuple-loads-cancelled). */
+  imageLoadKeys: Set<string>;
   webviewReady: boolean;
   pendingDebugMessages: string[];
   lastTupleSwitchAt: number; // last setCurrentTuple arrival; recent = the user is scrubbing
   heldImagePosts: Map<string, Extract<ExtensionMessage, { type: 'image' }>>; // off-screen payloads parked during a scrub burst
   burstFlushTimer?: ReturnType<typeof setTimeout>;
+  /** Bytes-on-the-wire backpressure for speculative image pushes (docs/loading-architecture.md: speculation-yields-the-wire). */
+  transport: TransportBudget<Extract<ExtensionMessage, { type: 'image' }>>;
+  sweepIdleTimer?: ReturnType<typeof setTimeout>; // sweep-stall watchdog; cleared at sweep end and on dispose
+  /** Live ack watchdogs, so dispose can clear them instead of retaining the panel for the timeout (docs/loading-architecture.md: speculation-yields-the-wire). */
+  ackWatchdogs?: Set<ReturnType<typeof setTimeout>>;
+  /** Running outbound accounting for the debug channel; both totals are raw payload bytes, since thumbnails cross the channel binary like images. */
+  wire: { thumbnails: number; thumbBytes: number; images: number; imageBytes: number };
+  /** Debug-only prefetch-wave rollups, keyed by wave key; `open` until issuing finishes, then deleted as the wave drains. */
+  prefetchWaves: Map<string, { center: number; issued: number; done: number; bytes: number; startedAt: number; open: boolean }>;
+  sweepStatsTimer?: ReturnType<typeof setInterval>; // debug-only; cleared at sweep end and on dispose
+  /** Re-enters the running sweep's pump; called whenever this panel's visible/disposed answer changes (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels). */
+  sweepRepump?: () => void;
+  /** Debug-only open trace; absent when debug was off at open, and cleared once the rollup is emitted (docs/loading-architecture.md: open-spans-account-for-the-whole-open). */
+  openMarks?: OpenMarks;
+}
+
+/** The sweep's own cancellation key: a re-aim drops queued thumbnail reads only, never the panel's export/poll work (docs/loading-architecture.md: sweep-cancels-on-reaim). */
+function sweepPoolKey(state: PanelState): string {
+  return `${state.poolKey}-sweep`;
+}
+
+let shared: WorkPool | undefined;
+
+/**
+ * The single pool every panel's image work goes through. No aging: safe only while
+ * every producer stays finite — see docs/loading-architecture.md.
+ */
+function sharedWorkPool(): WorkPool {
+  if (!shared) {
+    // The os-derived counts and the override live here so workPool.ts stays browser-safe; the width rule is the shared poolWidth (docs/loading-architecture.md: pool-width-hides-latency).
+    const override = vscode.workspace.getConfiguration('imageCompare').get<number>('maxConcurrentReads', 0);
+    shared = new WorkPool(poolWidth(usableParallelism(os.availableParallelism?.(), os.cpus()?.length), override));
+  }
+  return shared;
+}
+
+/** The host's whole contribution to the aim: two timer primitives, no decision (docs/standalone.md: host-supplies-data-not-policy, docs/loading-architecture.md: sweep-centre-dwells). */
+export function newSweepAimPolicy(): SweepAimPolicy {
+  return new SweepAimPolicy({
+    setTimer: (run, ms) => setTimeout(run, ms),
+    clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
+  });
 }
 
 /**
@@ -161,11 +232,18 @@ export class ImageCompareProvider {
    * @param colors modality pill color overrides, keyed by URI string
    */
   async openCompare(uris: vscode.Uri[], panel: vscode.WebviewPanel, labels?: Map<string, string>, sessionFileUri?: vscode.Uri, colors?: Map<string, string>): Promise<void> {
+    // One flag read gates the whole open trace; every later mark is guarded by this object's existence (docs/loading-architecture.md: debug-off-costs-nothing).
+    const marks = debugEnabled() ? beginOpenMarks(Date.now()) : undefined;
     // Close during the scan would leak watchers/timers: the real onDidDispose is only attached after it.
     let closedDuringScan = false;
     const earlyDispose = panel.onDidDispose(() => { closedDuringScan = true; });
     try {
       const scanResult = await scanForImages(uris, labels);
+      if (marks) {
+        marks.scanDoneAt = Date.now();
+        marks.scanFiles = scanResult.stats?.files ?? 0;
+        marks.matchMs = scanResult.stats?.matchMs ?? 0;
+      }
 
       if (closedDuringScan) {
         earlyDispose.dispose();
@@ -195,7 +273,7 @@ export class ImageCompareProvider {
         }
       }
 
-      // Watched dirs: base (mode 1), each modality dir (mode 2), plus every leaf dir holding images.
+      // Watched dirs: base (mode 1), each modality dir (mode 2), plus every leaf dir holding images — keyed by `.path`, never a native path (docs/file-watching.md: watched-dirs-are-uri-paths).
       const watchedDirs = new Set<string>();
       if (baseUri) {
         watchedDirs.add(baseUri.path);
@@ -221,6 +299,7 @@ export class ImageCompareProvider {
         scanResult,
         loadedImages: new Map<string, LoadedImage>(),
         currentTupleIndex: asTuple(0),
+        sweepAim: newSweepAimPolicy(),
         fileWatchers: [],
         nodeWatchers: [],
         watchersByDir: new Map(),
@@ -244,10 +323,24 @@ export class ImageCompareProvider {
         deleteSweepRunning: false,
         poolKey: panelKey,
         prefetchWaveKey: `${panelKey}-prefetch-0`,
-        prefetchWaveCounter: 0
+        prefetchWaveCounter: 0,
+        imageLoadKeys: new Set<string>(),
+        wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
+        prefetchWaves: new Map(),
+        // Unlimited unless this window is remote (docs/loading-architecture.md: wire-budget-remote-only).
+        transport: new TransportBudget(resolveTransportBudgetBytes(
+          vscode.workspace.getConfiguration('imageCompare').get<number>('prefetchTransportBudgetMB'),
+          vscode.env.remoteName
+        )),
+        openMarks: marks
       };
 
+      if (marks) marks.watchersAt = Date.now();
       this.setupFileWatcher(panelState);
+      if (marks) {
+        marks.watchersDoneAt = Date.now();
+        marks.watchedDirs = watchedDirs.size;
+      }
       this.panels.add(panelState);
 
       // Per-panel, not the provider-wide `disposables` array: those would accumulate across open/close.
@@ -258,31 +351,13 @@ export class ImageCompareProvider {
         (message: WebViewMessage) => this.handlePanelMessage(panelState, message)
       ));
 
-      // Only the prefetch wave may be dropped on hide (docs/loading-architecture.md: hidden-keeps-work).
-      panelSubscriptions.push(panel.onDidChangeViewState(() => {
-        panelState.visible = panel.visible;
-        if (!panel.visible) {
-          this.pool.cancel(panelState.prefetchWaveKey);
-        }
-      }));
+      panelSubscriptions.push(panel.onDidChangeViewState(() => this.setPanelVisible(panelState, panel.visible)));
 
       // Triggers the webview JS to run and post 'ready'.
+      if (marks) marks.htmlAt = Date.now();
       panel.webview.html = this.getHtmlContent(panel.webview);
 
-      panel.onDidDispose(() => {
-        panelState.disposed = true;
-        // Both keys: pool.cancel matches exactly (docs/loading-architecture.md, "Lifecycle").
-        this.pool.cancel(panelState.poolKey);
-        this.pool.cancel(panelState.prefetchWaveKey);
-        panelState.loadedImages.clear();
-        panelState.heldImagePosts.clear();
-        if (panelState.burstFlushTimer) clearTimeout(panelState.burstFlushTimer);
-        panelState.fileWatchers.forEach(w => w.dispose());
-        panelState.nodeWatchers.forEach(w => w.close());
-        if (panelState.deleteCheckTimer) clearInterval(panelState.deleteCheckTimer);
-        panelSubscriptions.forEach(d => d.dispose());
-        this.panels.delete(panelState);
-      });
+      panel.onDidDispose(() => this.disposePanel(panelState, panelSubscriptions));
     } catch (error) {
       earlyDispose.dispose();
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -296,11 +371,53 @@ export class ImageCompareProvider {
 
 
   /**
+   * React to this panel being shown or hidden: nothing is cancelled but the speculative prefetch
+   * wave, and the open-time sweep is paused while hidden and resumed on re-show
+   * (docs/loading-architecture.md: hidden-keeps-work, hidden-sweep-pauses-not-cancels).
+   */
+  private setPanelVisible(state: PanelState, visible: boolean): void {
+    state.visible = visible;
+    if (!visible) this.pool.cancel(state.prefetchWaveKey);
+    // Both directions: hiding must reach the pump to take effect at all, showing to restart it.
+    state.sweepRepump?.();
+  }
+
+  /**
+   * Tear a panel down: cancel its work, drop its caches and clear every timer it armed
+   * (docs/loading-architecture.md, "Lifecycle").
+   */
+  private disposePanel(state: PanelState, subscriptions: vscode.Disposable[]): void {
+    state.disposed = true;
+    // Every key: pool.cancel matches exactly (docs/loading-architecture.md, "Lifecycle").
+    this.pool.cancel(state.poolKey);
+    this.pool.cancel(sweepPoolKey(state)); // the sweep's queue hangs off its own key (docs/loading-architecture.md: sweep-cancels-on-reaim)
+    this.pool.cancel(state.prefetchWaveKey);
+    this.cancelImageLoads(state); // per-tuple keys outlive poolKey's cancel (docs/loading-architecture.md: stale-tuple-loads-cancelled)
+    state.sweepRepump?.(); // a sweep paused with nothing outstanding has no settle left to end it (docs/loading-architecture.md: hidden-sweep-pauses-not-cancels)
+    state.loadedImages.clear();
+    state.heldImagePosts.clear();
+    state.transport.reset(); // parked speculation dies with the panel (docs/loading-architecture.md: speculation-yields-the-wire)
+    if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
+    if (state.sweepStatsTimer) clearInterval(state.sweepStatsTimer);
+    if (state.sweepIdleTimer) clearTimeout(state.sweepIdleTimer);
+    state.sweepAim.dispose(); // a dwell must not fire against a dead panel (docs/loading-architecture.md: sweep-centre-dwells)
+    // Un-acked pushes would otherwise retain this panel for the ack timeout (docs/loading-architecture.md: speculation-yields-the-wire).
+    for (const timer of state.ackWatchdogs ?? []) clearTimeout(timer);
+    state.ackWatchdogs?.clear();
+    state.fileWatchers.forEach(w => w.dispose());
+    state.nodeWatchers.forEach(w => w.close());
+    if (state.deleteCheckTimer) clearInterval(state.deleteCheckTimer);
+    subscriptions.forEach(d => d.dispose());
+    this.panels.delete(state);
+  }
+
+  /**
    * Handle messages from the webview (panel-specific)
    */
   private async handlePanelMessage(state: PanelState, message: WebViewMessage): Promise<void> {
     switch (message.type) {
       case 'ready':
+        if (state.openMarks) state.openMarks.readyAt = Date.now();
         state.webviewReady = true;
         for (const msg of state.pendingDebugMessages) {
           state.panel.webview.postMessage({ type: '_debug', msg });
@@ -318,28 +435,46 @@ export class ImageCompareProvider {
           state,
           message.tupleIndex,
           message.modalityIndex,
-          message.sibling ? Priority.SIBLING : Priority.VISIBLE,
+          // The webview ranks its own request; the tail is the speculative remainder (docs/loading-architecture.md: sibling-tail-never-competes).
+          message.tail ? Priority.SIBLING_TAIL : message.sibling ? Priority.SIBLING : Priority.VISIBLE,
           message.forceReload
         );
         break;
 
       case 'setCurrentTuple':
+        // Queued loads for the tuple being left are work nobody awaits (docs/loading-architecture.md: stale-tuple-loads-cancelled).
+        this.cancelImageLoads(state, message.tupleIndex);
         state.currentTupleIndex = message.tupleIndex;
         state.lastTupleSwitchAt = Date.now();
+        state.sweepAim.noteTuple(message.tupleIndex);
         // The user landed here: anything held for this tuple is delivered now, ahead of the burst flush.
         for (const [key, held] of state.heldImagePosts) {
           if (held.tupleIndex === message.tupleIndex) {
             state.heldImagePosts.delete(key);
-            state.panel.webview.postMessage(held);
+            this.postImageNow(state, held);
           }
         }
         break;
 
-      case 'tupleFullyLoaded':
+      case 'setCurrentModality':
+        // A clicked column aims the sweep at once; `tupleFullyLoaded` can be a whole cold tuple away (docs/loading-architecture.md: click-reports-its-column).
+        state.sweepAim.noteStrip(message);
+        break;
+
+      case 'tupleFullyLoaded': {
+        // The strip as displayed is also the sweep's column aim — the one report that carries it (docs/loading-architecture.md: thumbnails-centre-out).
+        state.sweepAim.noteStrip(message);
         if (message.tupleIndex === state.currentTupleIndex) {
-          await this.prefetchAround(state, message.tupleIndex);
+          const hidden = new Set<number>(message.hiddenModalities);
+          // The strip as displayed is the wave's whole scope (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column).
+          await this.prefetchAround(state, message.tupleIndex, {
+            modalityOrder: message.modalityOrder,
+            currentDisplayIndex: message.currentDisplayIndex,
+            isHidden: o => hidden.has(o)
+          });
         }
         break;
+      }
 
       case 'setWinner':
         await this.handleSetWinner(state, message.tupleIndex, message.modalityIndex);
@@ -393,28 +528,12 @@ export class ImageCompareProvider {
    * File watchers will detect the deletions and update the UI.
    */
   private async handleDeleteTuple(state: PanelState, tupleIndex: TupleIndex): Promise<void> {
-    const tuple = state.scanResult.tuples[tupleIndex];
-    if (!tuple) return;
-
-    for (const img of tuple.images) {
-      try {
-        await vscode.workspace.fs.delete(img.uri);
-      } catch {
-        // File may already be gone
-      }
-    }
-
     // Remove eagerly rather than waiting on a watcher event, which may be up to a sweep away (docs/file-watching.md: self-writes-never-wait).
-    /* Names, not indices: each checkModalityEmpty below splices the array an index would point into. */
-    const modalityNames = tuple.images.map(img => img.modality);
-    // The awaits above may have shifted rows; splice by identity, not the index we were called with.
-    const liveIndex = state.scanResult.tuples.indexOf(tuple);
-    if (liveIndex < 0) return;
-    this.removeTuple(state, asTuple(liveIndex));
-    for (const name of modalityNames) {
-      const idx = state.scanResult.modalities.indexOf(name);
-      if (idx >= 0) this.checkModalityEmpty(state, idx);
-    }
+    await deleteTupleFlow<ImageFile>(state.scanResult, tupleIndex, {
+      deleteFile: async img => { await vscode.workspace.fs.delete(img.uri); },
+      removeTuple: idx => this.removeTuple(state, idx),
+      removeModality: idx => this.removeModality(state, idx)
+    });
   }
 
   /**
@@ -426,56 +545,7 @@ export class ImageCompareProvider {
     winnerModalityIndices: (OriginalModalityIndex | null)[],
     modalityOrder: OriginalModalityIndex[]
   ): Promise<void> {
-    try {
-      const saveUri = await this.suggestPptxUri(state);
-      if (!saveUri) {
-        throw new Error('Cannot determine output directory');
-      }
-
-      const pptx = new PptxGenJS();
-      pptx.layout = 'LAYOUT_16x9';
-      pptx.title = 'ImageCompare Export';
-
-      const slideWidth = 10; // inches (default for 16:9)
-      const slideHeight = 5.625; // inches (default for 16:9)
-
-      const barH = 0.35; // inches — height of the caption bar
-
-      const addCaption = (slide: PptxGenJS.Slide, tupleName: string, modality: string, isWinner: boolean) => {
-        slide.addShape('rect', {
-          x: 0, y: 0, w: slideWidth, h: barH,
-          fill: { color: 'D0D0D0', transparency: 50 },
-        });
-
-        slide.addText(tupleName, {
-          x: 0.1, y: 0, w: slideWidth / 2, h: barH,
-          fontSize: 10,
-          fontFace: 'Arial',
-          bold: true,
-          color: '000000',
-          valign: 'middle',
-          align: 'left',
-        });
-
-        const modLabel = isWinner ? `✓ ${modality}` : modality;
-        slide.addText(modLabel, {
-          x: slideWidth / 2, y: 0, w: slideWidth / 2 - 0.1, h: barH,
-          fontSize: 10,
-          fontFace: 'Arial',
-          bold: true,
-          color: isWinner ? '008800' : '000000',
-          valign: 'middle',
-          align: 'right',
-        });
-      };
-
-      const loadImageBase64 = (uri: vscode.Uri): Promise<{ data: string; width: number; height: number } | null> => {
-        // cancel() drains the queue once; a sequential producer must stop submitting itself.
-        if (state.disposed) throw new TaskCancelled();
-        return this.pool.submit(() => loadImageBase64Unpooled(uri), { priority: Priority.EXPORT, key: state.poolKey });
-      };
-
-      const loadImageBase64Unpooled = async (uri: vscode.Uri): Promise<{ data: string; width: number; height: number } | null> => {
+    const loadImageBase64Unpooled = async (uri: vscode.Uri): Promise<{ data: string; width: number; height: number } | null> => {
         try {
           const bytes = await vscode.workspace.fs.readFile(uri);
           const buffer = Buffer.from(bytes);
@@ -492,8 +562,8 @@ export class ImageCompareProvider {
             const meta = await img.metadata();
             // Capped and JPEG-recompressed, never full-res PNG (docs/crop-and-pptx.md: deck-images-bounded).
             const jpgBuffer = await img
-              .resize(2560, 2560, { fit: 'inside', withoutEnlargement: true })
-              .jpeg({ quality: 85 })
+              .resize(DECK_IMAGE_MAX_DIM, DECK_IMAGE_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
+              .jpeg({ quality: DECK_JPEG_QUALITY })
               .toBuffer();
             return {
               data: `data:image/jpeg;base64,${jpgBuffer.toString('base64')}`,
@@ -525,205 +595,58 @@ export class ImageCompareProvider {
         }
       };
 
-      // `_crop\d+` here must keep matching the writer's format (docs/crop-and-pptx.md: cropnn-writer-reader-match).
-      const findCropTuples = (baseTupleName: string): number[] => {
-        const cropPattern = new RegExp(`^${baseTupleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_crop\\d+$`);
-        const cropIndices: number[] = [];
-        for (let i = 0; i < state.scanResult.tuples.length; i++) {
-          if (cropPattern.test(state.scanResult.tuples[i].name)) {
-            cropIndices.push(i);
-          }
-        }
-        return cropIndices;
-      };
-
-      const findParentTuple = (cropName: string): number => {
-        const match = cropName.match(/^(.+)_crop\d+$/);
-        if (!match) return -1;
-        return state.scanResult.tuples.findIndex(t => t.name === match[1]);
-      };
-
-      // Ordering and constants are tuned, not derived (docs/crop-and-pptx.md).
-      const computeCropLayout = (cropAspect: number, fullAspect: number) => {
-        const gap = 0.15;
-        const defaultThumbW = 2;
-        const minThumbW = 1.2;
-
-        let mainW: number, mainH: number;
-        if (cropAspect > slideWidth / slideHeight) {
-          mainW = slideWidth; mainH = slideWidth / cropAspect;
-        } else {
-          mainH = slideHeight; mainW = slideHeight * cropAspect;
-        }
-        let mainX = (slideWidth - mainW) / 2;
-        let mainY = (slideHeight - mainH) / 2;
-        const origArea = mainW * mainH;
-
-        let thumbW = defaultThumbW;
-        let thumbH = thumbW / fullAspect;
-        let thumbX = slideWidth - thumbW;
-        let thumbY = slideHeight - thumbH;
-
-        if (mainX + mainW > thumbX - gap && mainY + mainH > thumbY - gap) {
-          const tryFit = (tw: number) => {
-            const th = tw / fullAspect;
-            const tx = slideWidth - tw;
-            const avail = tx - gap;
-            let w: number, h: number;
-            if (cropAspect > avail / slideHeight) {
-              w = avail; h = avail / cropAspect;
-            } else {
-              h = slideHeight; w = slideHeight * cropAspect;
-            }
-            return {
-              mainW: w, mainH: h, mainX: (avail - w) / 2, mainY: slideHeight - h,
-              thumbW: tw, thumbH: th, thumbX: tx, thumbY: slideHeight - th
-            };
-          };
-
-          let fit = tryFit(defaultThumbW);
-          if (fit.mainW * fit.mainH < origArea * 0.7) {
-            fit = tryFit(minThumbW);
-          }
-          if (fit.mainW * fit.mainH >= origArea * 0.5) {
-            return fit;
-          }
-        }
-
-        return { mainW, mainH, mainX, mainY, thumbW, thumbH, thumbX, thumbY };
-      };
-
-      // Crop image, plus a full-image callout thumbnail with the region marked in red.
-      const addCropSlide = async (
-        cropTupleIdx: number,
-        fullTupleIdx: number,
-        modality: string,
-        tupleName: string,
-        isWinner: boolean
-      ) => {
-        const cropTuple = state.scanResult.tuples[cropTupleIdx];
-        const cropImg = cropTuple.images.find(i => i.modality === modality);
-        if (!cropImg) return;
-        const cropImgData = await loadImageBase64(cropImg.uri);
-        if (!cropImgData) return;
-
-        const fullTuple = state.scanResult.tuples[fullTupleIdx];
-        const fullImg = fullTuple.images.find(i => i.modality === modality);
-        if (!fullImg) return;
-        const fullImgData = await loadImageBase64(fullImg.uri);
-        if (!fullImgData) return;
-
-        const cropAspect = cropImgData.width / cropImgData.height;
-        const fullAspect = fullImgData.width / fullImgData.height;
-        const layout = computeCropLayout(cropAspect, fullAspect);
-
-        const slide = pptx.addSlide();
-        slide.addImage({ data: cropImgData.data, x: layout.mainX, y: layout.mainY, w: layout.mainW, h: layout.mainH });
-        slide.addImage({ data: fullImgData.data, x: layout.thumbX, y: layout.thumbY, w: layout.thumbW, h: layout.thumbH });
-
-        // The red rect comes from metadata, never re-derived (docs/crop-and-pptx.md: callout-from-metadata).
-        if (state.disposed) throw new TaskCancelled();
-        const cropMeta = await this.pool.submit(() => this.thumbnailService.readCropMetadata(cropImg.uri), { priority: Priority.EXPORT, key: state.poolKey });
-        // A zero srcW/srcH would put Infinity into the slide XML, which corrupts the whole deck.
-        if (cropMeta && cropMeta.srcW > 0 && cropMeta.srcH > 0) {
-          const scaleX = layout.thumbW / cropMeta.srcW;
-          const scaleY = layout.thumbH / cropMeta.srcH;
-          slide.addShape('rect', {
-            x: layout.thumbX + cropMeta.x * scaleX,
-            y: layout.thumbY + cropMeta.y * scaleY,
-            w: cropMeta.w * scaleX,
-            h: cropMeta.h * scaleY,
-            line: { color: 'FF0000', width: 2 },
-            fill: { type: 'none' }
-          });
-        }
-
-        addCaption(slide, tupleName, modality, isWinner);
-      };
-
-      // Parent/crop pairing: a voted crop never ships without its parent (docs/crop-and-pptx.md: one-slide-per-region).
-      for (let idx = 0; idx < tupleIndices.length; idx++) {
-        if (state.disposed) return;
-        const tupleIndex = tupleIndices[idx];
-        const winnerIdx = winnerModalityIndices[idx];
+    const deckIo: DeckIo = {
+      loadImage: async (tupleIndex, modalityOriginalIndex) => {
         const tuple = state.scanResult.tuples[tupleIndex];
-        if (!tuple) continue;
-
-        // A voted crop is rendered against its parent even if the parent was never voted.
-        const parentIdx = findParentTuple(tuple.name);
-        if (parentIdx >= 0) {
-          for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
-            const originalModIdx = modalityOrder[displayIdx];
-            const modality = state.scanResult.modalities[originalModIdx];
-            if (!modality) continue;
-            await addCropSlide(tupleIndex, parentIdx, modality, tuple.name, winnerIdx === originalModIdx);
-          }
-          continue;
-        }
-
-        const cropTupleIndices = findCropTuples(tuple.name);
-        const hasCrops = cropTupleIndices.length > 0;
-        // A voted crop child already gets its own slide, so the parent falls back to a plain one.
-        const hasVotedCrops = hasCrops && cropTupleIndices.some(ci => tupleIndices.includes(asTuple(ci)));
-
-        for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
-          const originalModIdx = modalityOrder[displayIdx];
-          const modality = state.scanResult.modalities[originalModIdx];
-          if (!modality) continue;
-          const isWinner = winnerIdx === originalModIdx;
-
-          if (!hasCrops || hasVotedCrops) {
-            const img = tuple.images.find(i => i.modality === modality);
-            if (!img) continue;
-            const imgData = await loadImageBase64(img.uri);
-            if (!imgData) continue;
-
-            const slide = pptx.addSlide();
-            const imgAspect = imgData.width / imgData.height;
-            const slideAspect = slideWidth / slideHeight;
-            let imgW: number, imgH: number, imgX: number, imgY: number;
-            if (imgAspect > slideAspect) {
-              imgW = slideWidth;
-              imgH = slideWidth / imgAspect;
-              imgX = 0;
-              imgY = (slideHeight - imgH) / 2;
-            } else {
-              imgH = slideHeight;
-              imgW = slideHeight * imgAspect;
-              imgX = (slideWidth - imgW) / 2;
-              imgY = 0;
-            }
-            slide.addImage({ data: imgData.data, x: imgX, y: imgY, w: imgW, h: imgH });
-            addCaption(slide, tuple.name, modality, isWinner);
-          } else if (cropTupleIndices.length === 1) {
-            // Only parent voted, exactly one crop — present as if the crop was voted.
-            await addCropSlide(cropTupleIndices[0], tupleIndex, modality, state.scanResult.tuples[cropTupleIndices[0]].name, isWinner);
-          } else {
-            // Several crops, none voted: resolve the ambiguity by breadth, one slide each.
-            for (const cropTupleIdx of cropTupleIndices) {
-              await addCropSlide(cropTupleIdx, tupleIndex, modality, state.scanResult.tuples[cropTupleIdx].name, isWinner);
-            }
-          }
-        }
+        const modality = state.scanResult.modalities[modalityOriginalIndex];
+        const img = tuple && modality ? this.findImageForModality(tuple, modality) : undefined;
+        if (!img) return null;
+        // cancel() drains the queue once; a sequential producer must stop submitting itself.
+        if (state.disposed) throw new TaskCancelled();
+        return this.pool.submit(() => loadImageBase64Unpooled(img.uri), { priority: Priority.EXPORT, key: state.poolKey });
+      },
+      readCropMeta: async (tupleIndex, modality) => {
+        const tuple = state.scanResult.tuples[tupleIndex];
+        const img = tuple ? this.findImageForModality(tuple, modality) : undefined;
+        if (!img) return null;
+        if (state.disposed) throw new TaskCancelled();
+        return this.pool.submit(() => this.thumbnailService.readCropMetadata(img.uri), { priority: Priority.EXPORT, key: state.poolKey });
       }
+    };
 
-      // One buffer, one write: a streamed write racing the completion notification is how a half-flushed deck gets opened.
-      const buffer = (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
-      if (state.disposed) return;
-      await vscode.workspace.fs.writeFile(saveUri, buffer);
-
-      if (state.disposed) return;
-      // Exactly one complete/error per request on a live panel (docs/crop-and-pptx.md: export-always-answers).
-      state.panel.webview.postMessage({ type: 'pptxComplete', path: saveUri.fsPath });
-      const choice = await vscode.window.showInformationMessage(`PPTX exported: ${saveUri.fsPath}`, 'Reveal in Explorer');
-      if (choice) void vscode.commands.executeCommand('revealInExplorer', saveUri);
-    } catch (err) {
+    let saveUri: vscode.Uri | undefined;
+    // Name, build, save and the exactly-one answer are sequenced by the shared flow (docs/crop-and-pptx.md: export-always-answers) (docs/standalone.md: deck-layout-shared).
+    await exportDeck(state.scanResult.tuples, state.scanResult.modalities, { tupleIndices, winnerModalityIndices, modalityOrder }, {
+      getPptx: async () => PptxGenJS,
+      listExistingNames: async () => {
+        const parentDir = this.pptxOutputDir(state);
+        if (!parentDir) throw new Error('Cannot determine output directory');
+        // Scan-and-increment, unlocked — same pattern (and same race) as crop numbering.
+        try {
+          return await fs.promises.readdir(parentDir);
+        } catch {
+          return []; // unreadable dir: the export still lands there with the default name
+        }
+      },
+      deckIo,
+      saveDeck: async (pptx, name) => {
+        // One buffer, one write: a streamed write racing the completion notification is how a half-flushed deck gets opened.
+        const buffer = (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
+        if (state.disposed) throw new TaskCancelled();
+        saveUri = vscode.Uri.file(path.join(this.pptxOutputDir(state)!, name));
+        await vscode.workspace.fs.writeFile(saveUri, buffer);
+        if (state.disposed) throw new TaskCancelled();
+        return saveUri.fsPath;
+      },
+      post: msg => { state.panel.webview.postMessage(msg); },
       // A closed panel is not a failure: every other pooled await filters this the same way.
-      if (err instanceof TaskCancelled || state.disposed) return;
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      state.panel.webview.postMessage({ type: 'pptxError', error: errorMsg });
-      vscode.window.showErrorMessage(`PPTX export failed: ${errorMsg}`);
-    }
+      isCancelled: err => err instanceof TaskCancelled || state.disposed,
+      onSaved: async savedPath => {
+        const choice = await vscode.window.showInformationMessage(`PPTX exported: ${savedPath}`, 'Reveal in Explorer');
+        if (choice && saveUri) void vscode.commands.executeCommand('revealInExplorer', saveUri);
+      },
+      onError: errorMsg => { vscode.window.showErrorMessage(`PPTX export failed: ${errorMsg}`); }
+    });
   }
 
   /**
@@ -737,130 +660,32 @@ export class ImageCompareProvider {
     srcWidth: number,
     srcHeight: number
   ): Promise<void> {
-    const tuple = state.scanResult.tuples[tupleIndex];
-    if (!tuple) return;
-
-    // Tuple name, not source filename, so the watcher regroups (docs/crop-and-pptx.md: shared-crop-filename).
-    const tupleName = tuple.name;
-
-    /* Max across every modality dir: a cancelled crop leaves them out of step, and the lower number would overwrite (docs/crop-and-pptx.md: shared-crop-filename). */
-    if (tuple.images.length === 0) return;
-    const cropNums = await Promise.all(
-      tuple.images.map(img => this.getNextCropNumber(vscode.Uri.joinPath(img.uri, '..'), tupleName))
-    );
-    // Resolved once, outside the per-modality loop, or one crop splits into N tuples (docs/crop-and-pptx.md: shared-crop-filename).
-    const cropNum = Math.max(...cropNums);
-    // Zero-padded `_cropNN`: every `_crop\d+` reader depends on this format (docs/crop-and-pptx.md: cropnn-writer-reader-match).
-    const cropSuffix = `_crop${String(cropNum).padStart(2, '0')}`;
-    const outputName = `${tupleName}${cropSuffix}.png`;
-
-    // Relative (0-1) is the only form that may cross modalities (docs/crop-and-pptx.md: relative-coords-only).
-    const relRect = {
-      x: cropRect.x / srcWidth,
-      y: cropRect.y / srcHeight,
-      w: cropRect.w / srcWidth,
-      h: cropRect.h / srcHeight
-    };
-
-    let savedCount = 0;
-    let cancelled = 0;
-    const savedPaths: string[] = [];
-    const savedUris: vscode.Uri[] = [];
-
-    const cropOne = async (imageFile: ImageFile) => {
-      const dirUri = vscode.Uri.joinPath(imageFile.uri, '..');
-      const outputUri = vscode.Uri.joinPath(dirUri, outputName);
-
-      // True dimensions are re-read from disk per modality; the webview's are only a denominator (docs/crop-and-pptx.md: srcdims-are-denominator).
-      const meta = await this.thumbnailService.getImageDimensions(imageFile.uri);
-      const scaledRect = {
-        x: Math.max(0, Math.round(relRect.x * meta.width)),
-        y: Math.max(0, Math.round(relRect.y * meta.height)),
-        w: Math.round(relRect.w * meta.width),
-        h: Math.round(relRect.h * meta.height)
-      };
-      scaledRect.w = Math.min(scaledRect.w, meta.width - scaledRect.x);
-      scaledRect.h = Math.min(scaledRect.h, meta.height - scaledRect.y);
-      // NaN fails every comparison, so it would slip past a plain <= 0 test into sharp.extract.
-      if (!(scaledRect.w > 0) || !(scaledRect.h > 0)) return; // scaled to nothing: skip, not an error
-
-      const croppedBuffer = await this.thumbnailService.cropImage(imageFile.uri, scaledRect, meta.width, meta.height);
-      await vscode.workspace.fs.writeFile(outputUri, croppedBuffer);
-      savedCount++;
-      savedPaths.push(outputUri.path);
-      savedUris.push(outputUri);
-    };
-
-    // Pooled per modality: a wide tuple would otherwise fan out full-res decodes without bound (docs/loading-architecture.md: visible-never-starved).
-    await Promise.all(tuple.images.map(async (imageFile) => {
-      try {
-        await this.pool.submit(() => cropOne(imageFile), { priority: Priority.EXPORT, key: state.poolKey });
-      } catch (err: any) {
-        if (err instanceof TaskCancelled) { cancelled++; return; }
-        console.error(`[ImageCompare] Failed to crop ${imageFile.name}:`, err?.message ?? err);
-      }
-    }));
-
-    // A cancelled crop is a closed panel, not a failure to report.
-    if (state.disposed || cancelled > 0) return;
-    if (savedCount > 0) {
-      // Place the crops now — a self-write never waits on its own event (docs/file-watching.md: self-writes-never-wait).
-      for (const uri of savedUris) this.handleFileCreated(state, uri);
-      state.panel.webview.postMessage({
-        type: 'cropComplete',
-        tupleIndex,
-        count: savedCount,
-        paths: savedPaths
-      } as ExtensionMessage);
-    } else {
-      state.panel.webview.postMessage({
-        type: 'cropError',
-        tupleIndex,
-        error: 'Failed to crop any images'
-      } as ExtensionMessage);
-    }
+    // Naming, rect math, per-modality order and the terminal posts are sequenced by the shared flow (docs/crop-and-pptx.md: shared-crop-filename).
+    await performCrop<ImageFile, { path: string; uri: vscode.Uri }>(state.scanResult, { tupleIndex, cropRect, srcWidth, srcHeight }, {
+      listDirNames: async img => (await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(img.uri, '..'))).map(([name]) => name),
+      getDimensions: img => this.thumbnailService.getImageDimensions(img.uri),
+      renderCrop: (img, rect, cropMeta) => this.thumbnailService.cropImage(img.uri, rect, cropMeta),
+      writeCrop: async (img, outputName, bytes) => {
+        const outputUri = vscode.Uri.joinPath(vscode.Uri.joinPath(img.uri, '..'), outputName);
+        await vscode.workspace.fs.writeFile(outputUri, bytes);
+        return { path: outputUri.path, uri: outputUri };
+      },
+      // Pooled per modality: a wide tuple would otherwise fan out full-res decodes without bound (docs/loading-architecture.md: visible-never-starved).
+      schedule: work => this.pool.submit(work, { priority: Priority.EXPORT, key: state.poolKey }),
+      isCancelled: err => err instanceof TaskCancelled,
+      isAborted: () => state.disposed,
+      // Place the crop now — a self-write never waits on its own event (docs/file-watching.md: self-writes-never-wait).
+      arriveFile: saved => { this.handleFileCreated(state, saved.uri); },
+      post: msg => { state.panel.webview.postMessage(msg); }
+    });
   }
 
-  /** Export output target: comparison_NN.pptx (max existing + 1) in the base dir or the first modality's parent. */
-  private async suggestPptxUri(state: PanelState): Promise<vscode.Uri | undefined> {
+  /** Export output directory: the base dir, or the first modality's parent, or undefined. */
+  private pptxOutputDir(state: PanelState): string | undefined {
     const baseDir = state.baseUri?.fsPath ||
       (state.modalityDirs.size > 0 ? Array.from(state.modalityDirs.values())[0].fsPath : undefined);
     if (!baseDir) return undefined;
-    const parentDir = state.baseUri ? baseDir : path.dirname(baseDir);
-    // Scan-and-increment, unlocked — same pattern (and same race) as crop numbering.
-    let pptxNum = 1;
-    try {
-      const existingFiles = await fs.promises.readdir(parentDir);
-      const pptxPattern = /^comparison_(\d+)\.pptx$/;
-      for (const f of existingFiles) {
-        const match = f.match(pptxPattern);
-        if (match) pptxNum = Math.max(pptxNum, parseInt(match[1], 10) + 1);
-      }
-    } catch {
-      // unreadable dir: the dialog still opens there with the default name
-    }
-    return vscode.Uri.file(path.join(parentDir, `comparison_${String(pptxNum).padStart(2, '0')}.pptx`));
-  }
-
-  /**
-   * Scan a directory for existing _cropNN files and return the next number.
-   */
-  private async getNextCropNumber(dirUri: vscode.Uri, basename: string): Promise<number> {
-    try {
-      const entries = await vscode.workspace.fs.readDirectory(dirUri);
-      const escaped = basename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const cropPattern = new RegExp(`^${escaped}_crop(\\d+)\\.`);
-      let maxNum = 0;
-      for (const [name] of entries) {
-        const match = name.match(cropPattern);
-        if (match) {
-          maxNum = Math.max(maxNum, parseInt(match[1], 10));
-        }
-      }
-      return maxNum + 1;
-    } catch {
-      return 1;
-    }
+    return state.baseUri ? baseDir : path.dirname(baseDir);
   }
 
   /**
@@ -971,37 +796,11 @@ export class ImageCompareProvider {
 
     const resultsUri = vscode.Uri.joinPath(baseUri, filename);
 
-    // Delete rather than leave an empty stub.
-    if (state.winners.size === 0) {
-      try {
-        await vscode.workspace.fs.delete(resultsUri);
-      } catch {
-        // File doesn't exist or can't be deleted - that's OK
-      }
-      return;
-    }
-
-    // Stays tuple-index-keyed; writeResultsFile converts to the durable tuple name (fileService.ts).
-    const winnersWithNames = new Map<number, string>();
-    for (const [tupleIndex, modalityIndex] of state.winners) {
-      const modality = state.scanResult.modalities[modalityIndex];
-      if (modality) {
-        winnersWithNames.set(tupleIndex, modality);
-      }
-    }
-
-    try {
-      await writeResultsFile(
-        baseUri,
-        state.scanResult.tuples,
-        winnersWithNames,
-        state.scanResult.modalities,
-        filename
-      );
-    } catch (error) {
-      // Non-fatal: the results file is optional.
-      console.error('Failed to save results.txt:', error);
-    }
+    // Empty-deletes, naming and serialization are the shared persist flow (docs/standalone.md: results-format-shared).
+    await persistResults(state.scanResult.tuples, state.scanResult.modalities, state.winners, {
+      writeText: async text => { await vscode.workspace.fs.writeFile(resultsUri, Buffer.from(text, 'utf-8')); },
+      deleteFile: async () => { await vscode.workspace.fs.delete(resultsUri); }
+    });
   }
 
   /**
@@ -1096,6 +895,8 @@ ${lead}
    * Send initialization data to webview
    */
   private async sendInitData(state: PanelState): Promise<void> {
+    const marks = state.openMarks;
+    if (marks) marks.initAt = Date.now();
     const config = vscode.workspace.getConfiguration('imageCompare');
     const thumbnailSize = config.get<number>('thumbnailSize', 100);
     const prefetchCount = config.get<number>('prefetchCount', 3);
@@ -1123,121 +924,174 @@ ${lead}
       }
     }
 
-    const tuples: TupleInfo[] = state.scanResult.tuples.map((tuple, tupleIndex) => ({
-      name: tuple.name,
-      // Dense for the webview: a modality the sparse tuple lacks becomes a `name: ''` placeholder (docs/tuple-matching.md: sparse-vs-dense-tuples).
-      images: allModalities.map((modality, modalityIndex) => {
-        const img = this.findImageForModality(tuple, modality);
-        return {
-          name: img?.name || '',
-          modality,
-          tupleIndex: asTuple(tupleIndex),
-          modalityIndex: asOriginal(modalityIndex)
-        };
-      })
-    }));
+    // Assembled by the shared pure builder; session-file colors flow through the override hook (docs/standalone.md: adapter-contains-no-logic).
+    const initMessage = buildInitPayload({
+      tuples: state.scanResult.tuples,
+      modalities: allModalities,
+      modalityPaths: allModalities.map(mod => this.resolveModalityPath(state, mod)),
+      winners: state.winners,
+      config: { thumbnailSize, prefetchCount, keepZoomOnTupleChange },
+      votingEnabled: state.votingEnabled,
+      labelsExplicit: state.labelsExplicit,
+      // Real installed version from the extension's own manifest via the activation context.
+      version: String(this.context.extension.packageJSON.version ?? ''),
+      colorOverride: (mod, i) => this.resolveModalityColor(state, mod, i)
+    });
 
-    // Convert winners Map to Record for JSON serialization
-    const winnersRecord: Record<number, OriginalModalityIndex> = {};
-    for (const [tupleIndex, modalityIndex] of state.winners) {
-      winnersRecord[tupleIndex] = modalityIndex;
+    if (marks) {
+      // The one JSON pass debug adds; reported as `sizing` so nobody reads it as product cost (docs/loading-architecture.md: open-spans-account-for-the-whole-open).
+      const sizingAt = Date.now();
+      marks.initBytes = Buffer.byteLength(JSON.stringify(initMessage));
+      marks.initSizingMs = Date.now() - sizingAt;
+      marks.tuples = state.scanResult.tuples.length;
+      marks.modalities = allModalities.length;
     }
 
-    const modalityPaths: string[] = allModalities.map(mod => this.resolveModalityPath(state, mod));
-
-    const modalityColors: string[] = allModalities.map((mod, i) => this.resolveModalityColor(state, mod, i));
-
-    const initMessage: ExtensionMessage = {
-      type: 'init',
-      tuples,
-      modalities: allModalities,
-      modalityPaths,
-      modalityColors,
-      config: { thumbnailSize, prefetchCount, keepZoomOnTupleChange },
-      winners: winnersRecord,
-      votingEnabled: state.votingEnabled,
-      labelsExplicit: state.labelsExplicit
-    };
-
     state.panel.webview.postMessage(initMessage);
+    if (marks) marks.initPostedAt = Date.now();
     this.generateAllThumbnails(state);
   }
 
   /**
-   * One-shot open-time sweep of every slot. Not visibility-gated and not cancellable:
-   * nothing re-enqueues, so skipping it leaves blank thumbnails for the session
-   * (docs/loading-architecture.md, "Thumbnails").
+   * One-shot open-time sweep of every slot, dispatched outward from the current tuple. Not
+   * visibility-gated: every slot is swept, so skipping one leaves a blank thumbnail for the
+   * session. Queued dispatches are cancelled on re-aim and returned to the cursor, never dropped;
+   * a dispose abandons the rest instead (docs/loading-architecture.md: sweep-covers-every-slot-once,
+   * sweep-stops-when-host-abandons).
    */
   private generateAllThumbnails(state: PanelState): void {
     const config = vscode.workspace.getConfiguration('imageCompare');
     const thumbnailSize = config.get<number>('thumbnailSize', 100);
-    const allModalities = state.scanResult.modalities;
+    // Slot selection, order, totals and the sweep's wire traffic come from the shared planner/runner (docs/standalone.md: adapter-contains-no-logic).
+    const plan = planThumbnails(state.scanResult.tuples, state.scanResult.modalities);
+    const itemBySlot = new Map(plan.items.map(item => [`${item.tupleIndex}-${item.modalityIndex}`, item]));
 
-    const items: Array<{ uri: vscode.Uri; tupleIndex: number; modalityIndex: number; modality: string }> = [];
-    const missingSlots: Array<{ tupleIndex: number; modalityIndex: number }> = [];
+    // The sweep opens aimed at the row the panel opened on; the dwell governs moves only (docs/loading-architecture.md: sweep-centre-dwells).
+    state.sweepAim.noteSweepStart(state.currentTupleIndex);
+    // One flag read gates the whole sweep's instrumentation — clock, snapshots and timer alike (docs/loading-architecture.md: debug-off-costs-nothing).
+    const timed = debugEnabled();
+    const sweepStart = timed ? Date.now() : 0;
+    const openMarks = state.openMarks;
+    // Emitted once per open, on the sweep's own clock: the trace is consumed here and no time falls between the two rollups (docs/loading-architecture.md: open-spans-account-for-the-whole-open).
+    if (openMarks) {
+      openMarks.sweepAt = timed ? sweepStart : Date.now();
+      state.openMarks = undefined;
+      debug('[IC-OPEN]', () => formatOpenRollup(openMarks));
+    }
+    const tiersBefore = timed ? this.thumbnailService.thumbTierStats() : undefined;
+    const packLoadBefore = timed ? this.thumbnailService.thumbPackLoadStat() : undefined;
+    let sweepPostedBytes = 0;
+    // The sweep owns the wire until it drains (docs/loading-architecture.md: speculation-yields-the-wire).
+    state.transport.setSweepActive(true);
+    debug('[IC-SWEEP]', () => `start slots=${plan.total} items=${plan.items.length} missing=${plan.missing.length} grid=${state.scanResult.tuples.length}x${state.scanResult.modalities.length} pool ${this.pool.stats()}`);
+    // Never overwrite a live interval: a second sweep on the same panel would strand the first past dispose.
+    if (state.sweepStatsTimer) clearInterval(state.sweepStatsTimer);
+    state.sweepStatsTimer = undefined;
+    if (timed) {
+      // Debug-only timer; cleared in the sweep's finally and again on panel dispose.
+      state.sweepStatsTimer = setInterval(() => {
+        debug('[IC-POOL]', () => `sweeping ${Date.now() - sweepStart}ms pool ${this.pool.stats()} ${this.formatWire(state)}`);
+      }, DEBUG_SNAPSHOT_INTERVAL_MS);
+    }
 
-    for (let tupleIndex = 0; tupleIndex < state.scanResult.tuples.length; tupleIndex++) {
-      const tuple = state.scanResult.tuples[tupleIndex];
-      
-      for (let modalityIndex = 0; modalityIndex < allModalities.length; modalityIndex++) {
-        const modality = allModalities[modalityIndex];
-        const imageFile = this.findImageForModality(tuple, modality);
-        
-        if (imageFile) {
-          items.push({
-            uri: imageFile.uri,
-            modality,
-            tupleIndex,
-            modalityIndex
-          });
-        } else {
-          missingSlots.push({ tupleIndex, modalityIndex });
-        }
+    let ended = false;
+    // The one exit: the settle, a synchronous throw out of the prologue and the stall watchdog all land here (docs/loading-architecture.md: speculation-yields-the-wire).
+    const endSweep = (): void => {
+      if (ended) return;
+      ended = true;
+      if (state.sweepIdleTimer) {
+        clearTimeout(state.sweepIdleTimer);
+        state.sweepIdleTimer = undefined;
       }
-    }
+      if (state.sweepStatsTimer) {
+        clearInterval(state.sweepStatsTimer);
+        state.sweepStatsTimer = undefined;
+      }
+      debug('[IC-SWEEP]', () => {
+        const ms = Date.now() - sweepStart;
+        const tiers = diffTierStats(tiersBefore ?? this.thumbnailService.thumbTierStats(), this.thumbnailService.thumbTierStats());
+        // The shared pack read is reported beside the tiers, never inside them (docs/loading-architecture.md: shared-waits-are-not-per-item-work).
+        const packLoad = diffPackLoadStat(packLoadBefore ?? this.thumbnailService.thumbPackLoadStat(), this.thumbnailService.thumbPackLoadStat());
+        return `done ${ms}ms items=${plan.items.length} ${itemsPerSecond(plan.items.length, ms)}/s posted=${formatBytes(sweepPostedBytes)} ${formatTierStats(tiers)} ${formatPackLoad(packLoad)} pool ${this.pool.stats()} ${this.formatWire(state)}`;
+      });
+      // Logged first, so the rollup reports the traffic that shared the wire WITH the sweep (docs/loading-architecture.md: speculation-yields-the-wire).
+      state.transport.setSweepActive(false);
+      this.drainDeferredImagePosts(state);
+    };
+    // Re-armed by every slot that settles, so only a stalled sweep — never a long one — loses the wire.
+    const armStallWatchdog = (): void => {
+      if (!state.transport.active || ended) return;
+      if (state.sweepIdleTimer) clearTimeout(state.sweepIdleTimer);
+      state.sweepIdleTimer = setTimeout(endSweep, TRANSPORT_SWEEP_IDLE_TIMEOUT_MS);
+    };
+    armStallWatchdog();
 
-    for (const { tupleIndex, modalityIndex } of missingSlots) {
-      this.sendThumbnailErrorMessage(state, tupleIndex, modalityIndex, 'Image not available');
-    }
-
-    // With nothing to enqueue no per-item `.finally` fires, so post the terminal tick here or the bar hangs.
-    if (items.length === 0) {
-      if (!state.disposed) this.sendProgressMessage(state, missingSlots.length, missingSlots.length);
-      return;
-    }
-
-    // Scanline order + FIFO-within-priority fills top-to-bottom (docs/loading-architecture.md: thumbnails-scanline-order).
-    let done = 0;
-    const total = items.length;
-    for (const item of items) {
-      const { tupleIndex, modalityIndex, modality, uri } = item;
-      void this.pool
-        .submit(() => this.thumbnailService.getThumbnail(uri, thumbnailSize * 2), {
-          // Ranks below on-demand THUMBNAIL so scrolling can't queue behind the sweep.
-          priority: Priority.THUMBNAIL_BULK,
-          key: state.poolKey
-        })
-        .then(
-          dataUrl => {
-            const slot = this.resolveSlotForUri(state, tupleIndex, modality, uri);
-            if (slot && slot.modalityIndex >= 0) {
-              this.sendThumbnailMessage(state, slot.tupleIndex, slot.modalityIndex, dataUrl);
-            }
-          },
-          error => {
-            if (error instanceof TaskCancelled || state.disposed) return;
-            const slot = this.resolveSlotForUri(state, tupleIndex, modality, uri);
-            if (!slot || slot.modalityIndex < 0) return;
-            const message = error instanceof Error ? error.message : 'Unknown error';
-            this.sendThumbnailErrorMessage(state, slot.tupleIndex, slot.modalityIndex, message);
+    // Centre-out dispatch + FIFO-within-priority fills outward from the user's row (docs/loading-architecture.md: thumbnails-centre-out).
+    let sweep: Promise<void>;
+    try {
+      sweep = runThumbnailSweep(
+        plan,
+        {
+          makeThumbnail: item =>
+            this.pool
+              .submit(() => this.thumbnailService.getThumbnail(item.image.uri, thumbnailSize * 2), {
+                // Ranks below on-demand THUMBNAIL so scrolling can't queue behind the sweep.
+                priority: Priority.THUMBNAIL_BULK,
+                key: sweepPoolKey(state),
+                // The panel is the fair-share bucket, so a second tab's sweep interleaves with this one (docs/loading-architecture.md: bulk-sweeps-share-the-pool).
+                group: state.poolKey
+              })
+              .then(bytes => ({ bytes, mime: THUMBNAIL_MIME }))
+              .catch(error => {
+                // A live panel's cancellation is the sweep's own re-aim drop, so the slot goes back to the cursor (docs/loading-architecture.md: sweep-cancels-on-reaim).
+                if (error instanceof TaskCancelled) return state.disposed ? null : SWEEP_REQUEUE;
+                if (state.disposed) return null;
+                throw error;
+              }),
+          // The mechanism is the pool's; the decision to use it is the shared module's (docs/loading-architecture.md: sweep-cancels-on-reaim).
+          dropQueued: () => this.pool.cancel(sweepPoolKey(state))
+        },
+        msg => {
+          armStallWatchdog();
+          if (msg.type === 'thumbnailProgress') {
+            this.sendProgressMessage(state, msg.current, msg.total);
+            return;
           }
-        )
-        .finally(() => {
-          if (state.disposed) return;
-          done++;
-          this.sendProgressMessage(state, done + missingSlots.length, total + missingSlots.length);
-        });
+          if (msg.type !== 'thumbnail' && msg.type !== 'thumbnailError') return;
+          const item = itemBySlot.get(`${msg.tupleIndex}-${msg.modalityIndex}`);
+          if (!item) {
+            // A plan-missing slot: posted at its grid position, no live-slot re-resolution needed.
+            if (msg.type === 'thumbnailError') this.sendThumbnailErrorMessage(state, msg.tupleIndex, msg.modalityIndex, msg.error);
+            return;
+          }
+          // Async settles re-address to the file's live slot (docs/tuple-matching.md: revalidate-slot-before-write).
+          const slot = this.resolveSlotForUri(state, msg.tupleIndex, item.image.modality, item.image.uri);
+          if (!slot || slot.modalityIndex < 0) return;
+          if (msg.type === 'thumbnail') {
+            if (timed) sweepPostedBytes += msg.bytes.byteLength;
+            this.sendThumbnailMessage(state, slot.tupleIndex, slot.modalityIndex, msg.bytes, msg.mime);
+          } else this.sendThumbnailErrorMessage(state, slot.tupleIndex, slot.modalityIndex, msg.error);
+        },
+        // The host supplies only where the user is, whether it is still there and whether anyone is looking; every ordering decision is the shared module's (docs/loading-architecture.md: thumbnails-centre-out, sweep-stops-when-host-abandons, hidden-sweep-pauses-not-cancels, sweep-centre-dwells).
+        {
+          centre: () => state.sweepAim.aim(),
+          abandoned: () => state.disposed,
+          paused: () => !state.visible,
+          onRepump: repump => { state.sweepRepump = repump; }
+        }
+      );
+    } catch (error) {
+      // The prologue posts before it returns a promise, so a synchronous throw would strand the claim.
+      endSweep();
+      throw error;
     }
+    void sweep.finally(endSweep);
+  }
+
+  /** Running outbound totals for this panel — what Round 2 needs to see prefetch crowd out the sweep (docs/testing.md). */
+  private formatWire(state: PanelState): string {
+    const w = state.wire;
+    return `wire thumbs=${w.thumbnails}/${formatBytes(w.thumbBytes)} images=${w.images}/${formatBytes(w.imageBytes)}`;
   }
 
   /**
@@ -1268,13 +1122,13 @@ ${lead}
         }
         
         try {
-          const dataUrl = await this.pool.submit(
+          const bytes = await this.pool.submit(
             () => this.thumbnailService.getThumbnail(imageFile.uri, thumbnailSize * 2),
             { priority: Priority.THUMBNAIL, key: state.poolKey }
           );
           const okSlot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
           if (!okSlot || okSlot.modalityIndex < 0) continue;
-          this.sendThumbnailMessage(state, okSlot.tupleIndex, okSlot.modalityIndex, dataUrl);
+          this.sendThumbnailMessage(state, okSlot.tupleIndex, okSlot.modalityIndex, bytes, THUMBNAIL_MIME);
         } catch (error) {
           if (state.disposed) return;
           if (error instanceof TaskCancelled) continue;
@@ -1288,9 +1142,20 @@ ${lead}
   }
 
   /** Multi-MB payloads landing mid-scrub caused the trace's long tasks; the current tuple's are never held (docs/loading-architecture.md: held-payloads-always-flush). */
-  private postImage(state: PanelState, msg: Extract<ExtensionMessage, { type: 'image' }>): void {
+  private postImage(state: PanelState, msg: Extract<ExtensionMessage, { type: 'image' }>, speculative = false): void {
     const tight = normalizeImageBytes(msg.bytes);
     if (tight !== msg.bytes) msg = { ...msg, bytes: tight };
+    const slotKey = `${msg.tupleIndex}-${msg.modalityIndex}`;
+    if (speculative) {
+      // Only speculation waits for the wire (docs/loading-architecture.md: user-pushes-never-withheld).
+      if (!state.transport.canSend(msg.bytes.byteLength, true)) {
+        state.transport.defer(slotKey, msg, msg.bytes.byteLength);
+        return;
+      }
+    } else {
+      // A user-facing push supersedes any parked speculation for the same slot.
+      state.transport.drop(slotKey);
+    }
     const bursting = Date.now() - state.lastTupleSwitchAt < 150;
     if (bursting && msg.tupleIndex !== state.currentTupleIndex) {
       state.heldImagePosts.set(`${msg.tupleIndex}-${msg.modalityIndex}`, msg);
@@ -1302,10 +1167,79 @@ ${lead}
       this.scheduleBurstFlush(state);
       return;
     }
-    state.panel.webview.postMessage(msg);
+    this.postImageNow(state, msg);
   }
 
-  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; dispose and the cap eviction in postImage are the only discards (docs/loading-architecture.md: held-payloads-always-flush). */
+  /** The single choke point where an `image` reaches the wire — so the debug byte count cannot miss one. */
+  private postImageNow(state: PanelState, msg: Extract<ExtensionMessage, { type: 'image' }>): void {
+    if (debugEnabled()) {
+      state.wire.images++;
+      state.wire.imageBytes += msg.bytes.byteLength;
+      debugVerbose('[IC-WIRE]', () => `image t=${msg.tupleIndex} m=${msg.modalityIndex} ${formatBytes(msg.bytes.byteLength)} ${msg.mime} total=${formatBytes(state.wire.imageBytes)}`);
+    }
+    // User-facing bytes occupy the budget too, so speculation yields to them (docs/loading-architecture.md: user-pushes-never-withheld).
+    if (!state.transport.active) {
+      state.panel.webview.postMessage(msg);
+      return;
+    }
+    const bytes = msg.bytes.byteLength;
+    state.transport.noteSent(bytes);
+    let acked = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const release = (): void => {
+      if (acked) return;
+      acked = true;
+      if (watchdog) {
+        clearTimeout(watchdog);
+        state.ackWatchdogs?.delete(watchdog);
+      }
+      state.transport.noteDelivered(bytes);
+      this.drainDeferredImagePosts(state);
+    };
+    const posted = state.panel.webview.postMessage(msg);
+    watchdog = setTimeout(release, TRANSPORT_ACK_TIMEOUT_MS);
+    // Tracked so dispose can clear it; an un-acked push would otherwise retain the panel (docs/loading-architecture.md: speculation-yields-the-wire).
+    (state.ackWatchdogs ??= new Set()).add(watchdog);
+    // Resolution of postMessage is the delivery ack; over a remote link it is a full round trip.
+    Promise.resolve(posted).then(release, release);
+  }
+
+  /** Release parked speculative pushes while the budget allows; ones the user has navigated away from are dropped, as `loadImageToCache` would have at push time (docs/loading-architecture.md: speculation-yields-the-wire). */
+  private drainDeferredImagePosts(state: PanelState): void {
+    if (state.disposed || state.transport.deferredCount === 0) return;
+    const prefetchCount = vscode.workspace.getConfiguration('imageCompare').get<number>('prefetchCount', 3);
+    for (;;) {
+      const next = state.transport.takeNext();
+      if (!next) return;
+      if (Math.abs(next.item.tupleIndex - state.currentTupleIndex) > prefetchCount) continue;
+      this.postImage(state, next.item, true);
+    }
+  }
+
+  /** The park and the burst hold are slot-keyed like `loadedImages`, so a row splice moves them too (docs/file-watching.md: reindex-in-lockstep). */
+  private reindexPendingImagePosts(state: PanelState, shift: (tupleIndex: number) => number | null): void {
+    state.heldImagePosts = new Map(reindexSlotKeyedPosts(state.heldImagePosts, shift));
+    state.transport.remap(entry => {
+      const [moved] = reindexSlotKeyedPosts([[entry.key, entry.item]], shift);
+      return moved ? { key: moved[0], bytes: entry.bytes, item: moved[1] } : undefined;
+    });
+  }
+
+  /** The one slot invalidation: cached bytes, parked speculation and the burst hold all name this slot, so a caller that clears one leaves the others to paint a ghost (docs/loading-architecture.md: slot-invalidation-clears-the-wire). */
+  private invalidateSlot(state: PanelState, tupleIndex: number, modalityIndex: number): void {
+    const slotKey = `${tupleIndex}-${modalityIndex}`;
+    state.loadedImages.delete(slotKey);
+    state.transport.drop(slotKey);
+    state.heldImagePosts.delete(slotKey);
+  }
+
+  /** A column splice renames every slot key, so parked and held posts go the way `loadedImages` does (docs/file-watching.md: reindex-in-lockstep). */
+  private dropPendingImagePosts(state: PanelState): void {
+    state.heldImagePosts.clear();
+    state.transport.clearParked();
+  }
+
+  /** Re-arms while the scrub continues, then drains ONE payload per tick so each owns a quiet frame; dispose, the cap eviction in postImage, a column splice and slot invalidation are the only discards (docs/loading-architecture.md: held-payloads-always-flush, slot-invalidation-clears-the-wire). This ~32ms trickle is the only route to the wire that re-checks no byte budget (docs/loading-architecture.md: speculation-yields-the-wire). */
   private scheduleBurstFlush(state: PanelState, delayMs = 180): void {
     if (state.burstFlushTimer) clearTimeout(state.burstFlushTimer);
     state.burstFlushTimer = setTimeout(() => {
@@ -1318,9 +1252,23 @@ ${lead}
       const first = state.heldImagePosts.entries().next();
       if (first.done) return;
       state.heldImagePosts.delete(first.value[0]);
-      state.panel.webview.postMessage(first.value[1]);
+      this.postImageNow(state, first.value[1]);
       if (state.heldImagePosts.size > 0) this.scheduleBurstFlush(state, 32);
     }, delayMs);
+  }
+
+  /** Drop every queued image load except `keepTupleIndex`'s (docs/loading-architecture.md: stale-tuple-loads-cancelled). */
+  private cancelImageLoads(state: PanelState, keepTupleIndex?: TupleIndex): void {
+    const keep = keepTupleIndex === undefined ? undefined : this.imageLoadKey(state, keepTupleIndex);
+    for (const key of state.imageLoadKeys) {
+      if (key === keep) continue;
+      this.pool.cancel(key);
+      state.imageLoadKeys.delete(key);
+    }
+  }
+
+  private imageLoadKey(state: PanelState, tupleIndex: TupleIndex): string {
+    return `${state.poolKey}-image-${tupleIndex}`;
   }
 
   /**
@@ -1339,7 +1287,7 @@ ${lead}
 
     // Drop the cached bytes first or the retry re-serves them (docs/loading-architecture.md).
     if (forceReload) {
-      state.loadedImages.delete(cacheKey);
+      this.invalidateSlot(state, tupleIndex, modalityIndex);
     }
 
     if (state.loadedImages.has(cacheKey)) {
@@ -1357,52 +1305,78 @@ ${lead}
       return;
     }
 
-    // Range-guarded: an out-of-range index would throw before the try below, replying nothing.
+    // Range-guarded: an out-of-range index resolves no image and replies imageError, throwing nothing.
     const tuple = state.scanResult.tuples[tupleIndex];
     const modality = state.scanResult.modalities[modalityIndex];
     const imageFile = tuple && modality ? this.findImageForModality(tuple, modality) : undefined;
 
-    if (!imageFile) {
+    const io: ImageServeIo<ImageFile> = {
+      loadRaw: async img => ({ bytes: await vscode.workspace.fs.readFile(img.uri), ext: path.extname(img.uri.path).toLowerCase() }),
+      // No backend call at all; 0×0 means "webview sizes from naturalWidth/Height" (docs/image-backends.md: passthrough-no-backend).
+      probePassthrough: async () => ({ width: 0, height: 0 }),
+      convert: (bytes, ext) => this.thumbnailService.convertFullImage(Buffer.from(bytes), ext)
+    };
+
+    const deliver = (reply: ImageServeReply): void => {
+      if (!imageFile) {
+        if (state.disposed || reply.kind !== 'error') return;
+        const msg: ExtensionMessage = { type: 'imageError', tupleIndex, modalityIndex, error: reply.error };
+        state.panel.webview.postMessage(msg);
+        return;
+      }
+      if (reply.kind === 'image') {
+        // Guards the cache write only — never the reply below.
+        if (this.slotMatchesUri(state, tupleIndex, modalityIndex, imageFile.uri)) {
+          state.loadedImages.set(cacheKey, { bytes: reply.bytes, mime: reply.mime, width: reply.width, height: reply.height });
+        }
+        /* Not gated on currentTupleIndex — the request is authoritative — but addressed at delivery, since a splice would otherwise file these pixels under a neighbour's name (docs/loading-architecture.md: reply-exactly-once). */
+        const replySlot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
+        if (state.disposed) return;
+        if (replySlot && replySlot.modalityIndex >= 0) {
+          this.postImage(state, {
+            type: 'image',
+            tupleIndex: replySlot.tupleIndex,
+            modalityIndex: asOriginal(replySlot.modalityIndex),
+            bytes: reply.bytes,
+            mime: reply.mime,
+            width: reply.width,
+            height: reply.height
+          });
+          return;
+        }
+        // The file left the view mid-load. The waiting slot still needs a terminal reply or it spins forever.
+        this.postVacatedSlotError(state, tupleIndex, modalityIndex, 'Image not available');
+        return;
+      }
       if (state.disposed) return;
-      const msg: ExtensionMessage = {
-        type: 'imageError',
-        tupleIndex,
-        modalityIndex,
-        error: 'Image not available'
-      };
-      state.panel.webview.postMessage(msg);
+      const errSlot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
+      if (errSlot && errSlot.modalityIndex >= 0) {
+        const msg: ExtensionMessage = {
+          type: 'imageError',
+          tupleIndex: errSlot.tupleIndex,
+          modalityIndex: asOriginal(errSlot.modalityIndex),
+          error: reply.error
+        };
+        state.panel.webview.postMessage(msg);
+        return;
+      }
+      this.postVacatedSlotError(state, tupleIndex, modalityIndex, reply.error);
+    };
+
+    if (!imageFile) {
+      // A missing slot answers immediately, never queued behind pool work.
+      await serveImage(imageFile, io, deliver);
       return;
     }
 
+    // Keyed by tuple, like a prefetch wave, so leaving cancels it (docs/loading-architecture.md: stale-tuple-loads-cancelled).
+    const loadKey = this.imageLoadKey(state, tupleIndex);
+    state.imageLoadKeys.add(loadKey);
     try {
-      const { bytes, mime, width, height } = await this.pool.submit(
-        () => this.thumbnailService.loadFullImage(imageFile.uri),
-        { priority, key: state.poolKey }
-      );
-      // Guards the cache write only — never the reply below.
-      if (this.slotMatchesUri(state, tupleIndex, modalityIndex, imageFile.uri)) {
-        state.loadedImages.set(cacheKey, { bytes, mime, width, height });
-      }
-
-      /* Not gated on currentTupleIndex — the request is authoritative — but addressed at delivery, since a splice would otherwise file these pixels under a neighbour's name (docs/loading-architecture.md: reply-exactly-once). */
-      const replySlot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
-      if (state.disposed) return;
-      if (replySlot && replySlot.modalityIndex >= 0) {
-        this.postImage(state, {
-          type: 'image',
-          tupleIndex: replySlot.tupleIndex,
-          modalityIndex: asOriginal(replySlot.modalityIndex),
-          bytes,
-          mime,
-          width,
-          height
-        });
-        return;
-      }
-      // The file left the view mid-load. The waiting slot still needs a terminal reply or it spins forever.
-      this.postVacatedSlotError(state, tupleIndex, modalityIndex, 'Image not available');
+      // One pool task spans read + convert + delivery — the old loadFullImage granularity (docs/loading-architecture.md: visible-never-starved).
+      await this.pool.submit(() => serveImage(imageFile, io, deliver), { priority, key: loadKey });
     } catch (error) {
-      // Only reachable on dispose: hide never cancels image work (docs/loading-architecture.md: hidden-keeps-work).
+      // Reachable on ordinary navigation as well as dispose, and silent either way (docs/loading-architecture.md: stale-tuple-loads-cancelled).
       if (error instanceof TaskCancelled) return;
       if (state.disposed) return;
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1422,10 +1396,10 @@ ${lead}
   }
 
   /**
-   * Load `centerIndex ± prefetchCount` × all modalities at PREFETCH priority, superseding
-   * the previous wave (docs/loading-architecture.md, "Prefetch").
+   * Load `centerIndex ± prefetchCount` × the columns `scope` puts on or beside the screen, at
+   * PREFETCH priority, superseding the previous wave (docs/loading-architecture.md, "Prefetch").
    */
-  private async prefetchAround(state: PanelState, centerIndex: TupleIndex): Promise<void> {
+  private async prefetchAround(state: PanelState, centerIndex: TupleIndex, scope: PrefetchScope): Promise<void> {
     if (state.disposed) return;
 
     // Supersede first, even if we bail below: stale neighbours would delay the new ones.
@@ -1436,21 +1410,33 @@ ${lead}
 
     const config = vscode.workspace.getConfiguration('imageCompare');
     const prefetchCount = config.get<number>('prefetchCount', 3);
-    const allModalities = state.scanResult.modalities;
+    // Re-read once per wave, never per message (docs/loading-architecture.md: wire-budget-remote-only).
+    state.transport.setLimit(resolveTransportBudgetBytes(config.get<number>('prefetchTransportBudgetMB'), vscode.env.remoteName));
+    // Which slots, and in what order, is the pure plan's call alone (docs/loading-architecture.md: prefetch-visible-column-first).
+    const plan = prefetchWavePlan({
+      centerIndex,
+      tupleCount: state.scanResult.tuples.length,
+      prefetchCount,
+      scope,
+      isCached: (t, m) => state.loadedImages.has(`${t}-${m}`)
+    });
 
-    for (let offset = 0; offset <= prefetchCount; offset++) {
-      const indices = offset === 0 ? [centerIndex] : [asTuple(centerIndex + offset), asTuple(centerIndex - offset)];
+    const waveKey = state.prefetchWaveKey;
+    // Registered `open` before the loop: a slot with no image settles synchronously, and a wave that could roll up mid-issue would report nothing at all.
+    if (debugEnabled()) state.prefetchWaves.set(waveKey, { center: centerIndex, issued: 0, done: 0, bytes: 0, startedAt: Date.now(), open: true });
+    let issued = 0;
+    for (const slot of plan) {
+      issued++;
+      void this.loadImageToCache(state, asTuple(slot.tupleIndex), slot.modalityIndex, waveKey);
+    }
 
-      for (const tupleIndex of indices) {
-        if (tupleIndex >= 0 && tupleIndex < state.scanResult.tuples.length) {
-          for (let modalityIndex = 0; modalityIndex < allModalities.length; modalityIndex++) {
-            const cacheKey = `${tupleIndex}-${modalityIndex}`;
-            if (!state.loadedImages.has(cacheKey)) {
-              void this.loadImageToCache(state, tupleIndex, modalityIndex, state.prefetchWaveKey);
-            }
-          }
-        }
-      }
+    const wave = state.prefetchWaves.get(waveKey);
+    if (wave) {
+      wave.issued = issued;
+      wave.open = false;
+      // Bytes are only knowable as the wave lands; the rollup in noteWaveSettled reports them (docs/testing.md).
+      debug('[IC-PREFETCH]', () => `wave ${waveKey} center=${centerIndex} slots=${issued} pool ${this.pool.stats()}`);
+      this.rollupWaveIfDone(state, waveKey);
     }
 
     this.evictDistantTuples(state, centerIndex, prefetchCount + 2);
@@ -1467,20 +1453,28 @@ ${lead}
     waveKey: string
   ): Promise<void> {
     const cacheKey = `${tupleIndex}-${modalityIndex}`;
-    if (state.loadedImages.has(cacheKey)) return;
+    if (state.loadedImages.has(cacheKey)) {
+      this.noteWaveSettled(state, waveKey, 0);
+      return;
+    }
 
     const tuple = state.scanResult.tuples[tupleIndex];
     const modality = state.scanResult.modalities[modalityIndex];
     const imageFile = tuple && modality ? this.findImageForModality(tuple, modality) : undefined;
 
-    if (!imageFile) return;
+    if (!imageFile) {
+      this.noteWaveSettled(state, waveKey, 0);
+      return;
+    }
 
+    let loadedBytes = 0;
     try {
       // Keyed by wave, so navigating elsewhere cancels the whole wave.
       const { bytes, mime, width, height } = await this.pool.submit(
         () => this.thumbnailService.loadFullImage(imageFile.uri),
         { priority: Priority.PREFETCH, key: waveKey }
       );
+      loadedBytes = bytes.byteLength;
       if (!this.slotMatchesUri(state, tupleIndex, modalityIndex, imageFile.uri)) return;
       state.loadedImages.set(cacheKey, { bytes, mime, width, height });
 
@@ -1489,15 +1483,38 @@ ${lead}
       const prefetchCount = config.get<number>('prefetchCount', 3);
       const stillNearby = Math.abs(tupleIndex - state.currentTupleIndex) <= prefetchCount;
       if (!state.disposed && state.visible && stillNearby) {
-        this.postImage(state, { type: 'image', tupleIndex, modalityIndex: asOriginal(modalityIndex), bytes, mime, width, height });
+        // Speculative: this push waits for the wire, the bytes stay cached meanwhile (docs/loading-architecture.md: speculation-yields-the-wire).
+        this.postImage(state, { type: 'image', tupleIndex, modalityIndex: asOriginal(modalityIndex), bytes, mime, width, height }, true);
       }
     } catch {
       // Prefetch is best-effort (including TaskCancelled when a wave is superseded).
+    } finally {
+      // Exactly once per issued slot, whatever the exit — the wave rollup counts on it.
+      this.noteWaveSettled(state, waveKey, loadedBytes);
     }
   }
 
+  /** Debug-only: one prefetch slot settled (loaded, skipped or cancelled). */
+  private noteWaveSettled(state: PanelState, waveKey: string, bytes: number): void {
+    const wave = state.prefetchWaves.get(waveKey);
+    if (!wave) return;
+    wave.done++;
+    wave.bytes += bytes;
+    this.rollupWaveIfDone(state, waveKey);
+  }
+
+  /** Emit the wave's byte/latency rollup once issuing has finished and every issued slot has settled, then forget it. */
+  private rollupWaveIfDone(state: PanelState, waveKey: string): void {
+    const wave = state.prefetchWaves.get(waveKey);
+    if (!wave || wave.open || wave.done < wave.issued) return;
+    state.prefetchWaves.delete(waveKey);
+    if (wave.issued === 0) return;
+    debug('[IC-PREFETCH]', () => `wave ${waveKey} done ${Date.now() - wave.startedAt}ms slots=${wave.issued} loaded=${formatBytes(wave.bytes)} pool ${this.pool.stats()} ${this.formatWire(state)}`);
+  }
+
   /**
-   * Evict images that are too far from current position
+   * Evict images that are too far from current position. Bytes only: these slots are live, so the
+   * park and the hold stay (docs/loading-architecture.md: slot-invalidation-clears-the-wire).
    */
   private evictDistantTuples(state: PanelState, centerIndex: TupleIndex, maxDistance: number): void {
     const keysToDelete: string[] = [];
@@ -1517,9 +1534,16 @@ ${lead}
   /**
    * Send thumbnail message to webview
    */
-  private sendThumbnailMessage(state: PanelState, tupleIndex: number, modalityIndex: number, dataUrl: string): void {
+  private sendThumbnailMessage(state: PanelState, tupleIndex: number, modalityIndex: number, bytes: Uint8Array, mime: string): void {
     if (state.disposed) return;
-    const msg: ExtensionMessage = { type: 'thumbnail', tupleIndex: asTuple(tupleIndex), modalityIndex: asOriginal(modalityIndex), dataUrl };
+    // A pack hit is a slice of the whole packfile buffer, so skipping this ships the pack per thumbnail (docs/loading-architecture.md: image-payload-normalized).
+    const tight = normalizeImageBytes(bytes);
+    const msg: ExtensionMessage = { type: 'thumbnail', tupleIndex: asTuple(tupleIndex), modalityIndex: asOriginal(modalityIndex), bytes: tight, mime };
+    if (debugEnabled()) {
+      state.wire.thumbnails++;
+      state.wire.thumbBytes += tight.byteLength;
+      debugVerbose('[IC-WIRE]', () => `thumbnail t=${tupleIndex} m=${modalityIndex} ${formatBytes(tight.byteLength)} ${mime} total=${formatBytes(state.wire.thumbBytes)}`);
+    }
     state.panel.webview.postMessage(msg);
   }
 
@@ -1637,9 +1661,8 @@ ${lead}
    */
   private async adoptNewModalityDir(state: PanelState, dirUri: vscode.Uri, name: string): Promise<void> {
     if (state.disposed || !state.baseUri) return;
-    if (state.scanResult.modalities.includes(name)) return;
-    // A dot dir is never a modality; all three detectors converge here, so the guard belongs here.
-    if (name.startsWith('.')) return;
+    // Qualification (not a column yet, never a dot dir) is the shared planner's; all three detectors converge here (docs/file-watching.md: new-modality-dir-adopted).
+    if (newModalityDirCandidates([{ name, isDirectory: true }], state.scanResult.modalities).length === 0) return;
     // Single-flight: three detectors race for one directory (docs/file-watching.md: new-modality-dir-adopted).
     if (state.adoptingDirs.has(dirUri.path)) return;
 
@@ -1652,23 +1675,20 @@ ${lead}
       try {
         const stat = await vscode.workspace.fs.stat(dirUri);
         if (state.disposed) return;
-        if (!(stat.type & vscode.FileType.Directory)) return;
-        /* Skips re-listing a huge image-less sibling, but never permanently — some mounts pin directory mtime (docs/file-watching.md: barren-dirs-memoized). */
-        const memo = state.barrenDirs.get(dirUri.path);
-        if (memo && memo.mtime === stat.mtime && memo.sweeps < BARREN_RECHECK_SWEEPS) {
-          memo.sweeps++;
+        if (!(stat.type & vscode.FileType.Directory)) return; // bitmask: a symlinked dir adopts too (docs/tuple-matching.md: entry-type-is-a-bitmask)
+        /* Skip-or-list and the budget tick are the shared planner's decision (docs/file-watching.md: barren-dirs-memoized). */
+        if (planSweepDirs([{ dir: dirUri.path, mtime: stat.mtime }], state.barrenDirs, BARREN_RECHECK_SWEEPS).length === 0) {
           return;
         }
         entries = await vscode.workspace.fs.readDirectory(dirUri);
         if (state.disposed) return;
 
-        const hasImages = entries.some(([n, t]) => (t & vscode.FileType.File) && isImageFile(n));
-        if (!hasImages) {
-          state.barrenDirs.set(dirUri.path, { mtime: stat.mtime, sweeps: 0 });
-          return;
-        }
-        state.barrenDirs.delete(dirUri.path);
+        // Imageful-or-barren is the shared planner's decision (docs/file-watching.md: new-modality-dir-adopted); type test is a bitmask (docs/tuple-matching.md: entry-type-is-a-bitmask).
+        const hasImages = adoptableImages(entries.map(([n, t]) => ({ name: n, isFile: (t & vscode.FileType.File) !== 0 }))).length > 0;
+        recordDirListing(state.barrenDirs, dirUri.path, stat.mtime, hasImages);
+        if (!hasImages) return;
 
+        // `.path`, like every other producer of this set (docs/file-watching.md: watched-dirs-are-uri-paths).
         if (!state.watchedDirs.has(dirUri.path)) {
           state.watchedDirs.add(dirUri.path);
           this.watchDirectory(state, dirUri.path, scheme, true);
@@ -1680,9 +1700,10 @@ ${lead}
       }
       if (state.disposed || state.scanResult.modalities.includes(name)) return;
 
-      const images = entries.filter(([n, t]) => (t & vscode.FileType.File) && isImageFile(n));
+      // Bitmask: a symlinked image in an adopted dir is an image (docs/tuple-matching.md: entry-type-is-a-bitmask).
+      const images = adoptableImages(entries.map(([n, t]) => ({ name: n, isFile: (t & vscode.FileType.File) !== 0 })));
       this.debugMsg(state, `adopted new modality dir: ${dirUri.path} (${images.length} images)`);
-      for (const [entryName] of images) {
+      for (const entryName of images) {
         if (state.disposed) return;
         // Un-awaited by necessity: inside a POLL task, awaiting pooled work deadlocks at cap 1 (docs/file-watching.md: duplicate-reports-idempotent).
         this.handleFileCreated(state, vscode.Uri.joinPath(dirUri, entryName));
@@ -1704,6 +1725,7 @@ ${lead}
       ?? (state.baseUri ? vscode.Uri.joinPath(state.baseUri, modality) : undefined);
     if (!dirUri) return;
 
+    // Keyed in URI space like watchedDirs, so the two agree on every platform (docs/file-watching.md: watched-dirs-are-uri-paths).
     const dir = dirUri.path;
     const rec = state.watchersByDir.get(dir);
     if (!rec) return;
@@ -1749,25 +1771,28 @@ ${lead}
 
     // Backs up VS Code's onDidDelete, which doesn't fire on some platform/filesystem combos.
     if (!isLeaf || scheme !== 'file') return;
+    // node's fs takes filesystem paths; `dir` is a URI path, and on Windows the two differ (docs/file-watching.md: watched-dirs-are-uri-paths).
+    const fsDir = vscode.Uri.file(dir).fsPath;
     try {
-      const fsWatcher = fs.watch(dir, (eventType, filename) => {
+      const fsWatcher = fs.watch(fsDir, (eventType, filename) => {
         this.debugMsg(state, `fs.watch event: ${eventType} ${filename} in ${dir}`);
         if (eventType === 'rename' && filename) {
-          const filePath = path.join(dir, filename);
-          // 'rename' = appeared or vanished; probe async, a sync stat blocks the extension host.
+          const filePath = path.join(fsDir, filename);
+          // 'rename' = appeared or vanished; probed async (a sync stat blocks the extension host) and through the link (docs/file-watching.md: existence-probes-follow-the-link).
           setTimeout(() => {
             if (state.disposed) return;
-            fs.promises.access(filePath).then(
+            fs.promises.stat(filePath).then(
               () => {
                 if (state.disposed) return;
                 // On mounts where the VS Code watcher is silent, this is the only create signal (docs/file-watching.md: new-modality-dir-adopted).
                 if (state.baseUri && dir === state.baseUri.path) {
-                  void this.adoptNewModalityDir(state, vscode.Uri.file(filePath), filename);
+                  void this.adoptNewModalityDir(state, vscode.Uri.file(`${dir}/${filename}`), filename);
                 }
               },
               () => {
                 if (state.disposed) return;
-                const fileUri = vscode.Uri.file(filePath);
+                // Built from `dir`, never from `filePath`: fsPath lowercases the drive letter, so the round trip would name a URI no tracked image equals (docs/file-watching.md: watched-dirs-are-uri-paths).
+                const fileUri = vscode.Uri.file(`${dir}/${filename}`);
                 this.debugMsg(state, `fs.watch delete: ${filePath}`);
                 this.handleFileDeleted(state, fileUri);
               }
@@ -1804,15 +1829,15 @@ ${lead}
       return;
     }
     // A pipeline that creates and removes scratch dirs would otherwise grow the memo forever.
-    const live = new Set(entries.map(([name]) => vscode.Uri.joinPath(state.baseUri!, name).path));
-    for (const path of state.barrenDirs.keys()) {
-      if (!live.has(path)) state.barrenDirs.delete(path);
-    }
+    pruneBarrenMemos(state.barrenDirs, new Set(entries.map(([name]) => vscode.Uri.joinPath(state.baseUri!, name).path)));
 
-    for (const [name, type] of entries) {
+    // Which children qualify is the shared planner's decision (docs/file-watching.md: new-modality-dir-adopted); type test is a bitmask (docs/tuple-matching.md: entry-type-is-a-bitmask).
+    const candidates = newModalityDirCandidates(
+      entries.map(([name, type]) => ({ name, isDirectory: (type & vscode.FileType.Directory) !== 0 })),
+      state.scanResult.modalities
+    );
+    for (const name of candidates) {
       if (state.disposed) return;
-      if (!(type & vscode.FileType.Directory)) continue;
-      if (state.scanResult.modalities.includes(name)) continue;
       await this.adoptNewModalityDir(state, vscode.Uri.joinPath(state.baseUri, name), name);
     }
   }
@@ -1835,20 +1860,29 @@ ${lead}
   private async runDeleteSweep(state: PanelState): Promise<void> {
     if (state.disposed || !state.visible || state.deleteSweepRunning) return;
     state.deleteSweepRunning = true;
-    this.debugMsg(state, `pool ${this.pool.stats()}`);
-    try {
-      // Snapshot: watcher events may mutate the arrays while we await.
-      const uris: vscode.Uri[] = [];
-      // Known files per leaf dir, so the listing pass below can spot arrivals the silent watchers never report.
-      const knownByDir = new Map<string, Set<string>>();
-      for (const dir of state.watchedDirs) {
-        if (dir !== state.baseUri?.path) knownByDir.set(dir, new Set());
+    if (debugEnabled()) {
+      // An idle window polls forever; only a busy or changed pool earns a line (docs/loading-architecture.md: idle-poll-logs-nothing-new).
+      const snapshot = this.pool.stats();
+      if (shouldLogPoolSnapshot(snapshot, this.pool.running > 0 || this.pool.pending > 0, state.lastPoolSnapshot)) {
+        state.lastPoolSnapshot = snapshot;
+        this.debugMsg(state, `pool ${snapshot}`);
       }
+    }
+    try {
+      // Snapshot (watcher events may mutate the arrays while we await), keyed by leaf dir then name: one listing yields both the arrivals silent watchers never report and this cycle's deletion candidates (docs/file-watching.md: sweep-derives-deletions-from-listings).
+      const knownByDir = new Map<string, Map<string, vscode.Uri>>();
+      for (const dir of state.watchedDirs) {
+        if (dir !== state.baseUri?.path) knownByDir.set(dir, new Map());
+      }
+      // A tracked file under no listed dir keeps its own check — nothing else would ever look at it.
+      const strays: vscode.Uri[] = [];
       for (const tuple of state.scanResult.tuples) {
         for (const img of tuple.images) {
-          uris.push(img.uri);
+          // Both sides in URI space, so the lookup hits on Windows too (docs/file-watching.md: watched-dirs-are-uri-paths).
           const cut = img.uri.path.lastIndexOf('/');
-          knownByDir.get(img.uri.path.substring(0, cut))?.add(img.uri.path.substring(cut + 1));
+          const known = knownByDir.get(img.uri.path.substring(0, cut));
+          if (known) known.set(img.uri.path.substring(cut + 1), img.uri);
+          else strays.push(img.uri);
         }
       }
 
@@ -1861,38 +1895,47 @@ ${lead}
       // One listing per watched leaf dir: on mounts with silent watchers this is the only detector of new files — a copy finishing after adoption's second listing lands here (docs/file-watching.md: new-modality-dir-adopted).
       const dirChecks = [...knownByDir].map(([dir, known]) =>
         this.pool
-          .submit(async () => {
-            if (state.disposed) return;
-            let entries: [string, vscode.FileType][];
+          .submit(async (): Promise<vscode.Uri[]> => {
+            if (state.disposed) return [];
+            let entries: [string, vscode.FileType][] | undefined;
             try {
               entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(dir));
             } catch {
-              return; // dir gone or unreadable: the per-file checks below report the deletions
+              entries = undefined; // dir gone or unreadable: this dir's tracked files fall back to their own checks
             }
-            for (const [name, type] of entries) {
-              if (state.disposed) return;
-              if (!(type & vscode.FileType.File)) continue;
-              if (known.has(name) || !isImageFile(name)) continue;
+            // Both directions from the one listing via the shared planner — arrivals, and the deletion candidates re-verified below (docs/file-watching.md: sweep-derives-deletions-from-listings, poll-diff-names-first); type test is a bitmask (docs/tuple-matching.md: entry-type-is-a-bitmask).
+            const plan = planDirSweep(
+              [...known.keys()],
+              entries?.filter(([n]) => isImageFile(n)).map(([n, t]) => ({ name: n, isFile: (t & vscode.FileType.File) !== 0 }))
+            );
+            for (const name of plan.added) {
+              if (state.disposed) return [];
               this.debugMsg(state, `sweep new file: ${dir}/${name}`);
               this.handleFileCreated(state, vscode.Uri.file(`${dir}/${name}`));
             }
+            // The tracked URI, never one rebuilt from the name: the slot's identity is that object's string form.
+            return plan.candidates.map(name => known.get(name)).filter((u): u is vscode.Uri => u !== undefined);
           }, { priority: Priority.POLL, key: state.poolKey })
-          .catch(() => undefined)
+          .catch((): vscode.Uri[] => []) // cancelled/errored: nothing to re-verify this cycle
       );
 
-      const checks = uris.map(uri =>
+      // Sequenced, not nested: a listing task awaiting its own sub-tasks could starve them in a bounded pool.
+      const candidates = (await Promise.all(dirChecks)).flat();
+      if (state.disposed) return;
+
+      const checks = [...candidates, ...strays].map(uri =>
         this.pool
           .submit(async () => {
             try {
-              // Async, never accessSync: a sync sweep blocks the host for seconds (docs/loading-architecture.md: no-sync-blocking).
-              await fs.promises.access(uri.fsPath);
+              // Async, never statSync: a sync sweep blocks the host for seconds (docs/loading-architecture.md: no-sync-blocking); `stat`, never `access` (docs/file-watching.md: existence-probes-follow-the-link).
+              await fs.promises.stat(uri.fsPath);
               return;
             } catch {
               // True only at this instant: re-verify before reporting (docs/file-watching.md: sweep-reverifies-before-report).
             }
             if (state.disposed) return;
             try {
-              await fs.promises.access(uri.fsPath);
+              await fs.promises.stat(uri.fsPath); // the same probe, for the same reason (docs/file-watching.md: existence-probes-follow-the-link)
               return; // came back — it was a rewrite, not a delete
             } catch {
               // still gone
@@ -1904,7 +1947,7 @@ ${lead}
           .catch(() => undefined) // cancelled/errored: treat as present
       );
 
-      await Promise.all([...dirChecks, ...checks]);
+      await Promise.all(checks);
     } finally {
       state.deleteSweepRunning = false;
     }
@@ -1965,8 +2008,7 @@ ${lead}
             timestamp: Date.now()
           });
 
-          const cacheKey = `${tupleIndex}-${globalModIdx}`;
-          state.loadedImages.delete(cacheKey);
+          this.invalidateSlot(state, tupleIndex, globalModIdx);
 
           setTimeout(() => {
             if (state.disposed) return;
@@ -1988,37 +2030,19 @@ ${lead}
                 d => !(d.tupleIndex === currentTupleIndex && d.modalityIndex === currentModIdx)
               );
 
-              capturedTuple.images = capturedTuple.images.filter(img => img.modality !== modalityName);
-        // A load that resolved inside the window re-populated this key; clear it or it is served as a ghost.
-        const committedIdx = state.scanResult.tuples.indexOf(capturedTuple);
-        const committedMod = state.scanResult.modalities.indexOf(modalityName);
-        if (committedIdx >= 0 && committedMod >= 0) state.loadedImages.delete(`${committedIdx}-${committedMod}`);
-
-              if (state.winners.get(currentTupleIndex) === currentModIdx) {
-                state.winners.delete(currentTupleIndex);
-                state.panel.webview.postMessage({
-                  type: 'winnerUpdated',
-                  tupleIndex: currentTupleIndex,
-                  modalityIndex: null
-                } as ExtensionMessage);
-              }
-
-              if (capturedTuple.images.length === 0) {
-                this.removeTuple(state, currentTupleIndex);
-              } else {
-                const msg: ExtensionMessage = {
-                  type: 'fileDeleted',
-                  tupleIndex: currentTupleIndex,
-                  modalityIndex: asOriginal(currentModIdx)
-                };
-                state.panel.webview.postMessage(msg);
-
-                if (state.votingEnabled) {
-                  this.saveResults(state);
+              // Strip, winner clear, empty-tuple vs fileDeleted, then the column-empty check — the shared commit (docs/file-watching.md: delete-message-order).
+              commitSlotRemoval(state.scanResult, state.winners, currentTupleIndex, currentModIdx, {
+                post: msg => state.panel.webview.postMessage(msg),
+                // A load that resolved inside the window re-populated this slot; clear it or it is served as a ghost.
+                onSlotRemoved: (t, m) => this.invalidateSlot(state, t, m),
+                removeTuple: idx => this.removeTuple(state, idx),
+                removeModality: idx => this.removeModality(state, idx),
+                saveResults: () => {
+                  if (state.votingEnabled) {
+                    this.saveResults(state);
+                  }
                 }
-              }
-
-              this.checkModalityEmpty(state, currentModIdx);
+              });
             }
           }, 500); // rename window
 
@@ -2029,52 +2053,42 @@ ${lead}
   }
 
   /**
-   * Remove a tuple, re-indexing loadedImages/winners/recentlyDeleted in the same operation
-   * as the splice (docs/file-watching.md: reindex-in-lockstep), and notify the webview.
+   * Remove a tuple. Splice, winner shift and the canon post order (tupleDeleted, refresh, re-save)
+   * are the shared removal step (docs/file-watching.md: delete-message-order); the provider-only
+   * caches re-key in the hook, in the same operation as the splice.
    */
   private removeTuple(state: PanelState, tupleIndex: TupleIndex): void {
     if (state.disposed) return;
-    state.scanResult.tuples.splice(tupleIndex, 1);
-
-    const newLoadedImages = new Map<string, LoadedImage>();
-    for (const [key, value] of state.loadedImages) {
-      const [tIdx, mIdx] = key.split('-').map(Number);
-      if (tIdx > tupleIndex) {
-        newLoadedImages.set(`${tIdx - 1}-${mIdx}`, value);
-      } else if (tIdx < tupleIndex) {
-        newLoadedImages.set(key, value);
+    removeTupleStep(state.scanResult, state.winners, state.currentTupleIndex, tupleIndex, {
+      post: msg => state.panel.webview.postMessage(msg),
+      // Provider-only index-keyed caches shift with the splice (docs/file-watching.md: reindex-in-lockstep).
+      onTupleRemoved: removed => {
+        const newLoadedImages = new Map<string, LoadedImage>();
+        for (const [key, value] of state.loadedImages) {
+          const [tIdx, mIdx] = key.split('-').map(Number);
+          if (tIdx > removed) {
+            newLoadedImages.set(`${tIdx - 1}-${mIdx}`, value);
+          } else if (tIdx < removed) {
+            newLoadedImages.set(key, value);
+          }
+          // tIdx === removed: discard (tuple removed)
+        }
+        state.loadedImages = newLoadedImages;
+        this.reindexPendingImagePosts(state, t => shiftIndexAfterRemoval(t, removed));
+        state.recentlyDeleted = state.recentlyDeleted.flatMap(d => {
+          const shifted = shiftIndexAfterRemoval(d.tupleIndex, removed);
+          return shifted === null ? [] : [{ ...d, tupleIndex: asTuple(shifted) }];
+        });
+      },
+      // A structural mutation must not strand the current view (docs/file-watching.md: mutation-never-strands-view).
+      refreshCurrentTuple: current => {
+        state.currentTupleIndex = asTuple(current);
+        this.refreshCurrentTupleImages(state);
+      },
+      saveResults: () => {
+        if (state.votingEnabled) void this.saveResults(state);
       }
-      // tIdx === tupleIndex: discard (tuple removed)
-    }
-    state.loadedImages = newLoadedImages;
-
-    const newWinners = new Map<TupleIndex, OriginalModalityIndex>();
-    for (const [tIdx, mIdx] of state.winners) {
-      const shifted = shiftIndexAfterRemoval(tIdx, tupleIndex);
-      if (shifted !== null) newWinners.set(asTuple(shifted), mIdx);
-    }
-    state.winners = newWinners;
-
-    state.recentlyDeleted = state.recentlyDeleted.flatMap(d => {
-      const shifted = shiftIndexAfterRemoval(d.tupleIndex, tupleIndex);
-      return shifted === null ? [] : [{ ...d, tupleIndex: asTuple(shifted) }];
     });
-
-    if (state.currentTupleIndex >= state.scanResult.tuples.length) {
-      state.currentTupleIndex = asTuple(Math.max(0, state.scanResult.tuples.length - 1));
-    } else if (state.currentTupleIndex > tupleIndex) {
-      state.currentTupleIndex--;
-    }
-
-    const msg: ExtensionMessage = { type: 'tupleDeleted', tupleIndex };
-    state.panel.webview.postMessage(msg);
-
-    // A structural mutation must not strand the current view (docs/file-watching.md: mutation-never-strands-view).
-    this.refreshCurrentTupleImages(state);
-
-    if (state.votingEnabled) {
-      this.saveResults(state);
-    }
   }
 
   /**
@@ -2084,68 +2098,33 @@ ${lead}
   private refreshCurrentTupleImages(state: PanelState): void {
     if (state.disposed) return;
     const tupleIndex = state.currentTupleIndex;
-    if (!state.scanResult.tuples[tupleIndex]) return;
-    for (let m = 0; m < state.scanResult.modalities.length; m++) {
-      void this.sendImage(state, tupleIndex, asOriginal(m));
-    }
-  }
-
-  /**
-   * Drop a modality once its last file is gone — reaches the same end state as a
-   * modality-directory delete, but from below.
-   */
-  private checkModalityEmpty(state: PanelState, modalityIndex: number): void {
-    const modality = state.scanResult.modalities[modalityIndex];
-    if (!modality) return;
-
-    const hasFiles = state.scanResult.tuples.some(tuple =>
-      tuple.images.some(img => img.modality === modality)
-    );
-    
-    if (!hasFiles) {
-      this.removeModality(state, modalityIndex);
-    }
-  }
-
-  /**
-   * Remove a modality column, re-indexing every index-keyed structure alongside the splice
-   * (docs/file-watching.md: reindex-in-lockstep).
-   */
-  private async removeModality(state: PanelState, modalityIndex: number): Promise<void> {
-    const modality = state.scanResult.modalities[modalityIndex];
-
-    this.unwatchModalityDir(state, modality);
-    state.scanResult.modalities.splice(modalityIndex, 1);
-
-    for (const tuple of state.scanResult.tuples) {
-      tuple.images = tuple.images.filter(img => img.modality !== modality);
-    }
-
-    // Cleared wholesale: every key past the removed column is wrong, and the column is gone.
-    state.loadedImages.clear();
-
-    // Drop winners pointing at the removed modality, shift those after it.
-    const newWinners = new Map<TupleIndex, OriginalModalityIndex>();
-    for (const [tupleIndex, winnerModalityIndex] of state.winners) {
-      const shifted = shiftIndexAfterRemoval(winnerModalityIndex, modalityIndex);
-      if (shifted !== null) newWinners.set(tupleIndex, asOriginal(shifted));
-    }
-    state.winners = newWinners;
-
-    state.recentlyDeleted = state.recentlyDeleted.flatMap(d => {
-      const shifted = shiftIndexAfterRemoval(d.modalityIndex, modalityIndex);
-      return shifted === null ? [] : [{ ...d, modalityIndex: shifted }];
+    refreshTupleImages(state.scanResult.tuples[tupleIndex], state.scanResult.modalities, m => {
+      void this.sendImage(state, tupleIndex, m);
     });
+  }
 
-    const msg: ExtensionMessage = {
-      type: 'modalityRemoved',
-      modalityIndex: asOriginal(modalityIndex)
-    };
-    state.panel.webview.postMessage(msg);
-
-    if (state.votingEnabled) {
-      await this.saveResults(state);
-    }
+  /**
+   * Remove a modality column. Splice, strip, winner shift and the modalityRemoved + re-save order
+   * are the shared removal step (docs/file-watching.md: delete-message-order); provider-only
+   * structures re-index in the hook, alongside the splice (docs/file-watching.md: reindex-in-lockstep).
+   */
+  private removeModality(state: PanelState, modalityIndex: number): void {
+    removeModalityStep(state.scanResult, state.winners, modalityIndex, {
+      post: msg => state.panel.webview.postMessage(msg),
+      onModalityRemoved: (modality, removed) => {
+        this.unwatchModalityDir(state, modality);
+        // Cleared wholesale: every key past the removed column is wrong, and the column is gone.
+        state.loadedImages.clear();
+        this.dropPendingImagePosts(state);
+        state.recentlyDeleted = state.recentlyDeleted.flatMap(d => {
+          const shifted = shiftIndexAfterRemoval(d.modalityIndex, removed);
+          return shifted === null ? [] : [{ ...d, modalityIndex: shifted }];
+        });
+      },
+      saveResults: () => {
+        if (state.votingEnabled) void this.saveResults(state);
+      }
+    });
   }
 
   /**
@@ -2175,8 +2154,7 @@ ${lead}
       // Disarm the 500ms timer or it deletes the file that just came back (docs/file-watching.md: no-armed-delete-after-return).
       state.recentlyDeleted = state.recentlyDeleted.filter(d => d.uri.toString() !== uri.toString());
 
-      const cacheKey = `${tupleIndex}-${modalityIndex}`;
-      state.loadedImages.delete(cacheKey);
+      this.invalidateSlot(state, tupleIndex, modalityIndex);
 
       this.regenerateThumbnail(state, tupleIndex, modalityIndex);
 
@@ -2214,8 +2192,7 @@ ${lead}
         d => !(d.tupleIndex === tupleIndex && d.modalityIndex === modalityIndex)
       );
 
-      const cacheKey = `${tupleIndex}-${modalityIndex}`;
-      state.loadedImages.delete(cacheKey);
+      this.invalidateSlot(state, tupleIndex, modalityIndex);
 
       this.regenerateThumbnail(state, tupleIndex, modalityIndex);
 
@@ -2329,158 +2306,44 @@ ${lead}
       }
     }
 
-    const baseFilename = filename.replace(/\.[^.]+$/, '');
+    // Placement — slot-fill vs new tuple, insert position, wire payload — comes from the shared arrival planner (docs/file-watching.md, "Watcher-added files").
+    const plan = planArrival(state.scanResult.tuples, state.scanResult.modalities, { name: filename, modality: modalityName });
+    if (!plan) return;
+    const applied = applyArrival(state.scanResult, state.winners, state.currentTupleIndex, plan, { uri, name: filename, modality: modalityName });
 
-    // Longest-match-wins, ties toward a free slot; not the trie matcher (docs/file-watching.md).
-    let matchingTupleIndex = -1;
-    let bestMatchLen = -1;
-    let bestSlotFree = false;
+    if (plan.kind === 'slot-fill') {
+      this.regenerateThumbnail(state, plan.tupleIndex, plan.modalityIndex);
+      // imageInfo fills a slot the webview did not know about; each later post-crop file posts this after the first file's tupleAdded (docs/crop-and-pptx.md: post-crop-message-order).
+      state.panel.webview.postMessage(applied.message);
+      return;
+    }
 
-    for (let i = 0; i < state.scanResult.tuples.length; i++) {
-      const tuple = state.scanResult.tuples[i];
-      let matchLen = -1;
-
-      if (tuple.name && baseFilename.includes(tuple.name)) {
-        matchLen = tuple.name.length;
+    // Provider-only index-keyed structures shift up in lockstep with the planner's splice (docs/file-watching.md: reindex-in-lockstep).
+    const insertIndex = plan.insertIndex;
+    const newLoadedImages = new Map<string, LoadedImage>();
+    for (const [key, value] of state.loadedImages) {
+      const [tIdx, mIdx] = key.split('-').map(Number);
+      if (tIdx >= insertIndex) {
+        newLoadedImages.set(`${tIdx + 1}-${mIdx}`, value);
+      } else {
+        newLoadedImages.set(key, value);
       }
+    }
+    state.loadedImages = newLoadedImages;
+    this.reindexPendingImagePosts(state, t => (t >= insertIndex ? t + 1 : t));
 
-      // An exact basename match scores the maximum possible length.
-      for (const img of tuple.images) {
-        const imgBase = img.name.replace(/\.[^.]+$/, '');
-        if (imgBase === baseFilename) {
-          matchLen = baseFilename.length;
-          break;
-        }
-      }
-
-      if (matchLen < 0) continue;
-
-      const slotFree = !tuple.images.find(img => img.modality === modalityName);
-
-      if (matchLen > bestMatchLen) {
-        matchingTupleIndex = i;
-        bestMatchLen = matchLen;
-        bestSlotFree = slotFree;
-      } else if (matchLen === bestMatchLen && slotFree && !bestSlotFree) {
-        matchingTupleIndex = i;
-        bestSlotFree = slotFree;
+    for (const d of state.recentlyDeleted) {
+      if (d.tupleIndex >= insertIndex) {
+        d.tupleIndex++;
       }
     }
 
-    // A taken slot means a new tuple, never a looser match (docs/tuple-matching.md: one-file-per-modality).
-    if (!bestSlotFree) {
-      matchingTupleIndex = -1;
-    }
+    state.currentTupleIndex = asTuple(applied.currentTupleIndex);
 
-    if (matchingTupleIndex >= 0) {
-      const tuple = state.scanResult.tuples[matchingTupleIndex];
-      tuple.images.push({
-        uri,
-        name: filename,
-        modality: modalityName
-      });
+    // The first post-crop create lands here: its sparse tupleAdded opens the canon sequence (docs/crop-and-pptx.md: post-crop-message-order).
+    state.panel.webview.postMessage(applied.message);
 
-      tuple.images.sort((a, b) =>
-        state.scanResult.modalities.indexOf(a.modality) -
-        state.scanResult.modalities.indexOf(b.modality)
-      );
-
-      this.regenerateThumbnail(state, matchingTupleIndex, modalityIndex);
-
-      // imageInfo lets the webview fill in a slot it did not know about.
-      const restoredMsg: ExtensionMessage = {
-        type: 'fileRestored',
-        tupleIndex: asTuple(matchingTupleIndex),
-        modalityIndex,
-        imageInfo: {
-          name: filename,
-          modality: modalityName,
-          tupleIndex: asTuple(matchingTupleIndex),
-          modalityIndex
-        }
-      };
-      state.panel.webview.postMessage(restoredMsg);
-    }
-    if (matchingTupleIndex < 0) {
-      // Suffix collisions ` (2)`, `(3)`… like the scan path, or one results line votes for every same-named tuple (docs/session-files.md: durable-vote-key).
-      const existingNames = new Set(state.scanResult.tuples.map(t => t.name));
-      let uniqueName = baseFilename;
-      for (let n = 2; existingNames.has(uniqueName); n++) {
-        uniqueName = `${baseFilename} (${n})`;
-      }
-
-      // One file for now; other modalities may arrive later.
-      const newTuple = {
-        name: uniqueName,
-        images: [{
-          uri,
-          name: filename,
-          modality: modalityName
-        }]
-      };
-      
-      // Sorted insertion, not current+1: the create can arrive a whole sweep after the user navigated away (docs/file-watching.md: rows-insert-in-order).
-      const insertIndex = asTuple(tupleInsertIndex(state.scanResult.tuples.map(t => t.name), uniqueName));
-      state.scanResult.tuples.splice(insertIndex, 0, newTuple);
-      const newTupleIndex = insertIndex;
-
-      // Insertion shifts every index-keyed structure up, in lockstep with the splice (docs/file-watching.md: reindex-in-lockstep).
-      const newLoadedImages = new Map<string, LoadedImage>();
-      for (const [key, value] of state.loadedImages) {
-        const [tIdx, mIdx] = key.split('-').map(Number);
-        if (tIdx >= insertIndex) {
-          newLoadedImages.set(`${tIdx + 1}-${mIdx}`, value);
-        } else {
-          newLoadedImages.set(key, value);
-        }
-      }
-      state.loadedImages = newLoadedImages;
-
-      const newWinners = new Map<TupleIndex, OriginalModalityIndex>();
-      for (const [tIdx, mIdx] of state.winners) {
-        if (tIdx >= insertIndex) {
-          newWinners.set(asTuple(tIdx + 1), mIdx);
-        } else {
-          newWinners.set(tIdx, mIdx);
-        }
-      }
-      state.winners = newWinners;
-
-      for (const d of state.recentlyDeleted) {
-        if (d.tupleIndex >= insertIndex) {
-          d.tupleIndex++;
-        }
-      }
-
-      // The >= guard shifts the current index with the splice (docs/file-watching.md: mutation-never-strands-view).
-      if (state.currentTupleIndex >= insertIndex) {
-        state.currentTupleIndex++;
-      }
-
-      // Dense over ALL modalities, like sendInitData: webview position *is* the global index.
-      const tupleInfo: TupleInfo = {
-        name: newTuple.name,
-        images: state.scanResult.modalities.map((modality, mIdx) => {
-          const img = this.findImageForModality(newTuple, modality);
-          return {
-            name: img?.name || '',
-            modality,
-            tupleIndex: newTupleIndex,
-            modalityIndex: asOriginal(mIdx)
-          };
-        })
-      };
-
-      const msg: ExtensionMessage = {
-        type: 'tupleAdded',
-        tuple: tupleInfo,
-        tupleIndex: newTupleIndex
-      };
-      state.panel.webview.postMessage(msg);
-
-      const addedModalityIndex = state.scanResult.modalities.indexOf(modalityName);
-      this.regenerateThumbnail(state, newTupleIndex, addedModalityIndex);
-    }
+    this.regenerateThumbnail(state, insertIndex, plan.modalityIndex);
   }
 
   /**
@@ -2488,40 +2351,24 @@ ${lead}
    * (best-effort — see the caveat in docs/file-watching.md). Returns its index, or -1 on failure.
    */
   private async addNewModality(state: PanelState, modalityName: string): Promise<number> {
-    const modalities = state.scanResult.modalities;
-
     // A mode-2 re-add keeps the caller's slot from modalityDirs key order (docs/tuple-matching.md: modality-order-is-callers); mode 1 has no caller order.
     const callerOrder = state.modalityDirs.size > 0 ? Array.from(state.modalityDirs.keys()) : undefined;
-    const insertIndex = modalityInsertIndex(modalities, modalityName, callerOrder);
-
-    modalities.splice(insertIndex, 0, modalityName);
+    // Insert position, winner shift, tuple re-sort and the modalityAdded payload are the shared planner's (docs/file-watching.md: new-modality-dir-adopted).
+    const { insertIndex, message } = applyModalityInsert(state.scanResult, state.winners, modalityName, callerOrder, {
+      modalityPath: name => this.resolveModalityPath(state, name),
+      colorOverride: (mod, i) => this.resolveModalityColor(state, mod, i),
+    });
 
     // Insertion invalidates every key: "0-2" no longer names the same modality (docs/file-watching.md: reindex-in-lockstep).
     state.loadedImages.clear();
-
-    const newWinners = new Map<TupleIndex, OriginalModalityIndex>();
-    for (const [tupleIndex, winnerModalityIndex] of state.winners) {
-      if (winnerModalityIndex >= insertIndex) {
-        newWinners.set(tupleIndex, asOriginal(winnerModalityIndex + 1));
-      } else {
-        newWinners.set(tupleIndex, winnerModalityIndex);
-      }
-    }
-    state.winners = newWinners;
+    this.dropPendingImagePosts(state);
 
     state.recentlyDeleted = state.recentlyDeleted.map(d =>
       d.modalityIndex >= insertIndex ? { ...d, modalityIndex: d.modalityIndex + 1 } : d
     );
 
-    // Re-sort each tuple's sparse images into the new modality order.
-    for (const tuple of state.scanResult.tuples) {
-      tuple.images.sort((a, b) =>
-        modalities.indexOf(a.modality) - modalities.indexOf(b.modality)
-      );
-    }
-
     if (state.baseUri && !state.disposed) {
-      const newDir = vscode.Uri.joinPath(state.baseUri, modalityName).path;
+      const newDir = vscode.Uri.joinPath(state.baseUri, modalityName).path; // `.path`: same space as the rest of the set (docs/file-watching.md: watched-dirs-are-uri-paths)
       const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme;
       // Setup runs once at open, so a dir discovered later must be watched here or never (docs/file-watching.md: watched-dirs-have-watchers).
       if (scheme && !state.watchedDirs.has(newDir)) {
@@ -2530,14 +2377,7 @@ ${lead}
       }
     }
 
-    const msg: ExtensionMessage = {
-      type: 'modalityAdded',
-      modality: modalityName,
-      modalityPath: this.resolveModalityPath(state, modalityName),
-      modalityColors: state.scanResult.modalities.map((mod, i) => this.resolveModalityColor(state, mod, i)),
-      modalityIndex: asOriginal(insertIndex)
-    };
-    state.panel.webview.postMessage(msg);
+    state.panel.webview.postMessage(message);
 
     // Winner indices may have shifted.
     if (state.votingEnabled && state.winners.size > 0) {
@@ -2561,8 +2401,7 @@ ${lead}
       if (img) {
         const modalityIndex = asOriginal(state.scanResult.modalities.indexOf(img.modality));
         if (modalityIndex < 0) return;
-        const cacheKey = `${tupleIndex}-${modalityIndex}`;
-        state.loadedImages.delete(cacheKey);
+        this.invalidateSlot(state, tupleIndex, modalityIndex);
         this.regenerateThumbnail(state, tupleIndex, modalityIndex);
         if (tupleIndex === state.currentTupleIndex) {
           this.sendImage(state, asTuple(tupleIndex), modalityIndex);
@@ -2573,15 +2412,17 @@ ${lead}
   }
 
   /**
-   * Post a message to the webview's console when `imageCompare.debug` is on, queueing
-   * it if the webview has not signalled 'ready' yet.
+   * Log to the "ImageCompare" output channel and mirror to the webview's console when
+   * `imageCompare.debug` is on, queueing (bounded) if the webview has not signalled 'ready' yet.
    */
   private debugMsg(state: PanelState, msg: string): void {
-    const debug = vscode.workspace.getConfiguration('imageCompare').get<boolean>('debug', false);
-    if (!debug) return;
+    if (!debugEnabled()) return;
+    debug('[IC-EXT]', () => msg);
     if (state.webviewReady) {
       state.panel.webview.postMessage({ type: '_debug', msg });
     } else {
+      // Bounded: a slow remote open queued thousands, then replayed them into the renderer console at 'ready' (docs/testing.md).
+      if (state.pendingDebugMessages.length >= PENDING_DEBUG_MAX) state.pendingDebugMessages.shift();
       state.pendingDebugMessages.push(msg);
     }
   }
@@ -2600,13 +2441,13 @@ ${lead}
     if (!imageFile) return;
 
     try {
-      const dataUrl = await this.pool.submit(
+      const bytes = await this.pool.submit(
         () => this.thumbnailService.getThumbnail(imageFile.uri, thumbnailSize * 2),
         { priority: Priority.THUMBNAIL, key: state.poolKey }
       );
       const okSlot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
       if (!okSlot || okSlot.modalityIndex < 0) return;
-      this.sendThumbnailMessage(state, okSlot.tupleIndex, okSlot.modalityIndex, dataUrl);
+      this.sendThumbnailMessage(state, okSlot.tupleIndex, okSlot.modalityIndex, bytes, THUMBNAIL_MIME);
     } catch (error) {
       if (error instanceof TaskCancelled || state.disposed) return;
       const slot = this.resolveSlotForUri(state, tupleIndex, modality, imageFile.uri);
@@ -2614,6 +2455,11 @@ ${lead}
       const message = error instanceof Error ? error.message : 'Unknown error';
       this.sendThumbnailErrorMessage(state, slot.tupleIndex, slot.modalityIndex, message);
     }
+  }
+
+  /** Awaited by `deactivate` before dispose, so a dirty thumbnail pack lands while the cache still holds it (docs/image-backends.md: thumb-pack-survives-close). */
+  async flush(): Promise<void> {
+    await this.thumbnailService.flush();
   }
 
   dispose(): void {

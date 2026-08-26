@@ -42,7 +42,7 @@ the classification in the PR description.
    that could break it (`node scripts/check-invariants.mjs` gates this). If your change makes a doc
    claim untrue, fix the doc in the same PR.
 4. **Code comments are one line.** Longer explanations belong in `docs/`
-   (`node scripts/comment-lint.mjs` gates `src/`).
+   (`node scripts/comment-lint.mjs` gates `src/` and `scripts/`; `test/` is deliberately exempt).
 5. **No Co-Authored-By lines in commits.**
 6. **Minimize the diff.** No drive-by renames, reformatting, or refactors of code you aren't
    changing.

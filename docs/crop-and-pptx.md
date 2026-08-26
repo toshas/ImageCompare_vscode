@@ -3,10 +3,15 @@
 How a rectangle drawn on one image becomes a set of crops across every modality, how a crop
 remembers where it came from, and how the exporter reassembles that into callout slides.
 
-Code: `webview/crop.ts` and `webview/main.ts` (draw + send), `imageCompareProvider.ts`
-(`handleCropImages`, `getNextCropNumber`, `handleExportPptx`), `thumbnailService.ts`
+Code: `webview/crop.ts` and `webview/main.ts` (draw + send), `cropFlow.ts` (`performCrop` — the
+whole confirm-to-`cropComplete` sequence over per-product IO), `cropPlan.ts` (`nextCropName`,
+`toRelativeRect`, `scaleAndClampRect`) and
+`pptxDeck.ts` (`buildDeck`, plus `exportDeck` — the name/build/save/answer sequence over
+per-product IO) — pure, `vscode`-free modules the provider and the standalone build
+share (`docs/standalone.md`); `imageCompareProvider.ts` (`handleCropImages`, `handleExportPptx` —
+the provider's IO tables for those two flows), `thumbnailService.ts`
 (`getImageDimensions`, `cropImage`, `capSlideImage`, `readCropMetadata`, `parseExifDescription`), and `pngText.ts` —
-the pure, `vscode`-free wire-format module `thumbnailService.ts` imports (with the test):
+the pure, `vscode`-free wire-format module `cropFlow.ts` and `thumbnailService.ts` import (with the test):
 `CROP_RECT_KEYWORD`,
 `encodeCropMeta`/`parseCropMeta`, `pngInjectText`/`pngReadText`, and `crc32` (test-only).
 
@@ -26,9 +31,9 @@ The rectangle therefore crosses three spaces:
    the overlay stores and re-renders is in this space, so the rect stays glued to image content
    while the user zooms and pans. The viewer's usable width subtracts `carouselOffset` — the
    carousel overlays the viewer element rather than shrinking it, so its bounding rect lies.
-2. **Pixels → relative 0–1** (`handleCropImages`), dividing by the `srcWidth`/`srcHeight` the
-   webview sent. This is the only resolution-independent form, and the only form that may cross
-   between modalities.
+2. **Pixels → relative 0–1** (`toRelativeRect` in `cropPlan.ts`, called once by the shared
+   `performCrop` flow), dividing by the `srcWidth`/`srcHeight` the webview sent. This is the only
+   resolution-independent form, and the only form that may cross between modalities.
 3. **Relative → each modality's own pixels**, re-multiplying by that file's true dimensions from
    `getImageDimensions()`, then clamping to bounds. A rect that scales to nothing is skipped, not
    an error.
@@ -49,14 +54,15 @@ crops can differ by a pixel. That is intended — matching the region beats matc
 ## One filename for all modalities
 
 The output basename is the **tuple** name, not the source file's name, so every modality writes
-`{tupleName}_cropNN.png` into its own directory, and `handleCropImages` routes each written file
-straight through `handleFileCreated`, which re-matches them into a single new tuple — eagerly, not
+`{tupleName}_cropNN.png` into its own directory, and `performCrop` lands each written file through
+the product's `arriveFile` io — the provider's routes straight through `handleFileCreated`, which
+re-matches them into a single new tuple — eagerly, not
 via the watcher, which never fires on network mounts (`docs/file-watching.md`:
 `self-writes-never-wait`). Using per-file basenames would scatter the crops across N tuples of one
 image each.
 
-The crop number is resolved once for all modalities: `getNextCropNumber` (= max existing + 1) runs
-against the directory of every image *the tuple actually has* (`tuple.images` is sparse) in parallel,
+The crop number is resolved once for all modalities: `nextCropName` (= max existing + 1) scans
+the listing of the directory of every image *the tuple actually has* (`tuple.images` is sparse),
 and the highest wins, then that one number is reused
 everywhere. This is what keeps the names identical, and taking the max rather than the first
 directory's number is what stops a directory that is out of step — a cancelled crop leaves some
@@ -64,16 +70,18 @@ behind — from having an existing crop overwritten; the cost is a gap in the nu
 that were behind. There is still no locking — two crops confirmed in the same instant would race to
 the same number.
 
-`handleCropImages` then fans out across modalities with `Promise.all`, each modality one pooled task
-at `EXPORT`. The per-modality cost is *two* full-resolution reads, not one: `getImageDimensions`
-reads and parses the file for its true dimensions, then `cropImage` reads it again to extract (so a
+`performCrop` then invokes every modality's work unit eagerly through the product's `schedule` io:
+the provider pools each one at `EXPORT`, the adapter chains them serially. The per-modality cost is
+*two* full-resolution reads, not one: the dimensions read (`getImageDimensions` in the provider, a
+browser decode in the adapter) parses the file for its true dimensions, then the render reads it
+again to extract (so a
 `.ppmx` is parsed twice), before the single extract-and-encode. See `docs/loading-architecture.md`,
 "Crop and PPTX export: pooled at `EXPORT`", for how they are scheduled and what they cost.
 
 ### `_cropNN` is a cross-file contract
 
-`handleCropImages` writes `_crop${String(n).padStart(2, '0')}`. `fileService.ts` matches
-`/_crop\d+$/` to **deprioritize** crop files as tuple-match references (`docs/tuple-matching.md: crop-never-beats-noncrop`), `handleExportPptx` uses `^…_crop\d+$` to pair crops with parents, and `getNextCropNumber` reads
+`cropPlan.ts`'s `nextCropName` writes `_crop${String(n).padStart(2, '0')}`. `fileService.ts` matches
+`/_crop\d+$/` to **deprioritize** crop files as tuple-match references (`docs/tuple-matching.md: crop-never-beats-noncrop`), `pptxDeck.ts` uses `^…_crop\d+$` to pair crops with parents, and `nextCropName` reads
 the same format in-file to find the next free number.
 The writer's format and those readers' patterns must keep agreeing. Break the agreement and nothing
 throws: crops start winning matches away from originals, and tuples quietly bind the wrong files.
@@ -103,12 +111,15 @@ the marker, stopping at the first other character, then feeds that run to `parse
 wire format — the companion standalone HTML tool reads
 and writes it too — so do not repurpose fields or append a seventh.
 
-The Sharp path writes it twice — EXIF `ImageDescription` (as `ImageCompare:CropRect=<value>`) *and*
-a PNG `tEXt` chunk. The Jimp path writes only the `tEXt` chunk, because Jimp cannot write EXIF at
-all. Hence the rule (`metadata-written-twice` of `docs/image-backends.md`): the tEXt chunk is always present and
+The `tEXt` chunk is injected once, by the shared `performCrop` flow, into whatever bytes the
+product's renderer produced — so every crop, whichever backend rendered it (Sharp, Jimp, or the
+standalone's canvas), carries it. The provider's Sharp renderer (`thumbnailService.cropImage`)
+*additionally* writes the same value as EXIF `ImageDescription` (as `ImageCompare:CropRect=<value>`);
+the Jimp path cannot write EXIF at all. Hence the rule (`metadata-written-twice` of
+`docs/image-backends.md`): the tEXt chunk is always present and
 is the cross-tool contract; EXIF is a Sharp-path bonus, and readers must accept either.
 `readCropMetadata` tries EXIF first and falls back to `tEXt`, so a crop written by either backend —
-or by the HTML tool — reads back the same. Dropping the redundant tEXt write on the Sharp path
+or by the HTML tool — reads back the same. Dropping the flow's tEXt injection
 would break the HTML tool and Jimp-written crops in one go.
 
 `pngInjectText`/`pngReadText` walk the real chunk structure (length/type/data/CRC) rather than
@@ -194,9 +205,11 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
 
 ## Invariants
 
-- **`deck-images-bounded`** — every image placed on a slide is downscale-capped (2560px longest side,
-  never enlarged) and JPEG-recompressed at quality 85 by whichever backend is available — Sharp, or
-  `ThumbnailService.capSlideImage` (Jimp) when Sharp is absent — never embedded at full resolution.
+- **`deck-images-bounded`** — every image placed on a slide is downscale-capped (never enlarged)
+  and JPEG-recompressed to the shared bounds `DECK_IMAGE_MAX_DIM`/`DECK_JPEG_QUALITY` in
+  `pptxDeck.ts` (2560px longest side, quality 85) by whichever backend runs — Sharp,
+  `ThumbnailService.capSlideImage` (Jimp) when Sharp is absent, or the standalone's canvas encode —
+  never embedded at full resolution.
   The one exception is the no-backend last resort: when Sharp and Jimp both fail to load (already a
   hard-error state for thumbnails), original bytes pass through uncapped. Not a quality preference:
   pptxgenjs zips with jszip (3.10.1 installed), whose *read* path handles ZIP64 (`lib/signature.js`,
@@ -217,7 +230,7 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
   name with a single crop number resolved once, so the watcher re-groups them into exactly one tuple.
 - **`cropnn-writer-reader-match`** — the `_cropNN` writer format keeps matching every `_crop\d+`
   reader — `fileService.ts`'s reference deprioritization, the PPTX parent/crop pairing, and
-  `getNextCropNumber`'s own scan for the next free number. Zero-padded, decimal, at the end of the
+  `nextCropName`'s own scan for the next free number. Zero-padded, decimal, at the end of the
   basename.
 - **`croprect-six-integers`** — the `CropRect` value stays `x,y,w,h,srcW,srcH`, six integers, in
   source-image pixels. Both the exporter and an external tool parse it. (That it is written to both
@@ -230,13 +243,17 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
   `findParentTuple` returns -1 and there is no image to draw the callout on. **A voted crop is never
   shown without its parent's context** whenever that parent still exists.
 - **`export-always-answers`** — every `exportPptx` received on a live panel is answered with exactly
-  one `pptxComplete` or `pptxError`: the try body of `handleExportPptx` ends in the complete post,
-  and any throw — including a missing output directory from `suggestPptxUri` — becomes the error
-  post. The webview's PPTX button stays busy and refuses clicks until one of them arrives, so a
-  provider path that returns silently bricks the button for the panel's lifetime. The only
-  non-posting exits are dispose-gated: `state.disposed` checks, and `TaskCancelled`, which the pool
-  raises for this key only from `onDidDispose`'s `cancel(poolKey)` — with the webview already gone,
-  no answer is owed.
+  one `pptxComplete` or `pptxError`. This is construction-enforced by the shared `exportDeck` flow
+  (`pptxDeck.ts`): the whole name→build→save sequence runs inside its one try, any throw — including
+  a missing output directory from the provider's `listExistingNames` io — becomes the single error
+  post, the complete post follows the save unconditionally, and the product notification hook runs
+  only *after* the answer is out, so a throwing toast can no longer forge a second one. Both
+  products merely inject `post` and their output mechanics; neither owns an answer path. The
+  webview's PPTX button stays busy and refuses clicks until an answer arrives, so an io that
+  swallows one bricks the button for the panel's lifetime. The only
+  non-answering exit is cancellation (`isCancelled` io): the provider maps it to `state.disposed`
+  and `TaskCancelled`, which the pool raises for this key only from `onDidDispose`'s
+  `cancel(poolKey)` — with the webview already gone, no answer is owed.
 - **`callout-from-metadata`** — the callout thumbnail's red rectangle comes from metadata, not from
   re-deriving the region by comparing images.
 - **`crop-needs-viewport`** — crop mode is never entered without a decoded current image. The two
@@ -248,3 +265,12 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
   but carries no dimensions, so it would map every rect to `NaN` and silently discard it. Enforced by
   the compiler — `enterCropMode`'s `viewport` parameter is required, so an unguarded call site fails
   the build rather than shipping a dead mode.
+- **`post-crop-message-order`** — the shared `performCrop` flow (`cropFlow.ts`) owns the sequence:
+  after the whole write batch, it lands each saved file in modality order through the product's
+  `arriveFile` io, posts `cropComplete` only after the last arrival, and runs the thumbnail hook
+  after that; full images come only on the webview's `requestImage`. The per-file wire payloads —
+  the first saved file a *sparse* `tupleAdded` at its sorted insert position (only its own modality
+  named, current/winner indices shifted), each further file a `fileRestored` with `imageInfo` — are
+  produced only by the shared arrival planner (`arrivalPlan.ts`), which the provider's `arriveFile`
+  reaches through `handleFileCreated`/`handleNewFile` and the adapter's calls directly. The demo
+  recorder's host emulation still speaks the sequence by hand and cites this key as a reader.

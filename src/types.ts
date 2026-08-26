@@ -41,6 +41,14 @@ export interface ImageTuple {
   images: ImageFile[];
 }
 
+/** Debug-only numbers only the scan can report; the open rollup prints them (docs/loading-architecture.md: open-spans-account-for-the-whole-open). */
+export interface ScanStats {
+  /** Image files collected across the modality dirs — what the matcher was handed. */
+  files: number;
+  /** Wall ms spent inside the matcher, the nested part of the scan span. */
+  matchMs: number;
+}
+
 // Scan result from file service
 export interface ScanResult {
   modalities: string[];
@@ -51,6 +59,8 @@ export interface ScanResult {
   roots: vscode.Uri[];
   /** Purely "more than one row" — drives carousel layout, never a mode decision. */
   isMultiTupleMode: boolean;
+  /** Absent unless `imageCompare.debug` was on for this scan (docs/loading-architecture.md: debug-off-costs-nothing). */
+  stats?: ScanStats;
 }
 
 // Image info sent to webview
@@ -71,10 +81,13 @@ export interface TupleInfo {
 export type WebViewMessage =
   | { type: 'ready' }
   | { type: 'requestThumbnails'; tupleIndices: TupleIndex[] }
-  // sibling: off-screen modality (lower priority). forceReload: bypass cached bytes so a failed decode can retry.
-  | { type: 'requestImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; sibling?: boolean; forceReload?: boolean }
+  // sibling: off-screen modality. tail: sibling past the nearest two (docs/loading-architecture.md: sibling-tail-never-competes). forceReload: bypass cached bytes so a failed decode can retry.
+  | { type: 'requestImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; sibling?: boolean; tail?: boolean; forceReload?: boolean }
   | { type: 'setCurrentTuple'; tupleIndex: TupleIndex }
-  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex }
+  // The strip as displayed, the moment the user picks a column: the sweep's aim, ahead of any load (docs/loading-architecture.md: click-reports-its-column).
+  | { type: 'setCurrentModality'; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[]; visibleRows?: number }
+  // Carries the modality strip as displayed: prefetch speculates on the column on screen, not the whole tuple (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column). visibleRows is the carousel's screenful — the sweep's cross radius (docs/loading-architecture.md: sweep-cross-then-row-major).
+  | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[]; visibleRows?: number }
   | { type: 'setWinner'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null } // null = clear winner
   | { type: 'cropImages'; tupleIndex: TupleIndex; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
   | { type: 'deleteTuple'; tupleIndex: TupleIndex }
@@ -84,8 +97,8 @@ export type WebViewMessage =
 
 // Messages from Extension to WebView
 export type ExtensionMessage =
-  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean }
-  | { type: 'thumbnail'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; dataUrl: string }
+  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version: string }
+  | { type: 'thumbnail'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string } // binary like `image`, and blob-URL'd in the webview (docs/loading-architecture.md: image-payload-normalized)
   | { type: 'thumbnailError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
   | { type: 'image'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string; width: number; height: number } // binary, not base64: string payloads cost ×1.33 and GC pauses
   | { type: 'imageError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }

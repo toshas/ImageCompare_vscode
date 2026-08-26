@@ -136,8 +136,9 @@ bytes on the pool, for nothing.
 
 Full images cross into the webview as binary (`loadFullImage` returns `Uint8Array`; the webview
 blob-URLs it and revokes after decode) — base64 delivery cost the ×1.33 inflation plus GC pauses
-that showed up as 10-22ms main-thread tasks in traces. Base64 remains on two paths: thumbnails
-(small, data-URL'd per delivery) and PPTX slide images (pptxgenjs takes base64). Where it remains,
+that showed up as 10-22ms main-thread tasks in traces. Thumbnails followed for the same reason at
+~1000× the message count (`docs/loading-architecture.md`, "Thumbnails ship as bytes"), so base64
+now remains on exactly one path: PPTX slide images, because pptxgenjs takes base64. Where it remains,
 `toString('base64')` is synchronous and unyieldable on the extension-host thread, and its cost
 scales with payload size — so the size of what a backend emits is a responsiveness question, not
 just a memory one. This is also why `loadFullImage` passes browser-decodable formats
@@ -146,9 +147,9 @@ JPEG to PNG both burned Sharp pool time and inflated the payload ~10x. See
 `docs/loading-architecture.md` for the scheduling side of this.
 
 Thumbnails are cached on disk as raw `.jpg`, one file per entry; the memory cache holds raw JPEG
-bytes and every delivery base64-encodes on the way out. That per-delivery encode is cheap only
-because the images are small — `thumbnailSize` (default 100) is decoded at 2x, so 200px by default
-and 400px at the setting's maximum.
+bytes, and `getThumbnail` hands those same bytes to the wire — no representation change anywhere in
+the path. The images stay small on purpose: `thumbnailSize` (default 100) is decoded at 2x, so 200px
+by default and 400px at the setting's maximum.
 
 On top of the per-entry files sits the **packfile**: `thumbs.pack` + `thumbs.idx` in the cache dir, a
 rename-only snapshot of the memory cache (so its size is bounded by the cache cap). A warm open costs
@@ -156,16 +157,92 @@ one sequential read instead of thousands of small ones — the difference betwee
 sub-second on a network mount. The pack is lazily loaded on the first thumbnail request; entries are
 `key → offset/length` slices sharing one buffer (`thumbPack.ts`, pure and suite-pinned). Per-entry
 files remain the only *write* path during a session — concurrent windows never append to a shared
-file — and the snapshot is idle-debounced, written to temp names and published by rename. Invalidation
-needs nothing new: the cache key already encodes the file's mtime and the requested thumbnail size,
-so a changed file misses via mtime, a changed `thumbnailSize` setting misses via the size component,
-and either falls through to the per-entry path.
+file — and the snapshot is idle-debounced, written to temp names and published by rename. The
+debounce is 30s of idle, which is longer than a testing-style session lives: closing the window
+inside that window used to *cancel* the pending write, so a user who reloads often could go many
+cycles with no pack on disk at all and every open paying the per-entry read path. A close now
+publishes instead of cancelling (`thumb-pack-survives-close`), which is also the only shutdown work
+this service does — bounded by the memory-cache cap, and safe to lose, since publication is still
+rename-only.
+
+## What the cache key sees, and when the cache dies
+
+The key is `sha256(uri + mtime + ctime + size)` truncated to 16 hex chars, and every component pays
+for itself: `mtime` catches an ordinary edit, `size` catches a changed `thumbnailSize` setting (mtime
+does not move when a setting does), and `ctime` — the inode *change* time — catches what neither of
+the others can see. `cp -p`, `rsync --times`, `tar -p`, and any training loop that restores
+timestamps, rewrite a file **in place** with different pixels, the same byte count and the same
+mtime; under an mtime+size key that is a cache hit, so the user is shown an image that no longer
+exists on disk and no event will ever invalidate it. Inode change time moves on every content or
+metadata write and no tool can set it, so it is the one field a preserving copy cannot fake.
+
+Two caveats, both deliberate:
+
+- **`vscode.FileStat.ctime` is not this field.** VS Code documents `ctime` as the *creation*
+  timestamp and its disk provider returns `birthtime`, which an in-place overwrite leaves untouched —
+  keying on it would look like a fix and change nothing. `statForKey` therefore stats `file:` URIs
+  through node (`fs.promises.stat` → `ctimeMs`), one call *replacing* the previous
+  `workspace.fs.stat` rather than added to it — so the hot path is never dearer, though for an
+  ordinary image it is not cheaper either: VS Code's disk provider issues a single `lstat` for a
+  regular file and only adds a `stat` when the entry turns out to be a symlink, so the syscall count
+  is *equal* for a regular image and one lower only for a symlinked one. What the direct call always
+  drops is the `workspace.fs` provider layer, not a syscall. Other schemes fall back to
+  `workspace.fs.stat`, where the key degrades to the old mtime+size behaviour and an in-place
+  overwrite is invisible again.
+- **Not every filesystem tracks it.** On ext4/APFS/NTFS the field is real (NTFS `ChangeTime` cannot
+  be set through `SetFileTime`). On FAT/exFAT, and on network filesystems that synthesise stat, it
+  can simply track mtime — there the key is no worse than before, never better. In the other
+  direction `ctime` also moves on `chmod`, `chown` and rename, so those now miss where they used to
+  hit. That is the right trade both ways: a spurious miss costs one regeneration, a false hit shows
+  the wrong picture.
+
+A key that changed is a key that is dead, so the entry it replaced is evicted rather than left to
+age out: `evictSuperseded` drops it from the memory cache, from the loaded pack map, and (fire and
+forget) from disk, driven by a `uri → last key` map held for the session. Without it a producer that
+rewrites its outputs every few minutes leaves one dead `.jpg` per file per rewrite until the sweep
+runs a week later, and every dead entry keeps occupying the byte-capped memory cache. The map costs
+one short string per URI seen — noise beside the ~192 MB the entries themselves may hold — and the
+eviction path costs a syscall only when a key actually changed. A pack already published on disk can
+still carry a dead key, which is harmless: nothing asks for it again, and the next snapshot (built
+from the memory cache) drops it.
+
+Expiry is by last **use**, not last write. `cleanupOldCache` deletes anything in the cache dir older
+than `imageCompare.cacheMaxAgeDays` (7), and a fully warm session writes nothing at all — so the pack
+that was serving every thumbnail used to expire *while in active use*, handing a daily user one cold
+open a week, and the worst kind: thousands of small reads on a network mount. The pack pair is
+therefore stamped on use — a successful load calls `touchPack`, two `utimes` for the whole session,
+against the thousands a touch-on-read would have cost. Per-entry `.jpg`s still expire by write time,
+because they are redundant once their bytes are in the pack, and a disk-tier hit re-enters the memory
+cache as pack-dirty so anything the pack lacks is published into the next snapshot.
+
+A stamp cannot stop a sweep that has already decided. `initialize` starts `cleanupOldCache` without
+awaiting it, so this window's own sweep can stat the pack a moment before the load's `touchPack`
+lands; another window's sweep is unconstrained; and a user can empty the cache directory by hand. The
+in-memory map keeps serving in every one of those cases — but on its own that is only half the goal,
+because a *fully* warm session marks nothing dirty, the debounced snapshot is skipped, and the pack
+stays deleted: the next open is the cold one this whole mechanism exists to prevent. So the session
+checks. Whenever a publish is *considered* — the idle snapshot or the close flush — and there is
+nothing dirty to publish anyway, a session that loaded a pack stats the pair (`packGone`); if either
+half is missing it marks the cache dirty and the ordinary rename-only publish puts the pack back.
+That is two stats per publish *decision*, a handful per session against one per thumbnail, and zero
+in a session that never loaded a pack or already has something to publish. The guard order matters
+for a second reason: on the dirty path no `await` runs before the entries are captured, so
+`thumb-pack-survives-close`'s synchronous capture is untouched. What comes back is the memory cache —
+the entries this session actually served, not necessarily every entry the deleted pack held. One
+residual edge remains, accepted: a pack lost or unparseable *before* this session could load it, with
+its per-entry files already aged out, costs one cold session that rebuilds.
 
 ## Testing
 
 Of the unit suites `publish.yml` gates on (`docs/testing.md`), only `test/unit/ppmxParser.test.ts`
-(the pure decode half) and `test/unit/thumbPack.test.ts` (the packfile wire format, importing the
-real `thumbPack.ts`) touch this subsystem. `test/unit/pngTextChunk.test.ts` uses Sharp to mint a fixture
+(the pure decode half), `test/unit/thumbPack.test.ts` (the packfile wire format, importing the
+real `thumbPack.ts`), `test/unit/thumbPackFlush.test.ts` (the pack's *lifetime* — the real
+`ThumbnailService` generating real thumbnails into a real temp `globalStorageUri` through the
+fs-backed `vscode` mock, then closing), `test/unit/thumbCacheKeying.test.ts` (a real in-place
+overwrite with mtime and size restored, and the eviction of the key it superseded) and
+`test/unit/thumbCacheExpiry.test.ts` (a backdated cache dir swept while the pack is in use, and a
+pack deleted under a live session that the close puts back) touch
+this subsystem. `test/unit/pngTextChunk.test.ts` uses Sharp to mint a fixture
 PNG and re-read it, so a native Sharp must load for that one test to run — but that exercises Sharp
 incidentally, not the loader or the tiers. Nothing tests Jimp or `sharpLoader.ts`, so the fallback chain is
 verified by hand or not at all. `sharpLoader.ts` is ordinary bundled source — of the npm packages only `sharp`
@@ -182,6 +259,31 @@ then hit a wasm32 tier that a normal install does not have (above).
   temp files. A discarded pack costs a slower open; a torn pair that served bytes would show wrong
   thumbnails. Writers never append — two windows snapshotting concurrently means the last rename
   wins wholesale, never an interleaved file.
+- **`thumb-pack-survives-close`** — a dirty snapshot is never dropped on the way out: `dispose()`
+  *starts* the pending write rather than cancelling the timer, `flush()` awaits both the write in
+  flight and the pending one, and `deactivate` awaits `flush()` (through the provider) before the
+  host exits. Entries are captured when a write is *queued*, so the `clearMemoryCache()` on the same
+  shutdown path cannot turn a queued write into an empty pack published over a good one. Nothing
+  about a violation is visible at runtime — no error, no wrong pixel, just a cold next open, which is
+  exactly the slowness this pack exists to remove.
+- **`thumb-key-sees-overwrite`** — the cache key covers the file's content identity, not just its
+  advertised mtime: `uri + mtime + ctime + size`, with `ctime` read as the inode *change* time (node
+  `fs.stat().ctimeMs` for `file:` URIs in `statForKey` — `vscode.FileStat.ctime` is birth time and
+  would fix nothing). Drop that component, or source it from vscode's stat, and an mtime-preserving
+  in-place overwrite serves the previous image forever with nothing left that could invalidate it:
+  wrong pixels, silently, with no error and no log line. A changed key must also *evict* the one it
+  superseded (`evictSuperseded`: memory, loaded pack map, per-entry file), or a rewriting producer
+  accumulates one dead entry per rewrite until the weekly sweep.
+- **`thumb-cache-expires-by-use`** — nothing the running session is serving from may be swept out
+  from under it. `cleanupOldCache` prunes by age, so the pack pair carries a last-*use* stamp
+  (`touchPack`, once per session on a successful load) instead of a last-write mtime a warm session
+  never advances. Per-entry `.jpg`s may expire — a disk hit re-enters the memory cache as pack-dirty,
+  so their bytes reach the next snapshot — but a pack that is answering requests must not. And when
+  one is deleted anyway (another window's sweep, this window's un-awaited one racing the load, a
+  manual clear), the session that loaded it must put it back: at every publish decision that would
+  otherwise write nothing, `packGone` stats the pair and a missing half marks the cache dirty, since a
+  fully warm session produces no other signal that would. A violation shows up only as one
+  inexplicably cold open per `cacheMaxAgeDays`, on the mounts where it hurts most.
 - **`sharp-externalized`** — Sharp stays externalized. Bundling it breaks native binary resolution
   and disables the `Module._resolveFilename` workaround entirely.
 - **`resolver-always-restored`** — `Module._resolveFilename` is always restored, on every path,
@@ -198,9 +300,10 @@ then hit a wasm32 tier that a normal install does not have (above).
   `imageCompareProvider.ts`, and nothing — no compiler, no test — connects the two.
 - **`backends-agree-output`** — Sharp and Jimp must agree on output: JPEG quality 70 for thumbnails,
   and identical dimensions, or the backend in use becomes user-visible.
-- **`metadata-written-twice`** — crop metadata is written twice — EXIF (Sharp only) *and* a PNG
-  `tEXt` chunk — because the Jimp path cannot write EXIF and the tEXt chunk is the cross-tool
-  contract. Readers must accept either.
+- **`metadata-written-twice`** — crop metadata is written twice — EXIF (Sharp only, inside
+  `thumbnailService.cropImage`) *and* a PNG `tEXt` chunk (injected once for every render path by the
+  shared crop flow in `cropFlow.ts`) — because the Jimp path cannot write EXIF and the tEXt chunk is
+  the cross-tool contract. Readers must accept either.
 - **`passthrough-no-backend`** — browser-decodable formats never touch a backend in `loadFullImage`,
   not even for `metadata()`.
 - **`vsix-modules-hand-assembled`** — the VSIX's `node_modules` is hand-assembled and only checkable

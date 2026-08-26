@@ -5,14 +5,15 @@ rules that keep the resulting indices honest.
 
 Code: `fileService.ts` (`scanForImages` → `scanDirectoriesAsModalities` → `matchTuplesWithTrie`).
 
-Scan-time matcher only. A file appearing *after* open is placed by a separate heuristic in
-`handleNewFile` (`imageCompareProvider.ts`) — the trie matcher is a batch algorithm over a complete
+Scan-time matcher only. A file appearing *after* open is placed by a separate heuristic —
+`planArrival` (`arrivalPlan.ts`), driven by `handleNewFile` (`imageCompareProvider.ts`) and by the
+standalone's crop writes — the trie matcher is a batch algorithm over a complete
 scan and never runs for watcher events (`docs/file-watching.md`, "Watcher-added files use a second,
 separate matcher"). They do *not* share a filename contract: the trie matcher knows `_cropNN` (tie-break
-rule 1 tests `/_crop\d+$/`, `docs/crop-and-pptx.md: cropnn-writer-reader-match`), while `handleNewFile`
+rule 1 tests `/_crop\d+$/`, `docs/crop-and-pptx.md: cropnn-writer-reader-match`), while `planArrival`
 matches by generic substring containment (`baseFilename.includes(tuple.name)`) and treats a crop as an
-ordinary name. The other `_crop\d+` readers are `getNextCropNumber`, `findCropTuples` and
-`findParentTuple` in `imageCompareProvider.ts`, all bound to the writer in `handleCropImages`.
+ordinary name. The other `_crop\d+` readers are `nextCropName` in `cropPlan.ts` and `findCropTuples`/
+`findParentTuple` in `pptxDeck.ts`, all bound to the writer in `nextCropName` itself.
 
 Pinned by `test/unit/tupleMatching.test.ts` (Vitest), which imports the real `matchTuplesWithTrie`
 and `scanForImages` from `fileService.ts` through the `vscode` mock alias — the suite once held pure
@@ -118,6 +119,40 @@ no seed is a claim about candidate 0. A lone candidate is taken as-is, with the 
   but degrading to C = R for a query sharing no prefix — worst case O(N·R·L²). It has not mattered
   because directories that compare have names that look alike.
 
+## The scan's real cost is round trips, not files
+
+Matching is CPU work on strings and is measured in tens of milliseconds; **listing the directories is
+IO**, and over a network filesystem one listing is a cold round trip of a few hundred milliseconds
+regardless of how many files come back. Field evidence from three opens in one remote/NFS session:
+7398 files over 11 dirs took 2431 ms of `scan=`, while 984 files over 10 dirs took 3640 ms — 7x fewer
+files, 50% *more* time. Per directory that is 221 ms warm against 364 ms cold: the spread tracks the
+cache, not the file count, which is the point. Serialized, a few hundred ms x a column count is the
+whole open: a blank window measured in seconds, growing with the number of *columns*,
+which is the one dimension a user adds casually.
+
+So the listings overlap (`listModalityDirectories`), and only they: the matcher stays sequential
+because it is not what costs. The fan-out is capped at `DIR_LISTING_CONCURRENCY = 16` — enough that
+every realistic session (2–12 modalities) is one wave, i.e. one round trip, while a session naming
+dozens of directories still cannot open with an unbounded herd of simultaneous listings at the exact
+moment the user is waiting. A cap also keeps the memory transient bounded: each listing materializes
+its directory's whole entry array.
+
+Two things about the overlap are load-bearing and invisible in a green build:
+
+- **Assembly is in the input `dirs` order, never completion order.** `modalityFiles` is a `Map` and
+  its *insertion* order is the modality order of the session (below), so filling it as listings land
+  would reorder every column by network latency — a different column order on every open, and with it
+  different names, colors and possibly a different elected reference. Each listing therefore carries
+  its own `dir` and the Map is filled by walking the results array. `classifyUris` does the same thing
+  for the same reason ("Stat in parallel, assemble in input order").
+- **A failed listing still rejects the scan, with the first failure in input order.** Serially, an
+  unreadable directory threw before the later ones were read; concurrently every listing runs, so the
+  failures are collected and the earliest *in input order* is rethrown — otherwise which error the
+  user sees would depend on which directory was slowest.
+
+Measured against the model this fix targets (11 dirs, 350 ms injected per-listing latency, real
+`scanForImages`): 3900 ms before, ~385 ms after.
+
 ## Modality order and naming
 
 `scanDirectoriesAsModalities` does not sort; the array order it receives is the modality order of the
@@ -144,6 +179,35 @@ A modality name is the join key everywhere downstream (`findImageForModality` lo
 *name*, not position). Two modalities with the same name would silently merge — hence
 disambiguation, the uniqueness check on `labels`, and `uniquify` in mode 3.
 
+## What counts as a file or a directory (symlinks)
+
+VS Code's `FileType` is a **bitmask** — `File=1`, `Directory=2`, `SymbolicLink=64` — so a symlink to
+a directory stats as `66` and a symlink to a file as `65`. Comparing a type with `===` therefore
+skips *every* symlink, which is how a symlinked modality directory produced no column and a
+symlinked image produced no tuple. The codebase was split on this: the open-time scanner in
+`fileService.ts` compared with equality while the adoption/poll paths in `imageCompareProvider.ts`
+already masked, so the same link was visible or invisible depending on *when* it appeared — adopted
+by the sweep if it showed up later, gone again on the next reopen.
+
+A dangling link is `Unknown|SymbolicLink = 64`: vscode's `toType` resolves the target and degrades
+to `Unknown` when there is none, so neither the File nor the Directory bit is set and the masked
+test skips it silently. That is the wanted policy — there are no bytes behind it to show, and no
+error is worth raising for a link the user can see is broken.
+
+Following links adds no traversal risk, because the scan is depth-limited rather than recursive:
+`scanDirectory` lists one level and elects the subdirectories, `scanDirectoriesAsModalities` lists
+one level of each, and neither calls back into the other. A link pointing at its own ancestor is
+listed once and stops.
+
+The standalone build cannot participate. The File System Access API has no symlink concept (a
+handle's `kind` is only `'file'` or `'directory'`) and Chromium does not surface linked entries, so
+the adapter — already written in the masked form — would adopt one only if the browser ever
+reported it.
+
+A symlinked modality directory updates on the poll's cadence rather than instantly: inotify does not
+follow links, so the watcher never fires for changes behind one and the existence sweep is what
+notices them (docs/file-watching.md).
+
 ## Trap 1: sparse on the extension side, dense in the webview
 
 The same tuple has two shapes, and confusing them is the recurring index bug:
@@ -165,7 +229,7 @@ with an empty `name` has no bytes behind it.
 The webview lets the user reorder modality columns. `modalityOrder[displayIdx] = originalIdx`
 is the only mapping, and it lives in the webview: the extension's `modalities` array is *always* in
 original order. The extension does see display order in one place — `exportPptx` carries
-`modalityOrder` on the wire and `handleExportPptx` iterates it so slides come out in the user's column
+`modalityOrder` on the wire and `pptxDeck.ts`'s `buildDeck` iterates it so slides come out in the user's column
 order — but it only reads it through, never stores it.
 
 Which space each value lives in — the wire is original; `winners` is *display* in the webview
@@ -227,6 +291,14 @@ section is about. Nothing but the code comments and this doc keeps the un-permut
   keyed `X_gt`. Modality order can still *change which modality is elected reference* (the election
   tie-breaks on array position), which changes the keys and, through naming, can change the names —
   so row order is not modality-order-independent in general.
+- **`entry-type-is-a-bitmask`** — every `FileType` test is a bit test (`(type & FileType.File) !== 0`),
+  never `===`, in all four modules that classify an entry: the open-time scan (`fileService.ts` — `classifyUris`,
+  `scanDirectory`, `scanDirectoriesAsModalities`), the modality-adoption and poll paths
+  (`imageCompareProvider.ts`), session-file pruning (`extension.ts`) and thumbnail-cache cleanup
+  (`thumbnailService.ts`). Symlinks are followed everywhere and broken links (`64`, neither bit set)
+  are skipped everywhere, so whether a user's file is visible never depends on which code path found
+  it — equality at some sites and masking at others is what made a symlinked column appear only if it
+  arrived after open.
 - **`reference-seeds-one-tuple`** — every reference file yields exactly one tuple; nothing else
   creates tuples.
 - **`one-file-per-modality`** — a modality contributes at most one file per tuple. Matching is
@@ -237,8 +309,17 @@ section is about. Nothing but the code comments and this doc keeps the un-permut
 - **`crop-never-beats-noncrop`** — a crop reference never beats a non-crop reference when both are
   candidates.
 - **`modality-order-is-callers`** — modality order is the caller's; sorting is the caller's job
-  (`scanDirectory` sorts its subfolders before calling). `classifyUris` preserves input order despite
-  parallel stats.
+  (`scanDirectory` sorts its subfolders before calling). Both parallel steps of the scan preserve the
+  input order despite completing out of order: `classifyUris` assembles its files/directories by
+  walking the stat results in input order, and `scanDirectoriesAsModalities` fills `modalityFiles` by
+  walking the directory listings in input order — the Map's insertion order *is* the session's
+  modality order, so completion-order assembly would re-shuffle every column by network latency.
+- **`dir-listings-overlap`** — the modality directories are listed **concurrently**, capped at
+  `DIR_LISTING_CONCURRENCY`: the scan's cost is one network round trip per directory (see "The scan's
+  real cost is round trips, not files"), so a serial loop makes the open scale with the column count,
+  and an uncapped fan-out makes a large session open with a thundering herd. Overlapping must not
+  change what the user sees when a directory cannot be listed: the scan still rejects, with the
+  earliest failure **in input order** — the one the serial loop reached first.
 - **`names-are-join-key`** — modality names are unique, and are the join key — position is not.
 - **`sparse-vs-dense-tuples`** — extension-side tuples are sparse; webview tuples are dense with
   `name: ''` placeholders, and the two must not be indexed the same way.

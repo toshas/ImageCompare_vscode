@@ -34,3 +34,12 @@ test/demos/raw/
 test/demos/gallery/
 test/dashboard/dashboard.html
 test/dashboard/FEATURES.md
+
+# Local list of terms the pre-commit guard blocks — personal, never versioned
+.words-to-check.txt
+
+# Overnight run notes — local scratch, read then delete
+NIGHT-RUN-NOTES.md
+
+# Working notes on iteration speed — local, read then fold into CLAUDE.md if kept
+ITERATION-TIPS.md

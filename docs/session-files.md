@@ -196,7 +196,7 @@ filenames, so changing cluster membership can change it and orphan votes
 modalities are added or removed; nothing durable may depend on them.
 
 Colliding names are de-duplicated with a ` (N)` suffix on **both** tuple-creation paths — the scan
-(`scanDirectoriesAsModalities`) and the watcher (`handleNewFile`) — so two tuples never share a vote
+(`scanDirectoriesAsModalities`) and the arrival planner (`planArrival` in `arrivalPlan.ts`) — so two tuples never share a vote
 key. Both must keep doing it: `mapWinnersToIndices` looks the key up per tuple, so one duplicate name
 makes a single results line vote for every row that carries it. The line format still has holes: a name starting with `#` reads back as a
 comment, one containing `=` truncates at the first `=`, and the reader trims both the line and each
@@ -239,7 +239,13 @@ value the pill stamps.
   between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
   unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
 - **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label,
-  and keyboard cycling; **nothing else reads the set**. Loading, prefetch, voting, PPTX export,
+  keyboard cycling, and the *order and scope of speculation* — nothing else. The carousel keeps
+  showing the column, so nothing the user can still reach may be dropped for it: speculative work
+  skips hidden columns (sibling loads and prefetch waves,
+  `docs/loading-architecture.md: sibling-order-by-display-distance`) because a click or digit jump
+  re-requests them on demand, while the open-time sweep only ranks them **last** and still sweeps
+  every one (`docs/loading-architecture.md: sweep-cross-then-row-major`) — a skipped sweep slot would
+  be a blank tile in a column that is still on screen. Voting, PPTX export,
   matching and reordering are oblivious, and the state dies with the panel — it is not persisted to
   the session file. The cycling itself is `nextVisibleModality` (`webview/modalityVisibility.ts`,
   pure, suite-pinned), non-wrapping like the arrow keys it serves.

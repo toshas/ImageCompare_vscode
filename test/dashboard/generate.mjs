@@ -20,18 +20,12 @@ import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+// Paths + the webview command live in suiteCommands.mjs so the generated-output checker
+// probes this exact wiring rather than a copy of it (assertAbsolute runs on import).
+import { ROOT, RESULTS, UNIT_JSON, WEBVIEW_JSON, INTEGRATION_JSON, WEBVIEW_CMD, webviewEnv } from './suiteCommands.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, '..', '..');
-// NOT under test-results/: Playwright's default outputDir is test-results/ and
-// it WIPES that dir at the start of its run, which would delete unit.json
-// (written earlier in this generator). Keep our intermediates separate.
-const RESULTS = join(ROOT, '.dashboard-data');
 const reuse = process.argv.includes('--reuse');
-
-const UNIT_JSON = join(RESULTS, 'unit.json');
-const WEBVIEW_JSON = join(RESULTS, 'webview.json');
-const INTEGRATION_JSON = join(RESULTS, 'integration.json');
 
 mkdirSync(RESULTS, { recursive: true });
 
@@ -75,7 +69,7 @@ if (!reuse) {
   };
   runCaptureStdout('npx vitest run --config test/vitest.config.ts --reporter=json', UNIT_JSON);
   checked('unit', UNIT_JSON);
-  run('npx playwright test --config test/webview/playwright.config.ts --reporter=json', { PLAYWRIGHT_JSON_OUTPUT_NAME: WEBVIEW_JSON });
+  run(WEBVIEW_CMD, webviewEnv(WEBVIEW_JSON));
   checked('webview', WEBVIEW_JSON);
   run('npm run test:integration', { IC_JSON_OUT: INTEGRATION_JSON });
   checked('integration', INTEGRATION_JSON);

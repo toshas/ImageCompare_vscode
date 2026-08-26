@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/toshas/ImageCompare_vscode/actions/workflows/test.yml/badge.svg)](https://github.com/toshas/ImageCompare_vscode/actions/workflows/test.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/toshas/ImageCompare_vscode?label=GitHub%20%E2%98%85&logo=github&color=C8C)](https://github.com/toshas/ImageCompare_vscode)
-[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/obukhovai.image-compare?label=VS%20Code%20Marketplace&color=006600)](https://marketplace.visualstudio.com/items?itemName=obukhovai.image-compare)
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code%20Marketplace-install-006600)](https://marketplace.visualstudio.com/items?itemName=obukhovai.image-compare)
 [![Cursor, VSCodium, Windsurf](https://img.shields.io/open-vsx/v/obukhovai/image-compare?label=Cursor%2C%20VSCodium%2C%20Windsurf&color=006600)](https://open-vsx.org/extension/obukhovai/image-compare)
 [![Website](https://img.shields.io/badge/%E2%99%A5%20Author%20-Website-blue)](https://www.obukhov.ai)
 [![Subscribe for updates!](https://img.shields.io/twitter/follow/antonobukhov1?label=Subscribe%20for%20updates!)](https://x.com/antonobukhov1)
@@ -184,8 +184,9 @@ PNG, JPG, JPEG, GIF, BMP, WebP, TIFF (`.tiff`, `.tif`), PPMX
 |---------|---------|-------------|
 | `imageCompare.thumbnailSize` | 100 | Resolution carousel thumbnails are decoded and cached at (longest side, 2x this value) — not their on-screen size, which follows the carousel width divided by the modality count |
 | `imageCompare.prefetchCount` | 3 | Tuples to preload ahead/behind (each preloads every modality) |
+| `imageCompare.maxConcurrentReads` | 0 (auto) | How many image reads/decodes run at once. Auto sizes from the CPUs actually available and caps at the extension host's libuv thread pool (4) + 2 — a wider pool only queues work ahead of the image you are looking at. Applies on the next window reload |
 | `imageCompare.keepZoomOnTupleChange` | false | Keep zoom/pan when switching tuples; off means a new tuple resets the view. Zoom always persists across modality switches |
-| `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime |
+| `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime, counted from last use (a cache you keep opening never expires) |
 | `imageCompare.debug` | false | Enable debug logging (webview console + Extension Host output) |
 
 ## Development & Testing

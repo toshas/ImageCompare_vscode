@@ -6,6 +6,8 @@
 import * as crop from './crop';
 import { nextVisibleModality, isVoteClickable, displayOrderAfterInsert } from './modalityVisibility';
 import { shiftIndexAfterRemoval } from '../watcherLogic';
+import { ThumbUrlCache, BLANK_THUMB } from './thumbUrlCache';
+import { LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -92,6 +94,7 @@ const progressContainerEl = document.getElementById('progress-container')!;
 const progressTextEl = document.getElementById('progress-text')!;
 const progressFillEl = document.getElementById('progress-fill')!;
 const helpModalEl = document.getElementById('help-modal')!;
+const helpVersionEl = document.getElementById('help-version')!;
 const helpBtn = document.getElementById('help-btn')!;
 const closeHelpBtn = document.getElementById('close-help-btn')!;
 const reorderLeftBtn = document.getElementById('reorder-left')!;
@@ -133,7 +136,8 @@ let previousModalityIndex: DisplayModalityIndex = asDisplay(0);
 
 let images: (LoadedImage | undefined)[] = []; // Current tuple's loaded images (may have undefined slots)
 let loadedTuples: Map<TupleIndex, LoadedImage[]> = new Map();
-let thumbnailDataUrls: Map<string, string> = new Map(); // "tupleIdx-modIdx" -> dataUrl
+// "tupleIdx-modIdx" -> object url (or the ✕ placeholder data url): it owns every url a row shows (docs/loading-architecture.md: thumb-url-owned-by-cache).
+const thumbnailUrls = new ThumbUrlCache(url => URL.revokeObjectURL(url));
 
 let zoom = 1;
 let panX = 0;
@@ -150,7 +154,10 @@ let isMultiTupleMode = false;
 let modalityOrder: OriginalModalityIndex[] = []; // maps display position -> original modality index
 let loadDebounceTimer: number | null = null; // debounce timer for loading full images
 let lastNavAt = 0; // timestamp of the previous tuple navigation (for leading-edge debounce)
-const LOAD_DEBOUNCE_MS = 150; // wait this long before loading full images
+// Armed on arrival, cleared by the next navigation: siblings of a tuple scrolled past are never asked for (docs/loading-architecture.md: siblings-dwell-gated).
+let siblingDwellTimer: number | null = null;
+// Slots asked for and not yet answered, each with the rank it was asked at, so a repaint cannot re-ask but a promotion can (docs/loading-architecture.md: siblings-dwell-gated, request-rank-upgrades).
+const requestedSlots = new Map<string, SlotRank>();
 
 // Winner voting state
 let winners: Map<TupleIndex, DisplayModalityIndex> = new Map(); // tupleIndex -> modalityIndex (display index)
@@ -189,6 +196,7 @@ if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?:
       winners: Array.from(winners.entries()),
       votingEnabled,
       pptxBusy,
+      thumbUrlsLive: thumbnailUrls.liveCount,
     }),
   };
 }
@@ -491,7 +499,9 @@ function handleWinnersReset(message: { winners: Record<number, OriginalModalityI
   updateModalitySelector();
 }
 
-function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean }) {
+function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version?: string }) {
+  // Absent/empty version renders nothing: the :empty CSS rule hides the footer entirely.
+  helpVersionEl.textContent = message.version ? `ImageCompare v${message.version}` : '';
   // Reset all state for new comparison
   tuples = message.tuples;
   modalities = message.modalities;
@@ -521,10 +531,11 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   // Clear caches
   images = [];
   loadedTuples.clear();
-  thumbnailDataUrls.clear();
+  thumbnailUrls.clear();
   hiddenModalities.clear();
   // Index-keyed and every index just changed identity; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
+  requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
 
   // Reset view state
   zoom = 1;
@@ -536,6 +547,10 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   if (loadDebounceTimer !== null) {
     clearTimeout(loadDebounceTimer);
     loadDebounceTimer = null;
+  }
+  if (siblingDwellTimer !== null) {
+    clearTimeout(siblingDwellTimer);
+    siblingDwellTimer = null;
   }
 
   // Hide loader if visible
@@ -572,37 +587,60 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   }
 }
 
-function handleThumbnail(message: { tupleIndex: TupleIndex; modalityIndex: number; dataUrl: string }) {
+function handleThumbnail(message: { tupleIndex: TupleIndex; modalityIndex: number; bytes: Uint8Array; mime: string }) {
   const key = `${message.tupleIndex}-${message.modalityIndex}`;
-  thumbnailDataUrls.set(key, message.dataUrl);
+  // Binary payload -> Blob URL, like the full-image path: base64 thumbs cost ×1.33 on the wire and string churn at ~1000 tiles.
+  const url = URL.createObjectURL(new Blob([message.bytes as Uint8Array<ArrayBuffer>], { type: message.mime }));
 
   // Update carousel thumb if exists
   const thumb = carouselEl.querySelector(
     `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
   ) as HTMLImageElement | null;
 
-  if (thumb) {
-    thumb.src = message.dataUrl;
+  thumbnailUrls.set(key, url, () => {
+    if (!thumb) return;
+    thumb.src = url;
     thumb.classList.remove('placeholder');
+    thumb.classList.remove('missing');
+  });
+}
+
+// Carousel slots whose one thumbnail re-request is spent; consumed on the next failure so a fresh delivery re-arms (docs/loading-architecture.md: decode-retry-once).
+const thumbRetried = new Set<string>();
+
+function handleThumbDecodeFailure(img: HTMLImageElement): void {
+  const tuple = img.dataset.tuple;
+  const modality = img.dataset.modality;
+  if (tuple === undefined || modality === undefined) return;
+  const key = `${tuple}-${modality}`;
+  // Cache the placeholder so pooled-row rebinds repaint it instead of re-hitting the corrupt url.
+  thumbnailUrls.set(key, PLACEHOLDER_THUMB, () => { img.src = PLACEHOLDER_THUMB; });
+  img.classList.remove('placeholder');
+  img.classList.add('missing');
+  if (thumbRetried.has(key)) {
+    thumbRetried.delete(key);
+    return;
   }
+  thumbRetried.add(key);
+  vscode.postMessage({ type: 'requestThumbnails', tupleIndices: [asTuple(parseInt(tuple, 10))] });
 }
 
 function handleThumbnailError(message: { tupleIndex: TupleIndex; modalityIndex: number; error: string }) {
   console.warn(`Thumbnail unavailable for ${message.tupleIndex}-${message.modalityIndex}: ${message.error}`);
   
-  // Store placeholder in thumbnailDataUrls so it persists across carousel rebuilds
+  // Store placeholder in the url cache so it persists across carousel rebuilds
   const key = `${message.tupleIndex}-${message.modalityIndex}`;
-  thumbnailDataUrls.set(key, PLACEHOLDER_THUMB);
-  
+
   // Show placeholder in carousel
   const thumb = carouselEl.querySelector(
     `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
   ) as HTMLImageElement | null;
-  
-  if (thumb) {
+
+  thumbnailUrls.set(key, PLACEHOLDER_THUMB, () => {
+    if (!thumb) return;
     thumb.src = PLACEHOLDER_THUMB;
     thumb.classList.add('missing');
-  }
+  });
 }
 
 // Slots re-requested after a decode failure; bounds the retry to one — see docs/loading-architecture.md.
@@ -611,6 +649,7 @@ const decodeRetried = new Set<string>();
 let payloadShapeLogged = false;
 
 function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; bytes: Uint8Array; mime: string; width: number; height: number }) {
+  requestedSlots.delete(`${message.tupleIndex}-${message.modalityIndex}`);
   // One-time shape log: if the serializer ever mangles the binary payload, this is the first place it shows.
   if (!payloadShapeLogged) {
     payloadShapeLogged = true;
@@ -652,10 +691,7 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; b
 
       const allLoaded = images.every(img => img !== undefined);
       if (allLoaded) {
-        vscode.postMessage({
-          type: 'tupleFullyLoaded',
-          tupleIndex: currentTupleIndex
-        });
+        postTupleFullyLoaded(currentTupleIndex);
       }
     }
   };
@@ -674,21 +710,16 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; b
     }
     decodeRetried.add(key);
     // Re-derive the original priority: omitting `sibling` would promote a sibling's retry to VISIBLE.
-    const sibling = message.tupleIndex !== currentTupleIndex ||
-      modalityOrder[currentModalityIndex] !== message.modalityIndex;
+    const onScreen = message.tupleIndex === currentTupleIndex &&
+      modalityOrder[currentModalityIndex] === message.modalityIndex;
     // forceReload is required: without it the retry is served the same cached, undecodable bytes.
-    vscode.postMessage({
-      type: 'requestImage',
-      tupleIndex: message.tupleIndex,
-      modalityIndex: message.modalityIndex,
-      sibling,
-      forceReload: true
-    });
+    requestSlot(asTuple(message.tupleIndex), asOriginal(message.modalityIndex), onScreen ? 'visible' : 'sibling', true);
   };
   img.src = blobUrl;
 }
 
 function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: number; error: string }) {
+  requestedSlots.delete(`${message.tupleIndex}-${message.modalityIndex}`);
   console.warn(`Image unavailable for ${message.tupleIndex}-${message.modalityIndex}: ${message.error}`);
 
   // Ignore if the tuple was removed while this was in flight.
@@ -708,10 +739,7 @@ function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: numb
     // A fully-loaded tuple (missing slots included) unblocks prefetch.
     const allLoaded = images.every(img => img !== undefined);
     if (allLoaded) {
-      vscode.postMessage({
-        type: 'tupleFullyLoaded',
-        tupleIndex: currentTupleIndex
-      });
+      postTupleFullyLoaded(currentTupleIndex);
     }
   }
 }
@@ -757,17 +785,17 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
 
   // The missing sentinel must live in the map: recycled rows repaint from it (message.modalityIndex is already the global/original index).
   const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
-  thumbnailDataUrls.set(thumbKey, PLACEHOLDER_THUMB);
 
   // Update carousel to show placeholder for missing file
   const thumb = carouselEl.querySelector(
     `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
   ) as HTMLImageElement | null;
-  if (thumb) {
+  thumbnailUrls.set(thumbKey, PLACEHOLDER_THUMB, () => {
+    if (!thumb) return;
     thumb.src = PLACEHOLDER_THUMB;
     thumb.classList.add('missing');
     thumb.classList.remove('placeholder');
-  }
+  });
   
   // If this is the current tuple, update display
   if (message.tupleIndex === currentTupleIndex) {
@@ -799,7 +827,7 @@ function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: nu
 
   // Clear thumbnail data URL so it gets regenerated (message.modalityIndex is already the global index)
   const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
-  thumbnailDataUrls.delete(thumbKey);
+  thumbnailUrls.delete(thumbKey);
 
   // Update carousel to remove missing state
   const thumb = carouselEl.querySelector(
@@ -814,17 +842,14 @@ function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: nu
     images = tupleImages ? reorderImagesForDisplay(tupleImages) : [];
     render();
     // Request the image so it actually loads (instead of just showing spinner)
-    vscode.postMessage({
-      type: 'requestImage',
-      tupleIndex: message.tupleIndex,
-      modalityIndex: message.modalityIndex
-    });
+    requestSlot(asTuple(message.tupleIndex), asOriginal(message.modalityIndex), 'visible');
   }
 }
 
 function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
   // decodeRetried is index-keyed and a removal shifts every later index; clearing is cheaper than re-indexing.
   decodeRetried.clear();
+  requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
   tuples.splice(message.tupleIndex, 1);
   loadedTuples.delete(message.tupleIndex);
 
@@ -842,21 +867,9 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
     loadedTuples.set(idx, imgs);
   }
 
-  // Re-index thumbnail data URLs (shift indices down)
-  const newThumbnails = new Map<string, string>();
-  for (const [key, url] of thumbnailDataUrls) {
-    const [tIdx, mIdx] = key.split('-').map(Number);
-    if (tIdx > message.tupleIndex) {
-      newThumbnails.set(`${tIdx - 1}-${mIdx}`, url);
-    } else if (tIdx < message.tupleIndex) {
-      newThumbnails.set(key, url);
-    }
-    // tIdx === message.tupleIndex: discard (tuple removed)
-  }
-  thumbnailDataUrls.clear();
-  for (const [key, url] of newThumbnails) {
-    thumbnailDataUrls.set(key, url);
-  }
+  // Re-index thumbnail urls (shift indices down); the removed row's are nobody's, so they are revoked.
+  thumbnailUrls.rekey((tIdx, mIdx) =>
+    tIdx === message.tupleIndex ? null : `${tIdx > message.tupleIndex ? tIdx - 1 : tIdx}-${mIdx}`);
 
   // Re-index winners (shift indices down)
   const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
@@ -893,6 +906,7 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
 function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex }) {
   // decodeRetried is index-keyed and an insertion shifts every later index; clearing is cheaper than re-indexing.
   decodeRetried.clear();
+  requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
   // Add the new tuple at the specified index
   tuples.splice(message.tupleIndex, 0, message.tuple);
 
@@ -910,20 +924,8 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
     loadedTuples.set(idx, imgs);
   }
 
-  // Re-index thumbnail data URLs (shift indices up)
-  const newThumbnails = new Map<string, string>();
-  for (const [key, url] of thumbnailDataUrls) {
-    const [tIdx, mIdx] = key.split('-').map(Number);
-    if (tIdx >= message.tupleIndex) {
-      newThumbnails.set(`${tIdx + 1}-${mIdx}`, url);
-    } else {
-      newThumbnails.set(key, url);
-    }
-  }
-  thumbnailDataUrls.clear();
-  for (const [key, url] of newThumbnails) {
-    thumbnailDataUrls.set(key, url);
-  }
+  // Re-index thumbnail urls (shift indices up); nothing is dropped, so nothing is revoked.
+  thumbnailUrls.rekey((tIdx, mIdx) => `${tIdx >= message.tupleIndex ? tIdx + 1 : tIdx}-${mIdx}`);
 
   // Re-index winners (shift indices up)
   const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
@@ -1002,18 +1004,11 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
     imgs.forEach((img, i) => { shifted[i >= message.modalityIndex ? i + 1 : i] = img; });
     loadedTuples.set(idx, shifted);
   }
-  const shiftedThumbs = new Map<string, string>();
-  for (const [key, url] of thumbnailDataUrls) {
-    const [tIdx, mIdx] = key.split('-').map(Number);
-    shiftedThumbs.set(mIdx >= message.modalityIndex ? `${tIdx}-${mIdx + 1}` : key, url);
-  }
-  thumbnailDataUrls.clear();
-  for (const [key, url] of shiftedThumbs) {
-    thumbnailDataUrls.set(key, url);
-  }
+  thumbnailUrls.rekey((tIdx, mIdx) => `${tIdx}-${mIdx >= message.modalityIndex ? mIdx + 1 : mIdx}`);
   images = [];
   // Index-keyed and every modality index just shifted; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
+  requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
 
   // Rebuild UI
   buildModalitySelector();
@@ -1100,19 +1095,13 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
     });
     loadedTuples.set(idx, shifted);
   }
-  const shiftedThumbs = new Map<string, string>();
-  for (const [key, url] of thumbnailDataUrls) {
-    const [tIdx, mIdx] = key.split('-').map(Number);
-    if (mIdx === message.modalityIndex) continue;
-    shiftedThumbs.set(mIdx > message.modalityIndex ? `${tIdx}-${mIdx - 1}` : key, url);
-  }
-  thumbnailDataUrls.clear();
-  for (const [key, url] of shiftedThumbs) {
-    thumbnailDataUrls.set(key, url);
-  }
+  // The removed column's urls are nobody's, so the re-key revokes them.
+  thumbnailUrls.rekey((tIdx, mIdx) =>
+    mIdx === message.modalityIndex ? null : `${tIdx}-${mIdx > message.modalityIndex ? mIdx - 1 : mIdx}`);
   images = [];
   // Index-keyed and every later modality index just shifted; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
+  requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
 
   // Rebuild UI
   buildModalitySelector();
@@ -1172,6 +1161,22 @@ function scheduleRender() {
   });
 }
 
+/** Post one slot request, unless an outstanding one already ranks at least this high. */
+function requestSlot(tupleIndex: TupleIndex, modalityIndex: OriginalModalityIndex, rank: SlotRank, forceReload = false): void {
+  const key = `${tupleIndex}-${modalityIndex}`;
+  // A slot queued below the rank now needed must be re-asked; no host promotes a queued task (docs/loading-architecture.md: request-rank-upgrades).
+  if (rankCovers(requestedSlots.get(key), rank) && !forceReload) return;
+  requestedSlots.set(key, rank);
+  vscode.postMessage({
+    type: 'requestImage',
+    tupleIndex,
+    modalityIndex,
+    sibling: rank !== 'visible',
+    tail: rank === 'tail',
+    ...(forceReload ? { forceReload: true } : {})
+  });
+}
+
 function loadTuple(index: TupleIndex) {
   if (index < 0 || index >= tuples.length) return;
 
@@ -1198,6 +1203,15 @@ function loadTuple(index: TupleIndex) {
     clearTimeout(loadDebounceTimer);
     loadDebounceTimer = null;
   }
+  // Navigating away un-requests the siblings of the tuple left behind (docs/loading-architecture.md: siblings-dwell-gated).
+  if (siblingDwellTimer !== null) {
+    clearTimeout(siblingDwellTimer);
+    siblingDwellTimer = null;
+  }
+  // A revisit always re-asks: a reply dropped by the extension's park clears no other way (docs/loading-architecture.md: held-payloads-always-flush).
+  for (const key of [...requestedSlots.keys()]) {
+    if (key.startsWith(`${index}-`)) requestedSlots.delete(key);
+  }
 
   // Update, not rebuild: recreating 16 pill buttons per keystroke stalled the carousel animation.
   updateModalitySelector();
@@ -1214,24 +1228,23 @@ function loadTuple(index: TupleIndex) {
   const allCached = !!cachedSlots &&
     tuples[index].images.every((_, i) => cachedSlots[i] !== undefined);
   if (allCached) {
-    vscode.postMessage({ type: 'tupleFullyLoaded', tupleIndex: index });
+    postTupleFullyLoaded(index);
     return;
   }
 
-  // Requests only uncached modalities, so a cache-hit current modality still loads its siblings.
-  const requestMissing = () => {
-    if (currentTupleIndex !== index) return;
+  // The arrival policy is pure and unit-pinned; this only posts what it returns (docs/loading-architecture.md: siblings-dwell-gated).
+  const planFor = () => {
     const have = loadedTuples.get(index);
-    const tuple = tuples[index];
-    // Shown-first only breaks ties within VISIBLE; the sibling flag does the real work.
-    const shown = modalityOrder[currentModalityIndex];
-    const order = [shown, ...tuple.images.map((_, i) => i).filter(i => i !== shown)];
-    for (const i of order) {
-      if (!have || have[i] === undefined) {
-        // VISIBLE for the on-screen modality, SIBLING for the rest — see docs/loading-architecture.md.
-        vscode.postMessage({ type: 'requestImage', tupleIndex: index, modalityIndex: i, sibling: i !== shown });
-      }
-    }
+    return tupleArrivalPlan({
+      modalityOrder,
+      currentDisplayIndex: currentModalityIndex,
+      isHidden: o => hiddenModalities.has(asOriginal(o)),
+      isCached: o => !!have && have[o] !== undefined
+    });
+  };
+  const post = (requests: { modalityIndex: number; rank: SlotRank }[]) => {
+    if (currentTupleIndex !== index) return;
+    for (const r of requests) requestSlot(index, asOriginal(r.modalityIndex), r.rank);
   };
 
   // Leading-edge, not trailing: an isolated navigation must not pay 150ms (docs/loading-architecture.md: debounce-leading-edge).
@@ -1242,18 +1255,53 @@ function loadTuple(index: TupleIndex) {
   if (rapid) {
     loadDebounceTimer = window.setTimeout(() => {
       loadDebounceTimer = null;
-      requestMissing();
+      post(planFor().now);
     }, LOAD_DEBOUNCE_MS);
   } else {
-    requestMissing();
+    post(planFor().now);
   }
+
+  siblingDwellTimer = window.setTimeout(() => {
+    siblingDwellTimer = null;
+    post(planFor().afterDwell);
+  }, LOAD_DEBOUNCE_MS);
+}
+
+/** Carousel rows one screenful high — the radius the sweep's cross reaches to (docs/loading-architecture.md: sweep-cross-then-row-major). */
+function visibleCarouselRows(): number {
+  const rowH = carouselRowHeight();
+  if (!isMultiTupleMode || rowH <= 0) return 1;
+  return Math.max(1, Math.ceil(carouselEl.clientHeight / rowH));
+}
+
+/** Reports the strip the moment a click picks a column — `tupleFullyLoaded` waits for a whole tuple, which on a wide cold session is far away (docs/loading-architecture.md: click-reports-its-column). */
+function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
+  vscode.postMessage({
+    type: 'setCurrentModality',
+    modalityOrder: modalityOrder.slice(),
+    currentDisplayIndex: displayModalityIndex,
+    hiddenModalities: Array.from(hiddenModalities),
+    visibleRows: visibleCarouselRows()
+  });
+}
+
+/** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column), the sweep aims its cross at it (docs/loading-architecture.md: sweep-cross-then-row-major). */
+function postTupleFullyLoaded(tupleIndex: TupleIndex) {
+  vscode.postMessage({
+    type: 'tupleFullyLoaded',
+    tupleIndex,
+    modalityOrder: modalityOrder.slice(),
+    currentDisplayIndex: currentModalityIndex,
+    hiddenModalities: Array.from(hiddenModalities),
+    visibleRows: visibleCarouselRows()
+  });
 }
 
 function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: number) {
   // Thumbnails are keyed by original modality index, not display index.
   const originalModIdx = modalityOrder[displayModalityIndex];
   const thumbnailKey = `${tupleIndex}-${originalModIdx}`;
-  const thumbnailDataUrl = thumbnailDataUrls.get(thumbnailKey);
+  const thumbnailDataUrl = thumbnailUrls.get(thumbnailKey);
   
   if (thumbnailDataUrl) {
     // Show thumbnail as blurry preview
@@ -1531,6 +1579,12 @@ function createCarouselRowShell(): HTMLElement {
     const img = document.createElement('img');
     img.className = 'carousel-thumb placeholder';
     img.dataset.displayIndex = String(displayIdx);
+    // An undecodable thumb src must show the designed ✕ placeholder, never the browser's broken-image glyph (docs/loading-architecture.md: decode-retry-once).
+    img.onerror = () => handleThumbDecodeFailure(img);
+    img.onload = () => {
+      // A successful real decode re-arms the slot's retry; placeholder loads must not, or the guard dissolves before the retry's response lands.
+      if (img.src !== PLACEHOLDER_THUMB) thumbRetried.delete(`${img.dataset.tuple}-${img.dataset.modality}`);
+    };
     container.appendChild(img);
     if (votingEnabled) {
       const circle = document.createElement('div');
@@ -1542,7 +1596,7 @@ function createCarouselRowShell(): HTMLElement {
   return row;
 }
 
-/** Everything a row shows derives from the state maps, so recycling a slot fully repaints it. */
+/** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
 function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
   el.dataset.tupleIndex = String(tupleIdx);
   el.classList.toggle('current', tupleIdx === currentTupleIndex);
@@ -1552,13 +1606,14 @@ function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
     const originalIdx = modalityOrder[displayIdx];
     img.dataset.tuple = String(tupleIdx);
     img.dataset.modality = String(originalIdx);
-    const url = thumbnailDataUrls.get(`${tupleIdx}-${originalIdx}`);
+    const url = thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
     if (url) {
       if (img.getAttribute('src') !== url) img.src = url;
       img.classList.remove('placeholder');
       img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
     } else {
-      img.removeAttribute('src');
+      // Removing the src of a recycled tile leaves the browser's broken-image glyph (docs/loading-architecture.md: empty-tile-never-broken).
+      if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
       img.classList.add('placeholder');
       img.classList.remove('missing');
     }
@@ -1582,7 +1637,9 @@ function handleCarouselClick(e: MouseEvent) {
   }
   const img = target.closest('.carousel-thumb') as HTMLElement | null;
   if (img) {
-    goToTupleAndModality(tupleIdx, asDisplay(parseInt(img.dataset.displayIndex ?? '0', 10)));
+    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: click-reports-its-column).
+    const clicked = parseInt(img.dataset.displayIndex ?? '', 10);
+    if (Number.isInteger(clicked)) goToTupleAndModality(tupleIdx, asDisplay(clicked));
     return;
   }
   if (tupleIdx !== currentTupleIndex) loadTuple(tupleIdx);
@@ -1598,6 +1655,8 @@ function scrollCarouselToCurrentTuple() {
 }
 
 function goToTupleAndModality(tupleIdx: TupleIndex, modalityIdx: DisplayModalityIndex) {
+  // Unconditional: the clicked column is the sweep's aim even when it is the one already on screen, which no report may have carried yet (docs/loading-architecture.md: click-reports-its-column).
+  postCurrentModality(modalityIdx);
   if (tupleIdx === currentTupleIndex) {
     if (modalityIdx !== currentModalityIndex) {
       previousModalityIndex = currentModalityIndex;
@@ -1829,6 +1888,9 @@ function render() {
       updateStatus(`${modalityName}: not available`, `Zoom: ${zoom.toFixed(1)}x`, currentTupleIndex);
     } else {
       showPreviewOrLoading(currentTupleIndex, currentModalityIndex);
+      // A flip pays one VISIBLE load rather than a spinner nobody clears — before the dwell a first request, after it an upgrade of the tail's (docs/loading-architecture.md: siblings-dwell-gated, request-rank-upgrades).
+      const onScreenSlot = modalityOrder[currentModalityIndex];
+      if (loadDebounceTimer === null && onScreenSlot !== undefined) requestSlot(currentTupleIndex, onScreenSlot, 'visible');
     }
     return;
   }

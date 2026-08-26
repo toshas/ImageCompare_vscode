@@ -2,7 +2,7 @@
   "name": "image-compare",
   "displayName": "ImageCompare",
   "description": "Compare multiple images (tuples) with multiple modalities",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "obukhovai",
   "license": "MIT",
   "icon": "icon.png",
@@ -165,6 +165,20 @@
           "maximum": 10,
           "description": "Number of tuples to prefetch ahead and behind current position"
         },
+        "imageCompare.maxConcurrentReads": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 32,
+          "description": "How many image reads/decodes may run at once. 0 (auto) sizes the pool from os.availableParallelism() and caps it at the extension host's libuv thread pool (4) plus 2: Sharp holds one libuv thread per decode, so a wider pool buys no throughput and only queues work ahead of the image you are looking at. Raise it only if you gave VS Code a larger UV_THREADPOOL_SIZE, or on a fast unconstrained machine. Takes effect on the next window reload. See docs/loading-architecture.md."
+        },
+        "imageCompare.prefetchTransportBudgetMB": {
+          "type": "number",
+          "default": 8,
+          "minimum": 0,
+          "maximum": 512,
+          "description": "Remote sessions only: how many megabytes of speculatively prefetched images may be in flight to the viewer at once. Prefetch shares one serialized channel with the thumbnails and with the image you are looking at, so an unbounded wave delays both. 0 disables the bound; it is always disabled locally, where there is no channel to share. See docs/loading-architecture.md."
+        },
         "imageCompare.keepZoomOnTupleChange": {
           "type": "boolean",
           "default": false,
@@ -175,12 +189,22 @@
           "default": 7,
           "minimum": 1,
           "maximum": 30,
-          "description": "Maximum age of cached thumbnails in days"
+          "description": "How long unused thumbnail cache entries are kept, in days. Age is counted from last use for the packfile the cache is served from, so an actively used cache never expires under you; per-entry files are counted from when they were written. See docs/image-backends.md."
         },
         "imageCompare.debug": {
           "type": "boolean",
           "default": false,
-          "description": "Enable debug logging. Watcher and sweep events ([IC-EXT]) go to the webview developer console (Help > Toggle Developer Tools); tuple-matching traces ([IC-MATCH]) go to the Extension Host output."
+          "description": "Enable debug logging to the 'ImageCompare' output channel (View > Output > ImageCompare): tuple matching, the open-time thumbnail sweep, work-pool load, outbound bytes and prefetch waves. See docs/testing.md."
+        },
+        "imageCompare.debugVerbose": {
+          "type": "boolean",
+          "default": false,
+          "description": "With imageCompare.debug on, also log one line per thumbnail and per outbound message. Thousands of lines on a large session — enable only while diagnosing."
+        },
+        "imageCompare.debugConsole": {
+          "type": "boolean",
+          "default": false,
+          "description": "With imageCompare.debug on, also mirror every debug line to the developer console. Off by default: VS Code replays extension-host console output into the renderer, which is itself a measurable cost on remote sessions."
         }
       }
     }
@@ -188,6 +212,8 @@
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "webpack",
+    "build:standalone": "node scripts/build-standalone.mjs",
+    "alpha": "node scripts/local-alpha.mjs",
     "watch": "webpack --watch",
     "package": "webpack --mode production --devtool hidden-source-map",
     "lint": "eslint src --ext ts",
@@ -199,7 +225,9 @@
     "test:all": "npm run test:unit && npm run compile && npm run test:webview && npm run test:integration",
     "test:dashboard": "node test/dashboard/generate.mjs",
     "test:dashboard:reuse": "node test/dashboard/generate.mjs --reuse",
-    "test:demos": "playwright test --config=test/demos/playwright.demos.config.ts && node test/demos/build-gallery.mjs"
+    "test:demos": "playwright test --config=test/demos/playwright.demos.config.ts && node test/demos/build-gallery.mjs",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "check:refs": "node scripts/check-no-personal-refs.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

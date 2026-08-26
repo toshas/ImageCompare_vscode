@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ImageCompareProvider } from './imageCompareProvider';
+import { initDebugLog } from './debugChannel';
 import { parseSessionFile, suggestSessionFileName } from './sessionFile';
 
 let provider: ImageCompareProvider | undefined;
@@ -55,7 +56,8 @@ async function pruneOldSessions(context: vscode.ExtensionContext): Promise<void>
   );
   const now = Date.now();
   for (const [name, type] of entries) {
-    if (type !== vscode.FileType.File || !name.endsWith('.imagecompare')) {
+    // Bitmask, never equality — a symlinked session file is a session file (docs/tuple-matching.md: entry-type-is-a-bitmask).
+    if ((type & vscode.FileType.File) === 0 || !name.endsWith('.imagecompare')) {
       continue;
     }
     const fileUri = vscode.Uri.joinPath(dir, name);
@@ -129,6 +131,8 @@ Close this tab, or fix the file and reopen it.</p>
 }
 
 export async function activate(context: vscode.ExtensionContext) {
+  // First statement in activate: every debug line is stamped with ms since this point (docs/testing.md).
+  context.subscriptions.push(initDebugLog());
   provider = new ImageCompareProvider(context);
   await provider.initialize();
 
@@ -201,8 +205,10 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 }
 
-export function deactivate() {
+export async function deactivate(): Promise<void> {
   if (provider) {
+    // VS Code awaits this promise, which is the only shutdown point that can await the pack write (docs/image-backends.md: thumb-pack-survives-close).
+    await provider.flush();
     provider.dispose();
     provider = undefined;
   }

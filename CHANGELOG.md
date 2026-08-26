@@ -4,6 +4,60 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-25
+
+### Added
+- **Standalone browser build**: `npm run build:standalone` produces a single self-contained
+  `image_compare.html` that reuses the real webview bundle and the extension's own decision modules,
+  so both products share one implementation of matching, cropping, PPTX export, results persistence
+  and thumbnail sweeping rather than two that drift
+- **Generated-output gate** (`scripts/check-generated-output.mjs`): runs each generator and fails if
+  it writes outside an ignored directory. Added after a Playwright report landed untracked and
+  un-ignored carrying absolute machine paths
+- **Seam gate**: `check-sidedness.mjs` now fails when a host hand-builds a decision that belongs to a
+  shared module — a host may supply data to a shared runner, never policy
+
+### Changed
+- **Two panels share the thumbnail pool**: within one priority the pool rotates between panels, so a
+  second comparison tab starts indexing immediately instead of waiting out the first (measured: its
+  first tile waits 0 reads instead of 28). A hidden panel pauses its sweep rather than cancelling it
+- **Thumbnails fill a bounded cross, then row-major**: the sweep takes a tile rather than a row —
+  the focused row's columns alternate with the current column's rows out to the carousel's real
+  screenful, then row-major centre-out. Reach down the current column at 20 rows improves 391 -> 49
+  dispatches; filling the visible rectangle costs under 10% more
+- **The sweep aims where you stop, not where you pass**: a trailing-edge dwell means holding a
+  navigation key no longer makes the sweep chase the cursor, leaving thumbnails behind it
+- **Webview test suite sizes itself from usable cores** rather than the machine's core count, which
+  on a cgroup or SLURM host started ~128 browsers on 4 cores
+
+### Fixed
+- **A clicked tile names its own column**: the sweep aimed at column 0 whatever tile was clicked,
+  because the column reached the host only on a report that fires when every modality of a tuple has
+  loaded — which a wide comparison never satisfies. Affected both products
+- **Generators no longer write outside ignored directories**: Playwright's three JSON-report
+  environment variables do not share an anchor (`_OUTPUT_NAME` resolves against the config file,
+  `_OUTPUT_FILE` against the cwd), which sent a report to an unexpected path
+- **The VSIX no longer packs the working tree**: `.vscodeignore` is a separate list from
+  `.gitignore` and `vsce` packs the working tree, so agent scratch and test artifacts were shipping
+  inside local builds. CI releases were never affected
+- **Prefetch is scoped to the visible column**; invalidated slots never repaint stale thumbnails;
+  abandoned sweeps stop reading
+- **Cropping in the standalone build**, which had never worked in any release: the shared crop flow
+  calls `Buffer.isBuffer`, and the browser `Buffer` shim did not provide it, so every image failed
+  and the page reported "Failed to crop any images". A gate now checks that every call a bundled
+  module makes on a shim actually exists on it
+- **Deletion detection on Windows**: `fs.watch` was handed a URI path, which `path.win32.resolve`
+  turns into `\C:\...` — a drive letter as a path component — so watchers never armed. Separately,
+  three existence probes used `fs.access`, which on Windows reports the link rather than its target,
+  so a file that became a dangling symlink was never reported gone
+
+### Internal
+- The mutation harness runs against a sandboxed copy, so a killed run can no longer leave mutated
+  source in the working tree; a subset run announces itself and cannot be mistaken for the gate
+- The one-line comment rule is now gated over `scripts/` as well as `src/`; `test/` stays exempt on
+  its merits
+- A pre-commit guard blocks this machine's home and checkout root as literal prefixes
+
 ## [0.3.0] - 2026-08-07
 
 ### Added

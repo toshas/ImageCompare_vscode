@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks a commit that would carry a personal/host identifier. Install: npm run hooks:install
+exec node "$(git rev-parse --show-toplevel)/scripts/check-no-personal-refs.mjs"
