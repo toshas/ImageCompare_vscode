@@ -41,8 +41,18 @@ jobs:
           git clone --depth 1 git@github.com:toshas/ImageCompare_standalone.git artifact-repo
           cp dist/standalone/image_compare.html artifact-repo/image_compare.html
           cp standalone/README.artifact.md artifact-repo/README.md
+          # Copied, not maintained there: a second copy that can drift is worse than no copy.
+          cp LICENSE artifact-repo/LICENSE
+          cp CHANGELOG.md artifact-repo/CHANGELOG.md
+          # Development instructions in a repo whose README forbids development are actively misleading.
+          rm -f artifact-repo/CLAUDE.md
+          VERSION=$(node -p "require('./package.json').version")
+          sed -i "s|__VERSION__|${VERSION}|g; s|__COMMIT__|${GITHUB_SHA}|g" artifact-repo/README.md
+          if grep -q '__VERSION__\|__COMMIT__' artifact-repo/README.md; then
+            echo "::error::README placeholders were not substituted"; exit 1
+          fi
           cd artifact-repo
-          git add image_compare.html README.md
+          git add -A
           if git diff --cached --quiet; then
             echo "Artifact unchanged - nothing to push."
             exit 0
