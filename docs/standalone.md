@@ -169,10 +169,13 @@ seam drives the drop handler's non-FSA branch directly.
 
 `.github/workflows/standalone.yml` rebuilds the page on every main push, uploads it as the
 `standalone-html` run artifact, and — once the `STANDALONE_DEPLOY_KEY` secret holds a write-access
-deploy key for `toshas/ImageCompare_standalone` — pushes it there together with
-`standalone/README.artifact.md` as that repo's README (commits only when the bytes changed). The
-Pages site serves the same page at `/standalone/`. The artifact repo is generated-only: it is never
-edited by hand, and the README it receives says so.
+deploy key for `toshas/ImageCompare_standalone` — pushes it there (commits only when the bytes
+changed). Four files are written: the page, `standalone/README.artifact.md` as that repo's README
+with `__VERSION__`/`__COMMIT__` substituted, plus `LICENSE` and `CHANGELOG.md` copied verbatim so
+neither can drift from this repo's. `CLAUDE.md` is deleted there: development instructions in a
+repo whose README forbids development are worse than none, and the deploy is the only thing that
+can remove them. The Pages site serves the same page at `/standalone/`. The artifact repo is
+generated-only: it is never edited by hand, and the README it receives says so at the top.
 
 ## Invariants
 
