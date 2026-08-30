@@ -451,13 +451,33 @@ and the field case is why: it fires only when *every* modality of the tuple has 
 265×136 grid is a whole cold tuple away and, since a tuple arrival only ever requests the on-screen
 column and its nearest siblings, may not happen at all. A tile clicked in the 5th column of an
 un-arrived row therefore left the aim on the column it already had — column 0, the strip's first,
-which is what a host with no report at all gets. So a **carousel tile click reports its own column**,
-in a `setCurrentModality` message carrying the same strip and nothing else, sent the moment the tile
-is clicked and independent of any load; both hosts feed it to the same `noteStrip`. The gap is
-narrowed, not closed: a column switched from the keyboard or a pill still waits for
-`tupleFullyLoaded`, and the keyboard half is deliberate — `[`/`]`, the arrows and the digits repeat,
-and an undwelled re-aim per repeat is the churn `sweep-centre-dwells` exists to prevent, while a
-click is a settled destination by construction. A column inserted or removed mid-sweep leaves
+which is what a host with no report at all gets. So **every route that picks a column reports it**,
+in a `setCurrentModality` message carrying the same strip and nothing else, independent of any load;
+both hosts feed it to the same `noteStrip`.
+
+The click half shipped first and left the keyboard open, and the maintainer found the seam it left:
+after one carousel click the sweep kept filling the clicked column while the arrows, the digits and
+`[` / `]` moved the view somewhere else. (The *row* was never part of that — `ArrowUp`/`ArrowDown`
+post `setCurrentTuple`, which the tuple dwell has always settled; what looks like a stuck row is that
+dwell, by design.) The keyboard is now reported too, and the churn objection that kept it out is
+answered where it arises rather than absorbed downstream: a host does not coalesce reports — each one
+moves the aim and drops what the sweep had queued (`sweep-cancels-on-reaim`), measured as eleven
+re-aims for eleven reports in both products — so the **webview** gates the post instead.
+A click that names a column (a tile, a pill) is a settled destination by construction and reports at
+once; a move that can repeat — the arrows, the digits, and a reorder, from `[` / `]` or from the
+tools buttons that call the same function — waits out a trailing-edge dwell of `LOAD_DEBOUNCE_MS` and
+reports the column the burst ended on, so a held arrow key is one report rather than one per repeat,
+and a pick cancels a dwell still waiting rather than letting it land afterwards and aim back at the
+column the user left. The `Space` peek reports nothing on purpose: it is held rather than navigated
+to and restores the column it came from on release, so reporting it would buy two re-aims for a
+gesture that ends where it started. Gating at
+the source is available here and is not available for the row: `setCurrentTuple` has a second
+consumer that must stay ungated (`cancelImageLoads`), while `setCurrentModality` has exactly one, so
+the coalescing also keeps a held key off the wire. And only the webview can tell a pick from a burst
+at all — the policy sees one message shape, whoever sent it. That gate is `ColumnReportGate`
+(`src/webview/tupleLoadPlan.ts`), pure and unit-pinned rather than DOM-pinned, and it cannot diverge
+between the products for the same reason the strip cannot: both ship the same webview bundle.
+A column inserted or removed mid-sweep leaves
 the reported strip stale until the next report, which can only *mis-order* what is left: the plan is
 fixed at open and every settle re-addresses to the file's live slot
 (`docs/tuple-matching.md: revalidate-slot-before-write`), so no slot is lost by it. The decision — what any of it means for order
@@ -1210,19 +1230,31 @@ mount latency — but the same shape applies, so neither product can quietly div
   modality index aims at whatever column happens to sit at that original position, which on an
   un-rearranged strip is silently correct and on a rearranged one is silently wrong
   (`docs/tuple-matching.md: wire-index-is-original`).
-- **`click-reports-its-column`** — the aim's column is reported when the user *picks* it, not when
-  the tuple it belongs to finishes loading. `tupleFullyLoaded` fires only once every modality of a
+- **`picked-column-reports-itself`** — the aim's column is reported when the user *picks* it, not when
+  the tuple it belongs to finishes loading, and **every** route that picks one reports: a carousel
+  tile, a pill, the arrows, the digits, and a `[`/`]` reorder, which moves no column but re-permutes
+  the strip the aim ranks the neighbours over. `tupleFullyLoaded` fires only once every modality of a
   tuple has arrived, so on a wide cold session it is far away or never comes, and until then the aim
-  keeps whatever column it last had — the strip's first, i.e. column 0, when it never had one. A
-  carousel tile click therefore posts `setCurrentModality` — the strip as displayed, unconditionally,
-  even when the clicked column is already on screen, because no report may have carried it yet. A pill
-  or keyboard switch still does not: a narrowed gap, not a closed one, described above. **Both**
-  hosts forward it to the same `SweepAimPolicy.noteStrip`, which un-permutes it
-  (`docs/tuple-matching.md: wire-index-is-original`). Three sites, each silently leaving the sweep
-  filling a column nobody is looking at: the post (`webview/main.ts`) and the two host handlers
-  (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that drops the message reproduces the
-  bug in that product alone, which is exactly the asymmetry the shared policy was made to prevent
-  (`docs/standalone.md: host-supplies-data-not-policy`). The report claims nothing about loading, so
+  keeps whatever column it last had — the strip's first, i.e. column 0, when it never had one. Each
+  route therefore posts `setCurrentModality` — the strip as displayed, unconditionally, even when the
+  picked column is already on screen, because no report may have carried it yet. The routes differ
+  only in *when*: a click that names a column is a settled destination and reports at once, while a
+  move that can repeat reports on a trailing-edge dwell of `LOAD_DEBOUNCE_MS` — exactly one report per
+  settled keypress, exactly one per held burst, and a pick cancels a burst still waiting rather than
+  letting it land after the click and aim back at the column the user left. The `Space` peek is the
+  one deliberate exclusion, described above. That dwell is the
+  webview's rather than the policy's, and both halves of the reason are load-bearing: the policy
+  cannot tell a pick from a burst (one message shape), and gating at the source is only *available*
+  here because `setCurrentModality` has a single consumer, where `setCurrentTuple` has a second one
+  that must stay ungated (`sweep-centre-dwells`). **Both** hosts forward the report to the same
+  `SweepAimPolicy.noteStrip`, which un-permutes it
+  (`docs/tuple-matching.md: wire-index-is-original`). Four sites, each silently leaving the sweep
+  filling a column nobody is looking at: the gate that decides when a report goes out
+  (`webview/tupleLoadPlan.ts`), the post and the routes that drive it (`webview/main.ts`), and the two
+  host handlers (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that drops the message
+  reproduces the bug in that product alone, which is exactly the asymmetry the shared policy was made
+  to prevent (`docs/standalone.md: host-supplies-data-not-policy`), while a route that reports
+  through neither half of the gate reproduces it in both. The report claims nothing about loading, so
   it must not be `tupleFullyLoaded` with a lie in it: that message also drives prefetch
   (`prefetch-scoped-to-the-visible-column`).
 - **`sweep-cross-then-row-major`** — the order from that aim, and every tie-break in it. The focused

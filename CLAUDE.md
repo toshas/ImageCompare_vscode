@@ -101,7 +101,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
-- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split → `docs/loading-architecture.md`
+- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 - **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
 

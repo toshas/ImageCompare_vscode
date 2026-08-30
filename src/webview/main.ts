@@ -7,7 +7,7 @@ import * as crop from './crop';
 import { nextVisibleModality, isVoteClickable, displayOrderAfterInsert } from './modalityVisibility';
 import { shiftIndexAfterRemoval } from '../watcherLogic';
 import { ThumbUrlCache, BLANK_THUMB } from './thumbUrlCache';
-import { LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
+import { ColumnReportGate, LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -1274,7 +1274,7 @@ function visibleCarouselRows(): number {
   return Math.max(1, Math.ceil(carouselEl.clientHeight / rowH));
 }
 
-/** Reports the strip the moment a click picks a column — `tupleFullyLoaded` waits for a whole tuple, which on a wide cold session is far away (docs/loading-architecture.md: click-reports-its-column). */
+/** Reports the strip the moment the user picks a column — `tupleFullyLoaded` waits for a whole tuple, which on a wide cold session is far away (docs/loading-architecture.md: picked-column-reports-itself). */
 function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
   vscode.postMessage({
     type: 'setCurrentModality',
@@ -1284,6 +1284,12 @@ function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
     visibleRows: visibleCarouselRows()
   });
 }
+
+/** Every column report goes through this one gate, clicks and keys alike (docs/loading-architecture.md: picked-column-reports-itself). */
+const columnReport = new ColumnReportGate(
+  { setTimer: (run, ms) => window.setTimeout(run, ms), clearTimer: h => window.clearTimeout(h as number) },
+  d => postCurrentModality(asDisplay(d))
+);
 
 /** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column), the sweep aims its cross at it (docs/loading-architecture.md: sweep-cross-then-row-major). */
 function postTupleFullyLoaded(tupleIndex: TupleIndex) {
@@ -1637,7 +1643,7 @@ function handleCarouselClick(e: MouseEvent) {
   }
   const img = target.closest('.carousel-thumb') as HTMLElement | null;
   if (img) {
-    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: click-reports-its-column).
+    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: picked-column-reports-itself).
     const clicked = parseInt(img.dataset.displayIndex ?? '', 10);
     if (Number.isInteger(clicked)) goToTupleAndModality(tupleIdx, asDisplay(clicked));
     return;
@@ -1655,8 +1661,8 @@ function scrollCarouselToCurrentTuple() {
 }
 
 function goToTupleAndModality(tupleIdx: TupleIndex, modalityIdx: DisplayModalityIndex) {
-  // Unconditional: the clicked column is the sweep's aim even when it is the one already on screen, which no report may have carried yet (docs/loading-architecture.md: click-reports-its-column).
-  postCurrentModality(modalityIdx);
+  // Unconditional: the clicked column is the sweep's aim even when it is the one already on screen, which no report may have carried yet (docs/loading-architecture.md: picked-column-reports-itself).
+  columnReport.picked(modalityIdx);
   if (tupleIdx === currentTupleIndex) {
     if (modalityIdx !== currentModalityIndex) {
       previousModalityIndex = currentModalityIndex;
@@ -1728,6 +1734,7 @@ function buildModalitySelector() {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(displayIdx);
         render();
+        columnReport.picked(currentModalityIndex);
       }
     });
 
@@ -1852,6 +1859,8 @@ function moveCurrentModality(direction: number) {
     buildCarousel();
   }
   render();
+  // A reorder moves no column but re-permutes the strip the aim ranks over (docs/loading-architecture.md: picked-column-reports-itself).
+  columnReport.keyed(currentModalityIndex);
 }
 
 function render() {
@@ -2040,6 +2049,7 @@ function handleKeyDown(e: KeyboardEvent) {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(target);
         render();
+        columnReport.keyed(currentModalityIndex);
       }
       break;
     }
@@ -2076,6 +2086,7 @@ function handleKeyDown(e: KeyboardEvent) {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(idx);
         render();
+        columnReport.keyed(currentModalityIndex);
       }
       break;
 
