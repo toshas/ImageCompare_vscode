@@ -265,7 +265,9 @@ says so itself and exits 2.
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
 checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but
 runs only in the pre-commit hook — it needs the gitignored `.words-to-check.txt`.) The `gates` job in `test.yml` runs all three
-`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
+`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every PR and on
+pushes to `main` or `test/**` — its push trigger is branch-limited, so a push to any other branch
+runs nothing until a PR is open; the publish-path `test` job still has **no `tsc --noEmit`
 step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
 `npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
 transpiles with esbuild and type-checks nothing; `tsconfig.test.json` in the gates job is what
@@ -337,7 +339,15 @@ packaged, and `build` needs both: `test` (ubuntu — compile, the four checker s
 the mutation check) and `test-full`, which is `uses: ./.github/workflows/test.yml` and therefore
 runs the whole three-OS matrix. Naming only the ubuntu job here once led to the false conclusion
 that a tag could publish a build that fails on Windows; it cannot. Then it builds one VSIX per
-platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
+platform target. **A pull request builds every target and publishes nothing**
+(`docs/image-backends.md: pull-request-builds-never-publish`): the same ten-leg `build` job and the
+`codium-smoke` install check run on `pull_request`, so a packaging defect surfaces on the PR instead
+of at the tag, while the `publish` and `verify-openvsx` jobs are gated off by event — a fork PR
+included. The two gating jobs are the ones a PR *skips*: `test` is a subset of test.yml's `gates`
+job and `test-full` IS test.yml, both of which already run on the PR, so a PR costs eleven jobs here
+(ten legs + smoke) and nothing duplicated. On a tag they still both gate `build`, whose `if:` — it
+needs one only because they are skipped on a PR — refuses a gate that failed or was cancelled, since
+an `if:` replaces the implicit `success()`. Superseded PR runs are cancelled; a tag run never is. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
 
 ### Release Checklist (for Claude)
 
@@ -350,7 +360,10 @@ a tag would *not* publish a broken build — `publish.yml`'s `build` job declare
 full three-OS matrix. So a red Windows suite stops the release before anything is packaged. What a
 premature tag costs is a **public tag pointing at a commit that fails CI**, and a burned version
 number: recovering means deleting a pushed tag or skipping to the next patch. The branch step turns
-that into an ordinary red build on a branch nobody has released from.
+that into an ordinary red build on a branch nobody has released from. Since a pull request now builds
+all ten VSIXes with the same recipe, the packaging half of a release is proven before the tag too —
+which removes a *surprise*, not the rule: the cost above is unchanged, and a branch with no PR open
+has still had none of it checked.
 
 When the user asks to "release" or "prepare a release":
 
@@ -362,11 +375,18 @@ When the user asks to "release" or "prepare a release":
    (`git log`, `git diff` against it).
 5. **Run the full local battery** (Verification, above). `npm run test:integration` cannot run on a
    box with no X server — say so rather than reporting it passed.
-6. **Commit and push the branch.** Do NOT tag yet.
-7. **Wait for CI on the branch to go green** — `test.yml` runs `gates`, `engines-floor` and the
-   three-OS `test` matrix on every push. **This is the step that exists because the local battery
+6. **Commit and push the branch, then open the pull request.** Do NOT tag yet. **The PR is what
+   starts CI**, not the push: `test.yml`'s push trigger is branch-limited (`main` and `test/**`), so
+   pushing a branch named anything else — `release/0.4.1`, `fix/…` — starts *no run at all*, and a
+   checks page with nothing red is indistinguishable from one that is green. Opening the PR runs
+   `test.yml` (`gates`, `engines-floor`, the three-OS `test` matrix) *and* `publish.yml`'s ten-leg
+   build on the tag's own packaging recipe, so both halves of a release — the suites and the VSIXes —
+   are proven before the tag. (Naming the branch `test/…` also triggers on push, but then a PR runs
+   everything twice; open the PR.)
+7. **Wait for CI on the PR to go green.** **This is the step that exists because the local battery
    is Linux-only**: a Windows-only defect is invisible until this runs, and one shipped undetected
-   for several releases precisely this way — see the Findings list in docs/testing.md.
+   for several releases precisely this way — see the Findings list in docs/testing.md. Silence is not
+   success: no checks on the PR means no run happened, which is a red flag, not a green one.
 8. **Fix anything red and push again.** Repeat until green. A release is not "nearly ready" while
    any platform is red.
 9. **Merge to `main`** once green.

@@ -1619,6 +1619,48 @@
               "match": "still fails a VSIX that lost the WASM tier, or its own native binary, or names no known target"
             }
           ]
+        },
+        {
+          "id": "publish-pr-builds-never-publishes",
+          "name": "A pull request builds every target and publishes nothing (gates, cancellation, one recipe)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "defines exactly the jobs these cases reason about"
+            },
+            {
+              "suite": "unit",
+              "match": "builds every platform target and universal on a pull_request"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the ten-leg recipe in exactly one workflow"
+            },
+            {
+              "suite": "unit",
+              "match": "cannot reach either marketplace, or the post-publish check"
+            },
+            {
+              "suite": "unit",
+              "match": "skips its own test and test-full jobs on a pull_request"
+            },
+            {
+              "suite": "unit",
+              "match": "still runs the whole chain on a tag when both gates pass"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses to build on a tag when either gate failed or was cancelled"
+            },
+            {
+              "suite": "unit",
+              "match": "cancels a superseded pull-request run and never a tag run"
+            },
+            {
+              "suite": "unit",
+              "match": "models the Actions semantics these cases lean on"
+            }
+          ]
         }
       ]
     },

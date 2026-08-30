@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { load as loadYaml } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 // The bug this pins: VS Code matches a platform-specific extension against the *server's* platform,
@@ -360,5 +361,453 @@ describe('publish workflow packed-VSIX scan', () => {
     const noColour = scan('linux-x64', [...WASM_ENTRIES, ...imgEntries(PRUNED['linux-x64'].filter((x) => x !== 'colour')), ...nativeEntry('linux-x64')]);
     expect(noColour.status).toBe(1);
     expect(noColour.output).toContain('missing: colour');
+  });
+});
+
+// ── A pull request builds every VSIX and publishes nothing ──────────────────────────────────────
+// Until this landed, the ten-leg build ran for the first time AT TAG TIME — the one irreversible
+// step, since neither marketplace unpublishes cleanly. So the packaging recipe (per-target Sharp
+// install, libvips prune, packed-VSIX scan) was first exercised at the moment its failure was most
+// expensive; the 0.4.0 linux-arm64 VSIX shipped four libvips tiers and nothing in CI looked. A PR
+// now runs the same build job, and must be unable to reach a marketplace even from a fork.
+//
+// These cases read the workflow as a document (js-yaml, an explicit devDependency — the workflow is
+// YAML, and a regex over it passes on any file that happens to contain the string it looks for),
+// then evaluate the real `if:` expressions under a model of Actions' documented semantics: a job's
+// `if:` replaces the implicit success(); success() means every `needs` job succeeded; failure() means
+// one failed; cancelled() is the run being cancelled. Nothing here pins the wording of a condition —
+// an equivalent rewrite passes, a weakening does not.
+
+interface WorkflowStep {
+  name?: string;
+  if?: string;
+  run?: string;
+  uses?: string;
+}
+
+interface WorkflowJob {
+  if?: string;
+  needs?: string | string[];
+  uses?: string;
+  steps?: WorkflowStep[];
+  strategy?: { matrix?: { include?: Record<string, string>[] } };
+}
+
+interface WorkflowDoc {
+  on: Record<string, unknown>;
+  concurrency?: { group?: string; 'cancel-in-progress'?: boolean | string };
+  jobs: Record<string, WorkflowJob>;
+}
+
+const doc = loadYaml(workflow) as WorkflowDoc;
+
+/** The jobs this file is expected to define — a rename or a move must fail loudly, not quietly pass. */
+const JOB_IDS = ['test', 'test-full', 'build', 'codium-smoke', 'publish', 'verify-openvsx'];
+
+type Value = string | number | boolean | null | undefined;
+
+interface EvalContext {
+  github: { event_name: string; ref: string };
+  needs: Record<string, { result: string }>;
+  inputs: Record<string, Value>;
+  status: { success: boolean; failure: boolean; cancelled: boolean };
+}
+
+type Token = { kind: 'string' | 'name' | 'number' | 'punct'; text: string };
+
+const PUNCT = ['&&', '||', '==', '!=', '!', '(', ')', '[', ']', '.', ','];
+
+function tokenize(src: string): Token[] {
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === "'") {
+      let text = '';
+      i++;
+      for (;;) {
+        if (i >= src.length) throw new Error(`unterminated string in: ${src}`);
+        if (src[i] === "'" && src[i + 1] === "'") { text += "'"; i += 2; continue; }
+        if (src[i] === "'") { i++; break; }
+        text += src[i++];
+      }
+      tokens.push({ kind: 'string', text });
+      continue;
+    }
+    if (/[0-9]/.test(c)) {
+      let text = '';
+      while (i < src.length && /[0-9.]/.test(src[i])) text += src[i++];
+      tokens.push({ kind: 'number', text });
+      continue;
+    }
+    if (/[A-Za-z_-]/.test(c)) {
+      let text = '';
+      while (i < src.length && /[A-Za-z0-9_-]/.test(src[i])) text += src[i++];
+      tokens.push({ kind: 'name', text });
+      continue;
+    }
+    const punct = PUNCT.find((p) => src.startsWith(p, i));
+    if (!punct) throw new Error(`unexpected character '${c}' in: ${src}`);
+    tokens.push({ kind: 'punct', text: punct });
+    i += punct.length;
+  }
+  return tokens;
+}
+
+function truthy(v: Value): boolean {
+  return !(v === false || v === undefined || v === null || v === '' || v === 0);
+}
+
+/** Evaluates one GitHub Actions expression (the operator subset this workflow uses). */
+function evaluateExpression(src: string, ctx: EvalContext): Value {
+  const tokens = tokenize(src);
+  let pos = 0;
+  const peek = (): Token | undefined => tokens[pos];
+  const eat = (text: string): boolean => {
+    if (tokens[pos] && tokens[pos].kind === 'punct' && tokens[pos].text === text) { pos++; return true; }
+    return false;
+  };
+  const expect_ = (text: string): void => {
+    if (!eat(text)) throw new Error(`expected '${text}' at token ${pos} in: ${src}`);
+  };
+
+  function primary(): Value {
+    const token = peek();
+    if (!token) throw new Error(`unexpected end of expression: ${src}`);
+    if (eat('(')) {
+      const value = or();
+      expect_(')');
+      return value;
+    }
+    if (eat('!')) return !truthy(primary());
+    pos++;
+    if (token.kind === 'string') return token.text;
+    if (token.kind === 'number') return Number(token.text);
+    if (token.kind !== 'name') throw new Error(`unexpected token '${token.text}' in: ${src}`);
+    if (token.text === 'true') return true;
+    if (token.text === 'false') return false;
+    if (token.text === 'null') return null;
+    if (eat('(')) {
+      if (!eat(')')) throw new Error(`only zero-argument functions are modelled: ${src}`);
+      if (token.text === 'always') return true;
+      if (token.text === 'success') return ctx.status.success;
+      if (token.text === 'failure') return ctx.status.failure;
+      if (token.text === 'cancelled') return ctx.status.cancelled;
+      throw new Error(`unmodelled function ${token.text}() in: ${src}`);
+    }
+    let value: unknown;
+    if (token.text === 'github') value = ctx.github;
+    else if (token.text === 'needs') value = ctx.needs;
+    else if (token.text === 'inputs') value = ctx.inputs;
+    else throw new Error(`unmodelled context '${token.text}' in: ${src}`);
+    for (;;) {
+      let key: string;
+      if (eat('.')) {
+        const name = peek();
+        if (!name || name.kind !== 'name') throw new Error(`expected a property name in: ${src}`);
+        pos++;
+        key = name.text;
+      } else if (eat('[')) {
+        const literal = peek();
+        if (!literal || literal.kind !== 'string') throw new Error(`only string indexes are modelled: ${src}`);
+        pos++;
+        expect_(']');
+        key = literal.text;
+      } else {
+        break;
+      }
+      const container = value as Record<string, unknown> | undefined;
+      if (container === undefined || !(key in container)) {
+        throw new Error(`'${key}' is not in the modelled context (a job it names may have left needs): ${src}`);
+      }
+      value = container[key];
+    }
+    return value as Value;
+  }
+
+  function equality(): Value {
+    let left = primary();
+    for (;;) {
+      if (eat('==')) left = left === primary();
+      else if (eat('!=')) left = left !== primary();
+      else return left;
+    }
+  }
+
+  function and(): Value {
+    let left = equality();
+    while (eat('&&')) {
+      // Short-circuit exactly as Actions does: nothing to the right of a false `&&` is evaluated.
+      if (!truthy(left)) { skipOperand(); continue; }
+      left = equality();
+    }
+    return left;
+  }
+
+  function or(): Value {
+    let left = and();
+    while (eat('||')) {
+      if (truthy(left)) { skipOperand(); continue; }
+      left = and();
+    }
+    return left;
+  }
+
+  /** Consumes the operand that short-circuiting skipped, without evaluating it. */
+  function skipOperand(): void {
+    let depth = 0;
+    while (pos < tokens.length) {
+      const token = tokens[pos];
+      if (token.kind === 'punct' && (token.text === '(' || token.text === '[')) depth++;
+      if (token.kind === 'punct' && (token.text === ')' || token.text === ']')) {
+        if (depth === 0) return;
+        depth--;
+      }
+      if (depth === 0 && token.kind === 'punct' && (token.text === '&&' || token.text === '||')) return;
+      pos++;
+    }
+  }
+
+  const result = or();
+  if (pos !== tokens.length) throw new Error(`trailing tokens at ${pos} in: ${src}`);
+  return result;
+}
+
+/** Strips the `${{ }}` wrapper Actions allows around a whole condition. */
+function unwrap(expr: string): string {
+  const trimmed = expr.trim();
+  const opens = trimmed.split('${{').length - 1;
+  if (opens > 1) throw new Error(`multiple expression blocks are not modelled: ${expr}`);
+  const single = /^\$\{\{([\s\S]*)\}\}$/.exec(trimmed);
+  return single ? single[1] : trimmed;
+}
+
+/** Whether a condition names a status function — what makes Actions drop the implicit success(). */
+function namesStatusFunction(expr: string | undefined): boolean {
+  return expr !== undefined && /\b(success|failure|cancelled|always)\s*\(/.test(unwrap(expr));
+}
+
+/** Actions' rule: an explicit `if:` replaces the implicit success() only when it names a status function. */
+function conditionHolds(expr: string | undefined, ctx: EvalContext): boolean {
+  if (expr === undefined) return ctx.status.success;
+  const value = truthy(evaluateExpression(unwrap(expr), ctx));
+  return namesStatusFunction(expr) ? value : ctx.status.success && value;
+}
+
+function needsOf(id: string): string[] {
+  const needs = doc.jobs[id].needs;
+  if (needs === undefined) return [];
+  return Array.isArray(needs) ? needs : [needs];
+}
+
+type JobResult = 'success' | 'failure' | 'cancelled' | 'skipped' | 'not-run';
+
+function refFor(event: string): string {
+  return event === 'push' ? 'refs/tags/v9.9.9' : 'refs/pull/7/merge';
+}
+
+/** What each job does on a run of `event`, with any job's own outcome forced through `results`. */
+function jobOutcomes(
+  event: string,
+  opts: { results?: Record<string, JobResult>; cancelled?: boolean; ref?: string } = {}
+): Record<string, JobResult> {
+  const outcome: Record<string, JobResult> = {};
+  for (const id of Object.keys(doc.jobs)) outcome[id] = 'not-run';
+  if (!Object.prototype.hasOwnProperty.call(doc.on, event)) return outcome;
+
+  const pending = new Set(Object.keys(doc.jobs));
+  while (pending.size) {
+    const ready = [...pending].filter((id) => !needsOf(id).some((n) => pending.has(n)));
+    if (!ready.length) throw new Error('the job graph has a cycle');
+    for (const id of ready) {
+      const needs = needsOf(id);
+      const needsCtx: Record<string, { result: string }> = {};
+      for (const n of needs) {
+        if (!(n in outcome)) throw new Error(`job ${id} needs an undefined job ${n}`);
+        needsCtx[n] = { result: outcome[n] };
+      }
+      const ctx: EvalContext = {
+        github: { event_name: event, ref: opts.ref ?? refFor(event) },
+        needs: needsCtx,
+        inputs: {},
+        status: {
+          success: needs.every((n) => outcome[n] === 'success'),
+          failure: needs.some((n) => outcome[n] === 'failure'),
+          cancelled: opts.cancelled === true
+        }
+      };
+      // A cancelled run cancels the jobs that never consulted cancelled() themselves — the whole
+      // reason Actions' docs push !cancelled() over always() for a condition that drops success().
+      const cancelledOut = opts.cancelled === true && !namesStatusFunction(doc.jobs[id].if);
+      const ran = opts.results?.[id] ?? (cancelledOut ? 'cancelled' : 'success');
+      outcome[id] = conditionHolds(doc.jobs[id].if, ctx) ? ran : 'skipped';
+      pending.delete(id);
+    }
+  }
+  return outcome;
+}
+
+/** Renders a `${{ }}`-bearing scalar (the concurrency group) for one run. */
+function renderTemplate(template: string, ctx: EvalContext): string {
+  return template.replace(/\$\{\{([\s\S]*?)\}\}/g, (_m, body: string) => String(evaluateExpression(body, ctx)));
+}
+
+function runContext(event: string, ref?: string): EvalContext {
+  return {
+    github: { event_name: event, ref: ref ?? refFor(event) },
+    needs: {},
+    inputs: {},
+    status: { success: true, failure: false, cancelled: false }
+  };
+}
+
+describe('publish workflow on a pull request', () => {
+  it('defines exactly the jobs these cases reason about', () => {
+    expect(Object.keys(doc.jobs).sort()).toEqual([...JOB_IDS].sort());
+    // Every `needs` names a job that exists, or the outcome model below is reasoning about nothing.
+    for (const id of JOB_IDS) for (const n of needsOf(id)) expect(Object.keys(doc.jobs)).toContain(n);
+  });
+
+  it('builds every platform target and universal on a pull_request, with the same steps a tag runs', () => {
+    const pr = jobOutcomes('pull_request');
+
+    expect(pr.build).toBe('success');
+    // The one check that the artifact actually installs runs on the PR too.
+    expect(pr['codium-smoke']).toBe('success');
+
+    const include = doc.jobs.build.strategy?.matrix?.include ?? [];
+    const legs = include.map((e) => e.target);
+    expect([...legs].sort()).toEqual([...VSCODE_PLATFORM_TARGETS, 'universal'].sort());
+    // The document and the line parser must be reading one and the same matrix.
+    expect([...legs].sort()).toEqual(buildMatrix().map((e) => e.target).sort());
+
+    // "Same recipe" is only true if no step opts out by event: a package or scan step skipped on a PR
+    // would leave the PR proving nothing while the job still reports green.
+    for (const id of ['build', 'codium-smoke']) {
+      for (const step of doc.jobs[id].steps ?? []) {
+        expect(`${id} / ${step.name ?? step.uses ?? 'step'}: ${step.if ?? '(no if)'}`).not.toContain('event_name');
+      }
+    }
+  });
+
+  it('keeps the ten-leg recipe in exactly one workflow, never copied into another', () => {
+    const dir = path.join(repoRoot, '.github/workflows');
+    const others = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== 'publish.yml');
+
+    expect(others.length).toBeGreaterThan(0);
+    expect(workflow).toContain('vsce package');
+    for (const file of others) {
+      const text = fs.readFileSync(path.join(dir, file), 'utf8');
+      expect(`${file} :: ${text}`).not.toMatch(/vsce package|sharp-wasm32|matrix\.npm_cpu/);
+    }
+  });
+
+  it('cannot reach either marketplace, or the post-publish check, on a pull_request', () => {
+    const pr = jobOutcomes('pull_request');
+
+    expect(pr.publish).toBe('skipped');
+    expect(pr['verify-openvsx']).toBe('skipped');
+
+    // Not vacuous: those commands exist, in jobs a PR skips, and a tag run does reach them.
+    const publishing = [/\bovsx publish\b/, /\bvsce publish\b/];
+    const jobText = (id: string): string => JSON.stringify(doc.jobs[id]);
+    for (const pattern of publishing) {
+      expect(JOB_IDS.filter((id) => pattern.test(jobText(id))).length).toBeGreaterThan(0);
+    }
+    for (const id of JOB_IDS) {
+      if (pr[id] !== 'success') continue;
+      for (const pattern of publishing) expect(`${id}: ${jobText(id)}`).not.toMatch(pattern);
+    }
+
+    // A fork PR is still `pull_request`; `pull_request_target` is the trigger that would hand it secrets.
+    expect(Object.keys(doc.on)).not.toContain('pull_request_target');
+    expect(Object.keys(doc.on)).toContain('pull_request');
+  });
+
+  it('skips its own test and test-full jobs on a pull_request, and runs them on a tag', () => {
+    const pr = jobOutcomes('pull_request');
+
+    // test.yml already runs the gate battery and the 3-OS matrix on the PR; test-full IS that workflow.
+    expect(pr.test).toBe('skipped');
+    expect(pr['test-full']).toBe('skipped');
+    expect(doc.jobs['test-full'].uses).toBe('./.github/workflows/test.yml');
+
+    const tag = jobOutcomes('push');
+    expect(tag.test).toBe('success');
+    expect(tag['test-full']).toBe('success');
+  });
+});
+
+describe('publish workflow release gating', () => {
+  it('still runs the whole chain on a tag when both gates pass', () => {
+    // The push trigger is tags-only, so `push` here is a release run.
+    expect((doc.on.push as { tags?: string[] }).tags).toEqual(['v*']);
+
+    const tag = jobOutcomes('push');
+
+    for (const id of JOB_IDS) expect(`${id}: ${tag[id]}`).toBe(`${id}: success`);
+  });
+
+  it('refuses to build on a tag when either gate failed or was cancelled', () => {
+    // An `if:` on build (needed at all only because both gates are skipped on a PR) replaces the
+    // implicit success() — the trap that would silently let a red Windows matrix publish.
+    expect(new Set(needsOf('build'))).toEqual(new Set(['test', 'test-full']));
+
+    for (const gate of ['test', 'test-full']) {
+      for (const bad of ['failure', 'cancelled'] as JobResult[]) {
+        const run = jobOutcomes('push', { results: { [gate]: bad } });
+        expect(`${gate}=${bad}: build ${run.build}`).toBe(`${gate}=${bad}: build skipped`);
+        expect(`${gate}=${bad}: publish ${run.publish}`).toBe(`${gate}=${bad}: publish skipped`);
+      }
+    }
+
+    // And a run cancelled after both gates went green does not sneak a build through the same door:
+    // a condition that drops the implicit success() without consulting cancelled() would build here.
+    const cancelledRun = jobOutcomes('push', { cancelled: true, results: { test: 'success', 'test-full': 'success' } });
+    expect(`build ${cancelledRun.build}`).not.toBe('build success');
+    expect(`publish ${cancelledRun.publish}`).not.toBe('publish success');
+  });
+
+  it('cancels a superseded pull-request run and never a tag run', () => {
+    const flag = doc.concurrency?.['cancel-in-progress'];
+    // No concurrency block at all is the other way this fails: three pushes leave thirty legs queued.
+    expect(`cancel-in-progress: ${String(flag)}`).not.toContain('undefined');
+    const cancels = (event: string): boolean =>
+      typeof flag === 'boolean' ? flag : truthy(evaluateExpression(unwrap(String(flag)), runContext(event)));
+
+    expect(cancels('pull_request')).toBe(true);
+    // A publish cut mid-flight leaves the marketplaces half-updated; a tag run must ride it out.
+    expect(cancels('push')).toBe(false);
+    expect(cancels('workflow_dispatch')).toBe(false);
+
+    // The group must separate refs, or one PR's push cancels another PR's build.
+    const group = doc.concurrency?.group;
+    expect(typeof group).toBe('string');
+    const render = (event: string, ref: string): string => renderTemplate(String(group), runContext(event, ref));
+    expect(render('pull_request', 'refs/pull/7/merge')).toBe(render('pull_request', 'refs/pull/7/merge'));
+    expect(render('pull_request', 'refs/pull/7/merge')).not.toBe(render('pull_request', 'refs/pull/8/merge'));
+    expect(render('pull_request', 'refs/pull/7/merge')).not.toBe(render('push', 'refs/tags/v9.9.9'));
+  });
+
+  it('models the Actions semantics these cases lean on', () => {
+    const ctx = (over: Partial<EvalContext['status']>): EvalContext => ({
+      ...runContext('push'),
+      needs: { a: { result: 'skipped' } },
+      status: { success: false, failure: false, cancelled: false, ...over }
+    });
+
+    // No status function named: the implicit success() still applies, so a skipped dependency skips.
+    expect(conditionHolds("${{ github.event_name == 'push' }}", ctx({}))).toBe(false);
+    expect(conditionHolds("${{ github.event_name == 'push' }}", ctx({ success: true }))).toBe(true);
+    // Naming one drops the implicit success(), which is what lets a job run past a skipped dependency.
+    expect(conditionHolds('${{ !cancelled() }}', ctx({}))).toBe(true);
+    expect(conditionHolds('${{ !cancelled() }}', ctx({ cancelled: true }))).toBe(false);
+    expect(conditionHolds(undefined, ctx({}))).toBe(false);
+    expect(conditionHolds(undefined, ctx({ success: true }))).toBe(true);
+    expect(namesStatusFunction('${{ always() }}')).toBe(true);
+    expect(namesStatusFunction("${{ github.event_name != 'pull_request' }}")).toBe(false);
+    // Short-circuit: a taken `||` must not evaluate a right side that would throw.
+    expect(truthy(evaluateExpression("github.event_name == 'push' || needs.missing.result == 'success'", ctx({})))).toBe(true);
   });
 });

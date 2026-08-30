@@ -398,6 +398,21 @@ expectation table.
   so: VS Code refuses the install with *"not compatible with the current version of Visual Studio
   Code"*, a message about `engines.vscode` that sends the reader to the one thing that was never
   wrong. Dropping a target is therefore invisible here and reported as an engine mismatch there.
+- **`pull-request-builds-never-publish`** — a pull request builds all ten VSIXes with the tag's own
+  recipe and can publish nothing; both halves are load-bearing. *Builds*: the per-target Sharp
+  install, the libvips prune and the packed-VSIX scan are only ever exercised by a real build, and
+  before a PR ran one they first ran at tag time — the irreversible step, since neither marketplace
+  unpublishes cleanly, and that is how 0.4.0's four-tier `linux-arm64` VSIX reached users. So the ten
+  legs remain ONE definition in `publish.yml`, run by both events, with no step opting out by event: a
+  PR build that packaged nothing would be worse than no PR build, because it reports green.
+  *Publishes nothing*: the `publish` job is gated on the event itself, not merely its steps, so no
+  `pull_request` run — a fork's included — reaches `ovsx publish` or `vsce publish`, and
+  `verify-openvsx` is skipped behind it. Two traps ride along. Giving `build` an `if:` so it can run
+  while both gate jobs are *skipped* removes the implicit `success()`, so the condition must itself
+  refuse a gate that **failed** or was **cancelled** — otherwise a tag can publish a build that fails
+  on Windows, which is precisely what `needs: [test, test-full]` exists to prevent. And cancelling
+  superseded runs must exempt tags: a publish cut mid-flight leaves the two marketplaces
+  half-updated, so `cancel-in-progress` is true for `pull_request` only.
 - **`universal-has-no-native`** — the universal VSIX carries the WASM tier and no native
   `@img/sharp-*`. The WASM half is the load-bearing one: it is the only Sharp tier that build has, so
   losing it drops every host with no platform build straight to Jimp — seconds per image, for exactly

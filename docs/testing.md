@@ -32,8 +32,13 @@ npx vitest run test/unit/workPool.test.ts --config test/vitest.config.ts   # one
 
 Layer 1 is the publish gate: `.github/workflows/publish.yml` runs `npm test` and
 `scripts/mutation-check.mjs` in its `test` job, which gates the whole build matrix — a red test
-blocks publishing to both marketplaces. All three layers additionally run in their own workflow
-(`.github/workflows/test.yml`) on **ubuntu / windows / macos** for every push and PR. That proves
+blocks publishing to both marketplaces. On a `pull_request` that job (and `test-full`) is skipped,
+because test.yml runs both on the PR already; the ten-leg build matrix runs anyway, and everything
+that publishes is gated off by event
+(`docs/image-backends.md: pull-request-builds-never-publish`). All three layers additionally run in
+their own workflow (`.github/workflows/test.yml`) on **ubuntu / windows / macos** for every PR, and
+for pushes to `main` or `test/**` — its push trigger is branch-limited, so pushing any other branch
+starts no run at all, and an empty checks page must not be read as a green one. That proves
 the per-OS risks on a real OS — Sharp's native binary, the file watcher, Windows path/CRLF
 handling — not just mocked. There are no pixel snapshots and no committed baselines, so every job
 is deterministic and nothing has to be run or refreshed by hand.
@@ -303,8 +308,8 @@ Every change lands the same way, so it can't silently regress:
 4. **Document** — one line in *Findings* below; update `CLAUDE.md` or the relevant `docs/` file if
    architecture changed; map the feature in `test/dashboard/features.json` (CLAUDE.md → "Growing
    the dashboard").
-5. **CI guards it** — all three layers run on ubuntu/windows/macos for every push and PR. No local
-   step and no per-OS baselines: every assertion is deterministic.
+5. **CI guards it** — all three layers run on ubuntu/windows/macos for every PR (and every `main`
+   push). No local step and no per-OS baselines: every assertion is deterministic.
 
 This is automated by the **`fix-issue` agent skill** (`skills/fix-issue/`, symlinked into
 `.claude/skills/`): give it a bug description in prose and it produces the issue, the failing test,
@@ -375,6 +380,17 @@ the fix, the docs, and the CI check.
   suite. The same round covered the
   two fallback tiers underneath, which had no tests at all while a whole platform target was about
   to rest on them. (`docs/image-backends.md: all-platform-targets-built`, `universal-has-no-native`)
+
+- **The ten-leg build first ran at tag time** *(fixed)* — `publish.yml` triggered only on `v*` tags,
+  so the per-target Sharp install, the libvips prune and the packed-VSIX scan were first exercised at
+  the one irreversible step; both findings above are what that costs. `pull_request` now runs the same
+  build job and the `codium-smoke` install check, and nothing on that path can publish. The suite's
+  answer is in `test/unit/publishTargets.test.ts`, which reads the workflow as a document (js-yaml, an
+  explicit devDependency) and evaluates the real `if:` expressions under a model of Actions' own
+  semantics — implicit `success()` included — rather than asserting their wording, so an equivalent
+  rewrite passes and a weakening does not. Twelve mutations: all twelve killed with those cases
+  present, eleven of them surviving once the cases are removed — the twelfth mutates the semantic
+  model itself, which goes with them. (`docs/image-backends.md: pull-request-builds-never-publish`)
 
 - **The artifact scan passed the very VSIX that shipped the defect** *(fixed, same round)* — the
   scan added above was a per-target *deny*-list naming strays for four of the ten legs. The other
@@ -1006,8 +1022,8 @@ Playwright harness, not for reading.
 Failures here are invisible to CI, so they are worth walking before a release. Two former entries
 are automated now and dropped from the walk: three-mode scanning/commands run in the headless
 integration layer (`npm run test:integration`), and placeholder rendering plus the webview
-interactions run in the Playwright layer (`npm run test:webview`) — both on every push via
-`.github/workflows/test.yml`. What remains manual:
+interactions run in the Playwright layer (`npm run test:webview`) — both on every PR and every
+`main` push via `.github/workflows/test.yml`. What remains manual:
 
 2. Rename detection — a quick delete+create must move the image, not drop the row.
 4. A remote filesystem (SSH, WSL) or a FUSE/network mount, where the watchers do not fire and the

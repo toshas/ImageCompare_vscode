@@ -2476,6 +2476,104 @@ const mutations = [
     find: "\n          '\n\n      - name: Upload artifact",
     replace: "\n          ' || true\n\n      - name: Upload artifact",
     killedBy: 'shell-execution test (the scan still exits 1; only running the whole step under bash sees the job go green regardless)'
+  },
+
+  // ── A pull request builds every VSIX and publishes nothing: the ten-leg recipe used to run first at tag time ──
+  {
+    name: 'publish on a PR: the pull_request trigger dropped, so nothing is packaged until the tag',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '\n  pull_request:\n',
+    replace: '\n',
+    killedBy: 'PR-builds test (with no pull_request trigger not one of the ten legs runs before the irreversible step)'
+  },
+  {
+    name: 'publish on a PR: the publish job loses its event gate, so a pull request could reach a marketplace',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    if: ${{ github.event_name != 'pull_request' }}\n    runs-on: ubuntu-latest\n\n    steps:",
+    replace: '    runs-on: ubuntu-latest\n\n    steps:',
+    killedBy: 'PR-publishes-nothing test (the step-level conditions let a push-triggered PR run straight through)'
+  },
+  {
+    name: 'publish on a PR: the build job stops depending on the full three-OS matrix',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '    needs: [test, test-full]',
+    replace: '    needs: [test]',
+    killedBy: 'tag-gating test (a tag could then publish a build that fails on Windows)'
+  },
+  {
+    name: 'publish on a PR: the build gate stops requiring both suites to have succeeded',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "(needs.test.result == 'success' && needs['test-full'].result == 'success')",
+    replace: 'true',
+    killedBy: 'tag-gating test (an if: replaces the implicit success(), so a failed gate no longer stops the build)'
+  },
+  {
+    name: 'publish on a PR: the build condition uses always(), so a cancelled run still builds',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    if: ${{ !cancelled() && (github.event_name == 'pull_request'",
+    replace: "    if: ${{ always() && (github.event_name == 'pull_request'",
+    killedBy: 'tag-gating test (always() is the documented trap: it runs past a cancellation !cancelled() refuses)'
+  },
+  {
+    name: 'publish on a PR: the test job runs on a pull request again, duplicating test.yml gates',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    # test.yml's `gates` job already runs this battery on every PR; running it again here buys nothing.\n    if: ${{ github.event_name != 'pull_request' }}\n",
+    replace: '',
+    killedBy: 'no-duplicate-work test (the same battery test.yml already ran on the PR)'
+  },
+  {
+    name: 'publish on a PR: test-full calls test.yml on a pull request, doubling the three-OS matrix',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    # This IS test.yml, which triggers on pull_request itself — calling it again would double the matrix.\n    if: ${{ github.event_name != 'pull_request' }}\n",
+    replace: '',
+    killedBy: 'no-duplicate-work test (test-full IS the workflow already running on the PR)'
+  },
+  {
+    name: 'publish on a PR: superseded-run cancellation applied to tag runs too',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+    replace: '  cancel-in-progress: true',
+    killedBy: 'concurrency test (a publish cut mid-flight leaves the two marketplaces half-updated)'
+  },
+  {
+    name: 'publish on a PR: the package step opts out on a pull request, so the PR build proves nothing',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '      - name: Package extension\n        shell: bash\n',
+    replace: "      - name: Package extension\n        if: ${{ github.event_name != 'pull_request' }}\n        shell: bash\n",
+    killedBy: 'same-steps test (a green PR build that packaged nothing is worse than no PR build)'
+  },
+  {
+    name: 'publish on a PR: a job renamed out from under the model, so the reachability cases cover nothing',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '  codium-smoke:\n    needs: build',
+    replace: '  smoke:\n    needs: build',
+    killedBy: 'job-set test (a model that silently stops naming a job stops proving anything about it)'
+  },
+  {
+    name: 'publish on a PR: the ten-leg recipe copied into test.yml',
+    file: '.github/workflows/test.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '      - run: npm run compile\n      - run: npx tsc --noEmit -p tsconfig.json',
+    replace: '      - run: npm run compile\n      - run: npx vsce package --target linux-x64\n      - run: npx tsc --noEmit -p tsconfig.json',
+    killedBy: 'one-recipe test (a second copy of the packaging steps is exactly what drifts from the first)'
+  },
+  {
+    name: 'publish on a PR: the implicit success() rule dropped from the workflow model',
+    file: 'test/unit/publishTargets.test.ts',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '  return namesStatusFunction(expr) ? value : ctx.status.success && value;',
+    replace: '  return value;',
+    killedBy: 'Actions-semantics test (a model that ignores the implicit success() would call a doomed build green)'
   }
 ];
 

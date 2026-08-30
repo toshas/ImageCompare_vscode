@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  # A PR runs the ten-leg build with this same recipe, so a packaging defect surfaces before the tag (docs/image-backends.md: pull-request-builds-never-publish).
+  pull_request:
   workflow_dispatch:
     inputs:
       publish_ovsx:
@@ -15,8 +17,16 @@ on:
         type: boolean
         default: true
 
+# A superseded PR must not leave ten build legs queued; a tag run is never cancellable, because a
+# publish cut mid-flight leaves the marketplaces half-updated (docs/image-backends.md: pull-request-builds-never-publish).
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
+    # test.yml's `gates` job already runs this battery on every PR; running it again here buys nothing.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -57,10 +67,16 @@ jobs:
 
   # The full 3-OS three-layer matrix must also be green before any release build (workflow_call into test.yml).
   test-full:
+    # This IS test.yml, which triggers on pull_request itself — calling it again would double the matrix.
+    if: ${{ github.event_name != 'pull_request' }}
     uses: ./.github/workflows/test.yml
 
   build:
     needs: [test, test-full]
+    # Both gates are skipped on a PR, so the build needs an `if:` to run at all — and an `if:` replaces
+    # the implicit success(), hence the explicit results, which still refuse a failed or cancelled gate
+    # on a tag (docs/image-backends.md: pull-request-builds-never-publish).
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || (needs.test.result == 'success' && needs['test-full'].result == 'success')) }}
     strategy:
       # One target's packaging defect must not cancel the other nine legs and hide its own siblings' results.
       fail-fast: false
@@ -276,6 +292,9 @@ jobs:
 
   publish:
     needs: [build, codium-smoke]
+    # Gated on the JOB, not merely its steps: no pull_request run, fork PRs included, may reach a
+    # marketplace, and verify-openvsx below is skipped with it (docs/image-backends.md: pull-request-builds-never-publish).
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
 
     steps:
