@@ -85,6 +85,8 @@ interface PanelState {
   deleteCheckTimer?: ReturnType<typeof setInterval>; // Polling timer for delete detection
   watchedDirs: Set<string>;
   baseUri?: vscode.Uri; // Root directory for single-directory mode (mode 1)
+  /** Last root-existence edge posted for `baseUri`, so the loss is reported once and its return once (docs/file-watching.md: root-loss-reported-as-an-edge). */
+  rootMissing?: boolean;
   sessionFileUri?: vscode.Uri; // The .imagecompare file this comparison was opened from
   colorsByUri?: Map<string, string>; // URI string -> pill color override (from session-file colors)
   modalityDirs: Map<string, vscode.Uri>; // Modality name -> directory URI (for mode 2)
@@ -457,7 +459,7 @@ export class ImageCompareProvider {
         break;
 
       case 'setCurrentModality':
-        // A clicked column aims the sweep at once; `tupleFullyLoaded` can be a whole cold tuple away (docs/loading-architecture.md: click-reports-its-column).
+        // A picked column aims the sweep at once; `tupleFullyLoaded` can be a whole cold tuple away (docs/loading-architecture.md: picked-column-reports-itself).
         state.sweepAim.noteStrip(message);
         break;
 
@@ -1666,8 +1668,8 @@ ${lead}
     // Single-flight: three detectors race for one directory (docs/file-watching.md: new-modality-dir-adopted).
     if (state.adoptingDirs.has(dirUri.path)) return;
 
-    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme;
-    if (!scheme) return;
+    // An emptied scan has no file to read a scheme from, and its root is exactly what comes back (docs/file-watching.md: root-return-re-adopts).
+    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme ?? state.baseUri.scheme;
 
     state.adoptingDirs.add(dirUri.path);
     try {
@@ -1826,8 +1828,12 @@ ${lead}
     try {
       entries = await vscode.workspace.fs.readDirectory(state.baseUri);
     } catch {
+      // A failed listing is not yet a verdict: only the probe below decides gone-vs-unreadable (docs/file-watching.md: root-loss-reported-as-an-edge).
+      await this.reportRootExistence(state, false);
       return;
     }
+    // It listed, so it is there: the return edge, posted before anything is re-adopted (docs/file-watching.md: root-loss-reported-as-an-edge).
+    await this.reportRootExistence(state, true);
     // A pipeline that creates and removes scratch dirs would otherwise grow the memo forever.
     pruneBarrenMemos(state.barrenDirs, new Set(entries.map(([name]) => vscode.Uri.joinPath(state.baseUri!, name).path)));
 
@@ -1840,6 +1846,27 @@ ${lead}
       if (state.disposed) return;
       await this.adoptNewModalityDir(state, vscode.Uri.joinPath(state.baseUri, name), name);
     }
+  }
+
+  /**
+   * Post the base directory's gone/back edge, once per transition, re-verifying a failed listing
+   * before calling it gone (docs/file-watching.md: root-loss-reported-as-an-edge).
+   */
+  private async reportRootExistence(state: PanelState, listed: boolean): Promise<void> {
+    if (state.disposed || !state.baseUri) return;
+    let missing = false;
+    if (!listed) {
+      try {
+        // The sweep's own second probe, for the same reason and with the same call (docs/file-watching.md: sweep-reverifies-before-report, existence-probes-follow-the-link).
+        await fs.promises.stat(state.baseUri.fsPath);
+      } catch {
+        missing = true;
+      }
+    }
+    if (state.disposed || missing === (state.rootMissing ?? false)) return;
+    state.rootMissing = missing;
+    this.debugMsg(state, `root ${missing ? 'missing' : 'back'}: ${state.baseUri.fsPath}`);
+    state.panel.webview.postMessage({ type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });
   }
 
   private startDeletePolling(state: PanelState): void {

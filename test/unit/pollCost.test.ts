@@ -67,6 +67,8 @@ interface Bed {
   base: string;
   dirs: string[];
   files: string[];
+  /** Everything the sweep posted to this panel's webview, in order. */
+  posts: Array<{ type: string; [k: string]: unknown }>;
 }
 
 /** A mode-1 comparison of `tuples` rows over `modalities` columns, every slot filled and known. */
@@ -90,8 +92,9 @@ function makeBed(tuples: number, modalities: number): Bed {
   const provider = new ImageCompareProvider(
     { globalStorageUri: Uri.file(path.join(root, 'globalStorage')) } as unknown as import('vscode').ExtensionContext
   );
+  const posts: Array<{ type: string; [k: string]: unknown }> = [];
   const state = {
-    panel: { webview: { postMessage: () => undefined } },
+    panel: { webview: { postMessage: (m: { type: string }) => { posts.push(m); } } },
     scanResult: { modalities: names, tuples: rows, mode: 1, roots: [Uri.file(base)], isMultiTupleMode: true },
     loadedImages: new Map(),
     currentTupleIndex: 0,
@@ -109,7 +112,7 @@ function makeBed(tuples: number, modalities: number): Bed {
     webviewReady: true,
     pendingDebugMessages: []
   };
-  return { provider, state, base, dirs, files };
+  return { provider, state, base, dirs, files, posts };
 }
 
 const runSweep = (bed: Bed) =>
@@ -136,9 +139,18 @@ function countPollTasks(bed: Bed): () => number {
   return () => pollTasksByKey.get(key) ?? 0;
 }
 
+// No `thumbnail-cache` directory and no thumbnail ever requested, so this provider writes nothing and
+// plain dispose() is enough. A bed that DOES let a provider write there must tear down through
+// `test/helpers/providerQuiesce.ts` instead — an un-awaited cache write racing afterAll's rmSync is
+// ENOTEMPTY on Windows and invisible on POSIX (docs/testing.md, Findings).
 function finish(bed: Bed): void {
   (bed.state as { disposed: boolean }).disposed = true; // the 500ms rename window must not outlive the test
   bed.provider.dispose();
+}
+
+/** The root-existence edges this panel posted — the only messages that name the comparison's folder. */
+function rootPosts(bed: Bed): Array<{ type: string; [k: string]: unknown }> {
+  return bed.posts.filter(m => m.type === 'rootMissing');
 }
 
 function deleteLines(): string[] {
@@ -271,6 +283,55 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
     expect(deleteLines().some(l => l.includes(asLogged(victim)))).toBe(true);
     // The survivor of the same directory is untouched: a probe that follows the link still finds it.
     expect(deleteLines().some(l => l.includes(asLogged(bed.files[0])))).toBe(false);
+    finish(bed);
+  });
+
+  // The reported bug: `rm -rf` on the comparison's root produced only N per-file deletions, so nothing
+  // could tell the user WHICH fact had happened — the folder is gone, not merely emptied.
+  it('the comparison root going away is reported by name, once, not once per cycle', async () => {
+    const bed = makeBed(2, 2);
+    await runSweep(bed);
+    expect(rootPosts(bed)).toHaveLength(0);
+
+    fs.rmSync(bed.base, { recursive: true, force: true });
+    await runSweep(bed);
+    expect(rootPosts(bed)).toEqual([{ type: 'rootMissing', path: Uri.file(bed.base).fsPath }]);
+
+    // An edge, not a heartbeat: the panel is already showing the notice.
+    await runSweep(bed);
+    expect(rootPosts(bed)).toHaveLength(1);
+    finish(bed);
+  });
+
+  // These directories are experiment outputs; they come back, and the base dir stays watched
+  // (docs/file-watching.md: watchers-released-with-modality), so the notice must clear itself.
+  it('the root coming back clears the notice, before any content is re-adopted', async () => {
+    const bed = makeBed(2, 2);
+    await runSweep(bed);
+    fs.rmSync(bed.base, { recursive: true, force: true });
+    await runSweep(bed);
+    expect(rootPosts(bed)).toHaveLength(1);
+
+    fs.mkdirSync(bed.base, { recursive: true }); // back, still empty: nothing to adopt yet
+    await runSweep(bed);
+    expect(rootPosts(bed).map(m => m.path)).toEqual([Uri.file(bed.base).fsPath, null]);
+    finish(bed);
+  });
+
+  it('a root that merely cannot be listed reports nothing — unreadable is not gone', async () => {
+    if (process.platform === 'win32') return; // POSIX mode bits only
+    const bed = makeBed(2, 2);
+    await runSweep(bed);
+    fs.chmodSync(bed.base, 0o300); // traversable, so stat still resolves; not readable, so the listing fails
+    try {
+      fs.readdirSync(bed.base);
+      fs.chmodSync(bed.base, 0o755);
+      finish(bed);
+      return; // running with an override that ignores mode bits (root/CI container): nothing to pin
+    } catch { /* as intended: the listing fails while the directory is plainly still there */ }
+    await runSweep(bed);
+    fs.chmodSync(bed.base, 0o755);
+    expect(rootPosts(bed)).toHaveLength(0);
     finish(bed);
   });
 });

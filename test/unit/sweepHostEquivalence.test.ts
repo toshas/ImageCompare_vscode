@@ -339,7 +339,7 @@ async function heldKey(host: Host): Promise<Trace> {
 // case, where a tile clicked in the 5th column of an unloaded row watched column 0 fill instead.
 // Both products read the same reports, so the same script must move both. The strip is rearranged
 // (['ours', 'gt']) so a host that forwards the display index on aims at 'gt' and fails here too.
-// (docs/loading-architecture.md: click-reports-its-column, docs/tuple-matching.md: wire-index-is-original)
+// (docs/loading-architecture.md: picked-column-reports-itself, docs/tuple-matching.md: wire-index-is-original)
 async function clickedColumn(host: Host): Promise<{ straggled: number; column: string[] }> {
   await host.send({ type: 'setCurrentModality', modalityOrder: [1, 0], currentDisplayIndex: 0, hiddenModalities: [] });
   const from = host.askedSlots.length;
@@ -351,11 +351,40 @@ async function clickedColumn(host: Host): Promise<{ straggled: number; column: s
   return { straggled, column: after.slice(straggled) };
 }
 
+// Why the keyboard's burst is coalesced in the WEBVIEW and never here: a host does not coalesce.
+// Every report it gets moves the aim, and a moved aim drops whatever the sweep had queued
+// (docs/loading-architecture.md: sweep-cancels-on-reaim) — so a report posted per keystroke buys a
+// re-aim per keystroke, which is the churn the tuple dwell exists to prevent one axis over. Measured
+// rather than asserted, and in both products, because it is the whole reason the gate that turns a
+// held key into ONE report sits in the bundle both of them run (that gate is pure and pinned in
+// test/unit/tupleLoadPlan.test.ts; the count of reports a real burst produces is pinned in
+// test/webview/tuple-load.spec.ts). The phase also pins the maintainer's symptom inverted: the aim
+// follows the LATEST report, so a keyboard move after a click wins rather than the click sticking.
+// (docs/loading-architecture.md: picked-column-reports-itself, sweep-centre-dwells)
+async function everyReportReaims(host: Host): Promise<{ reports: number; reaims: number; column: string[] }> {
+  const before = host.reaims();
+  // Each names a different column from the one before it; the last lands on 'gt', the column the
+  // click phase left behind, so a host that keeps the clicked column fails on the reads below.
+  const displays = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+  for (const currentDisplayIndex of displays) {
+    await host.send({ type: 'setCurrentModality', modalityOrder: [1, 0], currentDisplayIndex, hiddenModalities: [] });
+    await host.finish(1);
+  }
+  const reaims = host.reaims() - before;
+
+  const from = host.askedSlots.length;
+  for (let i = 0; i < 3; i++) await host.finish(4);
+  const after = host.askedSlots.slice(from, from + 12);
+  const straggled = after.findIndex(slot => slot.startsWith('gt-'));
+  return { reports: displays.length, reaims, column: after.slice(straggled) };
+}
+
 describe('the sweep aim is one policy: both hosts answer a held key identically', () => {
   it('drives the same burst through the real provider and the real standalone adapter', async () => {
     const provider = await providerHost();
     const providerTrace = await heldKey(provider);
     const providerClick = await clickedColumn(provider);
+    const providerChurn = await everyReportReaims(provider);
     provider.dispose();
     await settle(4);
     vi.useRealTimers();
@@ -363,6 +392,7 @@ describe('the sweep aim is one policy: both hosts answer a held key identically'
     const standalone = await standaloneHost();
     const standaloneTrace = await heldKey(standalone);
     const standaloneClick = await clickedColumn(standalone);
+    const standaloneChurn = await everyReportReaims(standalone);
     standalone.dispose();
     await settle(4);
 
@@ -396,6 +426,16 @@ describe('the sweep aim is one policy: both hosts answer a held key identically'
       // on the tie (docs/loading-architecture.md: sweep-cross-then-row-major).
       const nearest = ['ours-50', 'ours-48', 'ours-51', 'ours-47'];
       expect(click.column.filter(slot => nearest.includes(slot))).toEqual(nearest);
+    }
+
+    // Same policy, same churn — and the same answer to a report that arrives after a click.
+    expect(standaloneChurn).toEqual(providerChurn);
+    for (const churn of [providerChurn, standaloneChurn]) {
+      // One re-aim per report, in both products: nothing downstream of the wire absorbs a burst.
+      expect(churn.reaims).toBe(churn.reports);
+      // And the aim ends where the LAST report put it, not where the click did.
+      expect(churn.column.length).toBeGreaterThanOrEqual(12 - POOL_WIDTH);
+      expect(churn.column.every(slot => slot.startsWith('gt-'))).toBe(true);
     }
   });
 });

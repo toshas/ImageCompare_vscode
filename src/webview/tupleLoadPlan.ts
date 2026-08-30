@@ -75,3 +75,40 @@ export function tupleArrivalPlan(input: TupleLoadInput): { now: SlotRequest[]; a
     : [{ modalityIndex: shown, rank: 'visible' }];
   return { now, afterDwell: siblingLoadPlan(input) };
 }
+
+/** The host's timer primitives, nothing more: the delay, the edge and the reset are the gate's (docs/loading-architecture.md: picked-column-reports-itself). */
+export interface ReportTimers {
+  setTimer(run: () => void, ms: number): unknown;
+  clearTimer(handle: unknown): void;
+}
+
+/**
+ * When a column move reaches the host, for one panel: a picked column at once, a key-driven one on a
+ * trailing-edge dwell of `LOAD_DEBOUNCE_MS`, and never two reports for one gesture
+ * (docs/loading-architecture.md: picked-column-reports-itself).
+ */
+export class ColumnReportGate {
+  private pending?: unknown;
+
+  constructor(private readonly timers: ReportTimers, private readonly report: (displayIndex: number) => void) {}
+
+  /** A settled destination — a tile or a pill click: reported at once, and it drops a burst still waiting. */
+  picked(displayIndex: number): void {
+    this.cancel();
+    this.report(displayIndex);
+  }
+
+  /** A key-driven move: keys repeat, so only the column the burst ended on is ever reported. */
+  keyed(displayIndex: number): void {
+    this.cancel();
+    this.pending = this.timers.setTimer(() => {
+      this.pending = undefined;
+      this.report(displayIndex);
+    }, LOAD_DEBOUNCE_MS);
+  }
+
+  private cancel(): void {
+    if (this.pending !== undefined) this.timers.clearTimer(this.pending);
+    this.pending = undefined;
+  }
+}

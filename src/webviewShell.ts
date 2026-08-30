@@ -74,6 +74,34 @@ body {
   opacity: 0.5;
   filter: blur(2px);
 }
+/* Terminal notice for an emptied comparison; the canvas is hidden under it, never left showing a stale frame (docs/loading-architecture.md: empty-comparison-is-terminal). */
+#canvas.hidden { display: none; }
+#empty-notice {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  max-width: 80%;
+  text-align: center;
+  z-index: 6;
+  pointer-events: none;
+}
+#empty-notice.active { display: block; }
+/* Gated on the class, like the spinner's: the offset variable outlives the carousel it was set for. */
+#viewer.has-carousel #empty-notice {
+  left: calc(50% + var(--carousel-offset, 0px) / 2);
+}
+#empty-notice-title {
+  font-size: 15px;
+  color: var(--vscode-foreground, #ccc);
+  margin-bottom: 6px;
+}
+#empty-notice-detail {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #999);
+  word-break: break-all;
+}
 
 /* Floating panel (navigator + crop) */
 #floating-panel {
@@ -621,6 +649,10 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
     <canvas id="canvas"></canvas>
     <div id="image-loader">
       <div id="loader-spinner"></div>
+    </div>
+    <div id="empty-notice">
+      <div id="empty-notice-title"></div>
+      <div id="empty-notice-detail"></div>
     </div>
     <div id="floating-panel">
       <div id="fp-header">

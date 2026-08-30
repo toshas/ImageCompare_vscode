@@ -17,6 +17,9 @@
 // so a missing static compiles clean and throws in the browser, at the user's click. The surface is
 // read by bundling and evaluating the real shim (esbuild, as the build does), never by parsing it;
 // presence only, never behaviour — behaviour is a test's job (docs/standalone.md).
+// (e) host-only wire facts — a message one host is in a position to state and the other is not may be
+// posted from that host alone. Same reason as (c) and (d): the sets it needs are the ones this script
+// already derives, and nothing else in the tree can see a *silence* being broken.
 // Run: node scripts/check-sidedness.mjs        (--print emits the full module table)
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -37,6 +40,17 @@ const POLICY_SEAMS = [
     why: 'where the user is, is host data; WHEN the aim settles is policy (docs/loading-architecture.md: sweep-centre-dwells)',
   },
 ];
+// Gate (e): one curated row per wire fact only one host can honestly state (docs/file-watching.md: root-loss-reported-as-an-edge).
+const HOST_ONLY_MESSAGES = [
+  {
+    message: 'rootMissing',
+    sender: 'src/imageCompareProvider.ts',
+    why: 'a File System Access root handle cannot tell a deleted directory from an unreadable one, so a standalone sender would be guessing at the user (docs/file-watching.md: root-loss-reported-as-an-edge)',
+  },
+];
+// A posted object literal (`type: 'x',`), never the union member declaring it (`type: 'x';`) — src/types.ts is SHARED and declares them all.
+const postsMessage = (text, message) => new RegExp(`type:\\s*'${message}'\\s*,`).test(text);
+
 // Gate (d): the browser bundle's entry, and the shims esbuild aliases/injects into it (scripts/build-standalone.mjs).
 const BUNDLE_ENTRY = 'standalone/adapter.ts';
 const SHIMS = [
@@ -199,6 +213,19 @@ for (const shim of SHIMS) {
   }
 }
 
+// Gate (e): the named sender must still send it, and nothing the standalone ships may.
+for (const row of HOST_ONLY_MESSAGES) {
+  if (!postsMessage(stripped(row.sender), row.message)) {
+    problems.push(`STALE-FACT: ${row.sender} no longer posts \`${row.message}\` — re-point or drop this HOST_ONLY_MESSAGES row, or the silence it guards is vacuous`);
+  }
+  for (const { f, cat } of table) {
+    if (f === row.sender || !(cat === 'STANDALONE' || cat === 'STANDALONE-ONLY' || cat === 'SHARED')) continue;
+    if (postsMessage(stripped(f), row.message)) {
+      problems.push(`HOST-FACT: ${f} (${cat}) posts \`${row.message}\`, which only ${row.sender} may — ${row.why}`);
+    }
+  }
+}
+
 const counts = {};
 for (const { cat } of table) counts[cat] = (counts[cat] ?? 0) + 1;
 console.log(Object.entries(counts).map(([k, v]) => `${k}=${v}`).join('  '));
@@ -213,6 +240,9 @@ if (problems.length) {
   console.error('A SHIM-GAP line means the standalone bundle calls something its browser shim does not have:');
   console.error('add it to the shim, or stop calling it from a module the standalone ships. tsc cannot see this —');
   console.error("the module typechecks against node's real Buffer/path/vscode and only the browser runs the shim.");
+  console.error('A HOST-FACT line means the standalone side started stating something only the extension can');
+  console.error('establish: either the browser really can establish it (then say so in the docs and drop the row),');
+  console.error('or the message must not be sent from there at all.');
   process.exit(1);
 }
-console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral; ${bundleClosure.length} bundled modules call nothing the ${SHIMS.length} shims lack.`);
+console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral; ${bundleClosure.length} bundled modules call nothing the ${SHIMS.length} shims lack; ${HOST_ONLY_MESSAGES.length} host-only wire fact(s) sent by one host each.`);

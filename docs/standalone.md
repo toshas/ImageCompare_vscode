@@ -67,6 +67,16 @@ Three ingredients, composed by `scripts/build-standalone.mjs`:
 The extension itself keeps thin vscode wrappers around the same pure modules; provider behavior is
 unchanged by the extractions.
 
+One user-visible state is deliberately *not* identical, and the difference is a fact neither host may
+invent: an emptied comparison reaches the same terminal notice here, through the same bundle
+(`docs/loading-architecture.md: empty-comparison-is-terminal`), but only the extension can also say
+*why* — a File System Access root handle cannot distinguish a deleted directory from an unreadable
+one, so the standalone never sends the `rootMissing` edge the provider's base-dir sweep sends
+(`docs/file-watching.md: root-loss-reported-as-an-edge`) and the notice keeps its generic wording.
+`scripts/check-sidedness.mjs` gate (e) enforces that silence in both directions — it fails if
+anything the standalone ships posts the message, and equally if the provider stops posting it, since
+a rule guarding a message nobody sends guards nothing.
+
 **How much is actually shared, and why not more.** One implementation of the UI (the real
 `dist/webview.js` plus `src/webviewShell.ts`, ~3 700 lines) and one of the decisions (~3 500 lines of
 pure `src/` modules, the list above) serve both products. What is *not* shared is host wiring —

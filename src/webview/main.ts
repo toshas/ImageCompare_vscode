@@ -7,7 +7,8 @@ import * as crop from './crop';
 import { nextVisibleModality, isVoteClickable, displayOrderAfterInsert } from './modalityVisibility';
 import { shiftIndexAfterRemoval } from '../watcherLogic';
 import { ThumbUrlCache, BLANK_THUMB } from './thumbUrlCache';
-import { LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
+import { ColumnReportGate, LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
+import { emptyNotice } from './emptyNotice';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -100,6 +101,9 @@ const closeHelpBtn = document.getElementById('close-help-btn')!;
 const reorderLeftBtn = document.getElementById('reorder-left')!;
 const reorderRightBtn = document.getElementById('reorder-right')!;
 const imageLoaderEl = document.getElementById('image-loader')!;
+const emptyNoticeEl = document.getElementById('empty-notice')!;
+const emptyNoticeTitleEl = document.getElementById('empty-notice-title')!;
+const emptyNoticeDetailEl = document.getElementById('empty-notice-detail')!;
 
 // Constants
 const THUMB_MAX_SIZE = 150;
@@ -134,6 +138,7 @@ let currentTupleIndex: TupleIndex = asTuple(0);
 let currentModalityIndex: DisplayModalityIndex = asDisplay(0);
 let previousModalityIndex: DisplayModalityIndex = asDisplay(0);
 
+let rootMissingPath: string | null = null; // the comparison's folder, once the host says it is gone (docs/file-watching.md: root-loss-reported-as-an-edge)
 let images: (LoadedImage | undefined)[] = []; // Current tuple's loaded images (may have undefined slots)
 let loadedTuples: Map<TupleIndex, LoadedImage[]> = new Map();
 // "tupleIdx-modIdx" -> object url (or the ✕ placeholder data url): it owns every url a row shows (docs/loading-architecture.md: thumb-url-owned-by-cache).
@@ -448,6 +453,11 @@ window.addEventListener('message', (event) => {
     case 'modalityRemoved':
       handleModalityRemoved(message);
       break;
+    case 'rootMissing':
+      // Only the notice's wording depends on this; a re-render refines or clears it (docs/file-watching.md: root-loss-reported-as-an-edge).
+      rootMissingPath = message.path;
+      render();
+      break;
     case 'winnerUpdated':
       handleWinnerUpdated(message);
       break;
@@ -533,6 +543,7 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   loadedTuples.clear();
   thumbnailUrls.clear();
   hiddenModalities.clear();
+  rootMissingPath = null; // a fresh comparison inherits no previous root's verdict
   // Index-keyed and every index just changed identity; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
@@ -897,13 +908,13 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
   isMultiTupleMode = tuples.length > 1;
   buildCarousel();
 
-  // Load current tuple
-  if (tuples.length > 0) {
-    loadTuple(currentTupleIndex);
-  }
+  // Unconditional: at zero rows loadTuple raises the notice instead, and nothing else would (docs/loading-architecture.md: empty-comparison-is-terminal).
+  loadTuple(currentTupleIndex);
 }
 
 function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex }) {
+  // A row arriving into an empty comparison becomes the view; nothing else re-aims it (docs/loading-architecture.md: empty-comparison-is-terminal).
+  const wasEmpty = tuples.length === 0;
   // decodeRetried is index-keyed and an insertion shifts every later index; clearing is cheaper than re-indexing.
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
@@ -953,9 +964,17 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
   }
   // Only the new row needs data; shifted rows repaint from the re-indexed map (docs/tuple-matching.md: revalidate-slot-before-write).
   vscode.postMessage({ type: 'requestThumbnails', tupleIndices: [message.tupleIndex] });
+
+  // The increment above aimed past the only row there is; the returning content takes the view.
+  if (wasEmpty) {
+    currentTupleIndex = asTuple(0);
+    loadTuple(currentTupleIndex);
+  }
 }
 
 function handleModalityAdded(message: { modality: string; modalityPath: string; modalityColors: string[]; modalityIndex: OriginalModalityIndex }) {
+  // A column arriving into a comparison with none becomes the view, as a row does (docs/loading-architecture.md: empty-comparison-is-terminal).
+  const hadNoColumns = modalities.length === 0;
   // The user's arrangement survives the insert; the new column lands beside its original-order predecessor (docs/tuple-matching.md: rearrangement-survives-insert).
   const inserted = displayOrderAfterInsert(modalityOrder, message.modalityIndex);
   const displayPos = inserted.displayPos;
@@ -1022,6 +1041,12 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
     type: 'requestThumbnails',
     tupleIndices: Array.from({ length: tuples.length }, (_, i) => i)
   });
+
+  // The shift above aimed past the only column there is; the returning content takes the view.
+  if (hadNoColumns) {
+    currentModalityIndex = asDisplay(0);
+    previousModalityIndex = asDisplay(0);
+  }
 
   // The re-indexed cache serves every old slot; loadTuple requests only the new column's (docs/file-watching.md: mutation-never-strands-view).
   loadTuple(currentTupleIndex);
@@ -1178,6 +1203,8 @@ function requestSlot(tupleIndex: TupleIndex, modalityIndex: OriginalModalityInde
 }
 
 function loadTuple(index: TupleIndex) {
+  // Ahead of the range guard, which at zero rows returns before anything can raise the notice; also the single site that clears it (docs/loading-architecture.md: empty-comparison-is-terminal).
+  if (applyEmptyNotice()) return;
   if (index < 0 || index >= tuples.length) return;
 
   // Only an actual tuple change resets the view — re-index paths reload the same tuple and must not.
@@ -1274,7 +1301,7 @@ function visibleCarouselRows(): number {
   return Math.max(1, Math.ceil(carouselEl.clientHeight / rowH));
 }
 
-/** Reports the strip the moment a click picks a column — `tupleFullyLoaded` waits for a whole tuple, which on a wide cold session is far away (docs/loading-architecture.md: click-reports-its-column). */
+/** Reports the strip the moment the user picks a column — `tupleFullyLoaded` waits for a whole tuple, which on a wide cold session is far away (docs/loading-architecture.md: picked-column-reports-itself). */
 function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
   vscode.postMessage({
     type: 'setCurrentModality',
@@ -1284,6 +1311,12 @@ function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
     visibleRows: visibleCarouselRows()
   });
 }
+
+/** Every column report goes through this one gate, clicks and keys alike (docs/loading-architecture.md: picked-column-reports-itself). */
+const columnReport = new ColumnReportGate(
+  { setTimer: (run, ms) => window.setTimeout(run, ms), clearTimer: h => window.clearTimeout(h as number) },
+  d => postCurrentModality(asDisplay(d))
+);
 
 /** Reports the tuple as loaded *and* the strip as displayed — prefetch scopes its wave to the column on screen (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column), the sweep aims its cross at it (docs/loading-architecture.md: sweep-cross-then-row-major). */
 function postTupleFullyLoaded(tupleIndex: TupleIndex) {
@@ -1637,7 +1670,7 @@ function handleCarouselClick(e: MouseEvent) {
   }
   const img = target.closest('.carousel-thumb') as HTMLElement | null;
   if (img) {
-    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: click-reports-its-column).
+    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: picked-column-reports-itself).
     const clicked = parseInt(img.dataset.displayIndex ?? '', 10);
     if (Number.isInteger(clicked)) goToTupleAndModality(tupleIdx, asDisplay(clicked));
     return;
@@ -1655,8 +1688,8 @@ function scrollCarouselToCurrentTuple() {
 }
 
 function goToTupleAndModality(tupleIdx: TupleIndex, modalityIdx: DisplayModalityIndex) {
-  // Unconditional: the clicked column is the sweep's aim even when it is the one already on screen, which no report may have carried yet (docs/loading-architecture.md: click-reports-its-column).
-  postCurrentModality(modalityIdx);
+  // Unconditional: the clicked column is the sweep's aim even when it is the one already on screen, which no report may have carried yet (docs/loading-architecture.md: picked-column-reports-itself).
+  columnReport.picked(modalityIdx);
   if (tupleIdx === currentTupleIndex) {
     if (modalityIdx !== currentModalityIndex) {
       previousModalityIndex = currentModalityIndex;
@@ -1728,6 +1761,7 @@ function buildModalitySelector() {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(displayIdx);
         render();
+        columnReport.picked(currentModalityIndex);
       }
     });
 
@@ -1852,9 +1886,34 @@ function moveCurrentModality(direction: number) {
     buildCarousel();
   }
   render();
+  // A reorder moves no column but re-permutes the strip the aim ranks over (docs/loading-architecture.md: picked-column-reports-itself).
+  columnReport.keyed(currentModalityIndex);
+}
+
+/**
+ * Show or clear the terminal notice for a comparison with nothing to draw; returns true when it is
+ * showing, and it is the only site that hides the canvas (docs/loading-architecture.md: empty-comparison-is-terminal).
+ */
+function applyEmptyNotice(): boolean {
+  const notice = emptyNotice({ tupleCount: tuples.length, modalityCount: modalities.length, missingRootPath: rootMissingPath });
+  emptyNoticeEl.classList.toggle('active', notice !== null);
+  canvasEl.classList.toggle('hidden', notice !== null);
+  if (!notice) return false;
+  emptyNoticeTitleEl.textContent = notice.title;
+  emptyNoticeDetailEl.textContent = notice.detail;
+  // Terminal: the spinner goes out and no request is issued, so nothing can leave one spinning forever.
+  imageLoaderEl.classList.remove('active');
+  canvasEl.classList.remove('preview');
+  // The minimap is the second surface carrying that same frame; hiding only the canvas leaves the preview on screen (docs/loading-architecture.md: empty-comparison-is-terminal).
+  thumbCtx.clearRect(0, 0, thumbCanvasEl.width, thumbCanvasEl.height);
+  thumbViewportEl.style.display = 'none';
+  updateStatus(notice.title, notice.detail);
+  return true;
 }
 
 function render() {
+  // Nothing to draw: a notice, never a spinner over the last frame (docs/loading-architecture.md: empty-comparison-is-terminal).
+  if (applyEmptyNotice()) return;
   // Re-derive from the cache; module-level `images` holds a previous tuple's frames (docs/loading-architecture.md: render-from-loaded-tuples).
   const cached = loadedTuples.get(currentTupleIndex);
   images = cached && cached.length > 0
@@ -2040,6 +2099,7 @@ function handleKeyDown(e: KeyboardEvent) {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(target);
         render();
+        columnReport.keyed(currentModalityIndex);
       }
       break;
     }
@@ -2076,6 +2136,7 @@ function handleKeyDown(e: KeyboardEvent) {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(idx);
         render();
+        columnReport.keyed(currentModalityIndex);
       }
       break;
 

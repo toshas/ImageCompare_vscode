@@ -32,8 +32,13 @@ npx vitest run test/unit/workPool.test.ts --config test/vitest.config.ts   # one
 
 Layer 1 is the publish gate: `.github/workflows/publish.yml` runs `npm test` and
 `scripts/mutation-check.mjs` in its `test` job, which gates the whole build matrix — a red test
-blocks publishing to both marketplaces. All three layers additionally run in their own workflow
-(`.github/workflows/test.yml`) on **ubuntu / windows / macos** for every push and PR. That proves
+blocks publishing to both marketplaces. On a `pull_request` that job (and `test-full`) is skipped,
+because test.yml runs both on the PR already; the ten-leg build matrix runs anyway, and everything
+that publishes is gated off by event
+(`docs/image-backends.md: pull-request-builds-never-publish`). All three layers additionally run in
+their own workflow (`.github/workflows/test.yml`) on **ubuntu / windows / macos** for every PR, and
+for pushes to `main` or `test/**` — its push trigger is branch-limited, so pushing any other branch
+starts no run at all, and an empty checks page must not be read as a green one. That proves
 the per-OS risks on a real OS — Sharp's native binary, the file watcher, Windows path/CRLF
 handling — not just mocked. There are no pixel snapshots and no committed baselines, so every job
 is deterministic and nothing has to be run or refreshed by hand.
@@ -104,6 +109,8 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `thumbTierStats` | real source | Which cache tier answered `getThumbnail`, against a real cache directory: memory/pack/disk/generated attributed correctly, bytes recorded, and *nothing* counted while `imageCompare.debug` is off or after it is switched off mid-session |
 | `thumbSharedWait` | real source | What a tier's `ms` means when N requests share one pack read (the read is slowed through the mock): the tiers report per-item work only, the shared read is counted once with the callers it blocked, and the sweep rollup prints both terms |
 | `pollNoise` | real source | The existence poll's pool line: quiet cycles print once and then go silent, a busy pool prints every cycle even unchanged, and a cycle that finds a deletion still reports it |
+| `rootReadoption` | real source | The reported repro on the real provider over a temp dir: `rm -rf` the mode-1 root, every per-file removal committed (scan empties in place), then the directory recreated — the `modalityAdded`/`tupleAdded` the webview needs are posted (and after the root's return edge, not before), every re-adopted dir is watched again, and a second sweep over the same tree adds nothing. The bed builds real `watchersByDir` records, because their absence is what keeps a released dir in `watchedDirs` and re-adopts through a route production does not have |
+| `emptyNotice` | real source | The emptied comparison's terminal notice: silent while anything is drawable, speaking at zero rows *and* at zero columns (the two shapes the two detectors produce), the folder named only when the host established it is gone, and content winning over a still-flagged missing root — the recoverability rule in pure form |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
@@ -303,8 +310,8 @@ Every change lands the same way, so it can't silently regress:
 4. **Document** — one line in *Findings* below; update `CLAUDE.md` or the relevant `docs/` file if
    architecture changed; map the feature in `test/dashboard/features.json` (CLAUDE.md → "Growing
    the dashboard").
-5. **CI guards it** — all three layers run on ubuntu/windows/macos for every push and PR. No local
-   step and no per-OS baselines: every assertion is deterministic.
+5. **CI guards it** — all three layers run on ubuntu/windows/macos for every PR (and every `main`
+   push). No local step and no per-OS baselines: every assertion is deterministic.
 
 This is automated by the **`fix-issue` agent skill** (`skills/fix-issue/`, symlinked into
 `.claude/skills/`): give it a bug description in prose and it produces the issue, the failing test,
@@ -312,11 +319,13 @@ the fix, the docs, and the CI check.
 
 ## What nothing covers
 
-- **The image backends.** Nothing tests Jimp or `sharpLoader.ts`, and nothing tests the fallback
-  chain. `test/unit/pngTextChunk.test.ts` uses Sharp only to mint a fixture PNG and re-read it — that
-  exercises Sharp incidentally, not the loader or the tiers. See the Testing section of `docs/image-backends.md` for
-  why a real test is awkward: the `Unsupported CPU` path needs a CPU no CI runner has, so it would
-  have to be simulated, and the wasm32 tier it falls back to is absent from any normal install.
+- **A real wasm32 decode.** The tiers themselves are covered now — `test/unit/sharpLoaderTiers.test.ts`
+  pins the loader's decision (native blocked, wasm32 exempt, resolver restored, null rather than a
+  throw) and `test/unit/jimpFallback.test.ts` drives the real `ThumbnailService` onto the real Jimp —
+  but no suite ever *decodes* through WASM, because `@img/sharp-wasm32` declares `cpu: ["wasm32"]` and
+  no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
+  builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
+  mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
 - **Most of `imageCompareProvider.ts`** (the largest file). The integration layer covers
   activation, command registration, real-fs scanning, results.txt I/O, and the real API's entry
   types (the dangling-symlink premise every `type & FileType.File` gate rests on), but the provider's
@@ -354,6 +363,73 @@ the fix, the docs, and the CI check.
   and silent.
 
 ## Findings (caught by this testbed)
+
+- **Three platform targets were never published, and VS Code blamed the engine range** *(fixed)* —
+  a remote-session install failed with *"not compatible with the current version of Visual Studio
+  Code (version 1.135.0)"* against `engines.vscode: ^1.85.0`, which accepts it. The message is VS
+  Code's own and names the wrong cause: the real condition is *no published target matches this
+  host*, and VS Code matches the **server's** platform, so a Linux remote decides it. Six of nine
+  targets were built — `alpine-x64`, `alpine-arm64` and `linux-armhf` were not — and nothing in the
+  repo could see that, because a platform target is a line in a workflow matrix that no suite read.
+  This one was **not** caught by the testbed; it was caught by a user, and the testbed's answer is
+  `test/unit/publishTargets.test.ts`: the matrix must carry all nine targets plus the universal
+  build, `--libc` must actually reach npm (musl and glibc are both `--os=linux`), and every matrix
+  target must have an entry in the artifact scan's expectation table. The flag is *not* sufficient,
+  which review caught before the first alpine leg ran: `package-lock.json` carries no `libc` for
+  `@img/sharp-*`, so a lockfile-driven install restores the glibc tier beside the musl one and the
+  artifact scan would have failed the leg — hence the prune the suite now also pins
+  (`docs/image-backends.md: one-native-tier-per-target`). Eight mutations, each surviving without that
+  suite. The same round covered the
+  two fallback tiers underneath, which had no tests at all while a whole platform target was about
+  to rest on them. (`docs/image-backends.md: all-platform-targets-built`, `universal-has-no-native`)
+
+- **The ten-leg build first ran at tag time** *(fixed)* — `publish.yml` triggered only on `v*` tags,
+  so the per-target Sharp install, the libvips prune and the packed-VSIX scan were first exercised at
+  the one irreversible step; both findings above are what that costs. `pull_request` now runs the same
+  build job and the `codium-smoke` install check, and nothing on that path can publish. The suite's
+  answer is in `test/unit/publishTargets.test.ts`, which reads the workflow as a document (js-yaml, an
+  explicit devDependency) and evaluates the real `if:` expressions under a model of Actions' own
+  semantics — implicit `success()` included — rather than asserting their wording, so an equivalent
+  rewrite passes and a weakening does not. Twelve mutations: all twelve killed with those cases
+  present, eleven of them surviving once the cases are removed — the twelfth mutates the semantic
+  model itself, which goes with them. (`docs/image-backends.md: pull-request-builds-never-publish`)
+
+- **The artifact scan passed the very VSIX that shipped the defect** *(fixed, same round)* — the
+  scan added above was a per-target *deny*-list naming strays for four of the ten legs. The other
+  six were checked only for the presence of their own binary, so anything extra rode along. Packaging
+  a `linux-arm64` VSIX with the pre-change recipe reproduced the shipped 0.4.0 artifact — four
+  libvips tiers, 36,092,593 bytes — and the scan printed `OK` and exited 0. The lesson is the one the copy-trap
+  section already makes: a check written per-case is only as good as its case list, and reading it is
+  not testing it. It is now one rule every leg is held to (the packed `@img` set must equal `colour`
+  + this target's own pair + `sharp-wasm32`), and the suite no longer pins the scan's *text* — it
+  extracts the real `node -e` program from the workflow and runs it against synthetic VSIX zips whose
+  entry names are the measured shapes, so the shipped four-tier artifact is a red test. Writing it
+  also found a second defect the text-pinning could never have: an apostrophe in the scan's own
+  comment ended the `node -e '...'` shell string, and the step died with a bash syntax error instead
+  of checking anything. That is pinned too — and so, since a quote count is only a proxy for it, is the
+  property that actually matters: one case takes the step's `run:` body verbatim and executes it under
+  the shell Actions uses (`bash --noprofile --norc -eo pipefail`), asserting exit 0 for a conforming
+  VSIX and exactly 1 for a stray-carrying one. Exactly, because bash's own exit 2 for a step that never
+  parsed is otherwise indistinguishable from the check firing — which is the shape both defects took.
+
+- **Only a mouse re-aimed the sweep; the keyboard never did** *(fixed)* — reported from the field:
+  after clicking a carousel tile the sweep kept filling that column while the arrows, the digits and
+  `[` / `]` moved the view elsewhere. The click path posted `setCurrentModality`, and no keyboard
+  route posted anything at all — so the column half of the aim was frozen at whatever the last click
+  (or the last `tupleFullyLoaded`, a whole cold tuple away) had said. The *row* half was never
+  broken: `ArrowUp`/`ArrowDown` post `setCurrentTuple`, which the trailing-edge dwell has always
+  settled, so what looks like a stuck row is that dwell working as designed — no test was written for
+  a bug that was not there. The reason the keyboard had been left out was churn, and the measurement
+  is what settled where to answer it: driven through both real hosts, **eleven reports buy eleven
+  re-aims** (each drops the sweep's queued dispatches), so a report per keystroke would have been the
+  thrash `sweep-centre-dwells` exists to prevent. The gate therefore sits in the webview, which is
+  the only place that can tell a settled pick from a burst, and is pure so it can be pinned:
+  `ColumnReportGate` (`src/webview/tupleLoadPlan.ts`) reports a click at once and a key on the
+  navigation debounce — **ten held repeats are one report** (`test/webview/tuple-load.spec.ts`
+  counts them off the real bundle; `test/unit/tupleLoadPlan.test.ts` pins the gate on a fake clock,
+  `test/unit/sweepHostEquivalence.test.ts` pins the churn and the latest-report-wins rule in both
+  products), with four mutations in `scripts/mutation-check.mjs`
+  (docs/loading-architecture.md: picked-column-reports-itself).
 
 - **The poll's dir grouping silently degraded to per-file on Windows — and the fs.watch backup never
   armed there at all** *(fixed)* — `watchedDirs`, `watchersByDir` and the sweep's per-directory
@@ -889,6 +965,144 @@ the fix, the docs, and the CI check.
   mutation that flips `isBuffer` to answer `true` for a plain `Uint8Array` is there too.
   (`docs/standalone.md: shim-covers-bundled-calls`)
 
+- **Deleting a comparison's folder left a spinner over the last image it happened to have**
+  *(fixed)* — and the layer could not see it, because **no webview spec anywhere asserted anything at
+  zero tuples or zero modalities**: 71 specs, all of them on a comparison that still had content. The
+  two shapes an emptying comparison arrives in both ended badly and for different reasons — at zero
+  rows `handleTupleDeleted` skipped `loadTuple`, and `render()` is the only writer of the canvas, so
+  the last frame simply stayed; at zero columns `loadTuple` turned the spinner on and then found the
+  vacuously-complete cache and returned, issuing no request, and a reply is the only thing that turns
+  a spinner off. Two more traps were found by *writing* the test rather than by reasoning: the row and
+  column add handlers each shift the cursor past the insertion point, which lands off the end when
+  the list was empty, so re-adoption after the folder returned would have stranded the view (the
+  recovery test caught both), and the guard had to go **ahead of** `loadTuple`'s `index >= tuples.length`
+  early return, which at zero rows returns before anything could render. A probe against the unfixed
+  bundle recorded the symptom in both shapes (`spinnerActive: true`, canvas visible, status stuck at
+  `Loading...`) before a line changed. Pinned by `test/webview/empty-comparison.spec.ts` (the rendered
+  end state and the recovery), `test/unit/emptyNotice.test.ts` (the decision, five mutations) and
+  three cases in `test/unit/pollCost.test.ts` driving the real `runDeleteSweep` (the root-existence
+  edge, six mutations). (`docs/loading-architecture.md: empty-comparison-is-terminal`,
+  `docs/file-watching.md: root-loss-reported-as-an-edge`)
+
+  Two further defects, both found by *driving* the scenario rather than reading it, and both worse
+  than the bug being fixed. **The notice was a dead end in exactly its own repro**: after a total
+  `rm -rf` the scan empties, and `adoptNewModalityDir` read the URI scheme from
+  `tuples[0].images[0]`, so it returned before its first filesystem call and no recreated directory
+  was ever adopted — the panel would have said "Nothing left to compare" forever while the job wrote
+  a new epoch beside it. A first bed missed this and reported the recovery healthy, because it left
+  `watchersByDir` empty: `unwatchModalityDir` then returns *before* dropping the dir from
+  `watchedDirs`, the sweep keeps leaf-listing a released directory, and the arrival lands through a
+  route production does not have. Fixed with a `?? state.baseUri.scheme` fallback at
+  `adoptNewModalityDir`'s scheme read — the one site on the path an emptied scan can reach; the
+  sibling read in `addNewModality` needs none, and the mutation that pretended otherwise survived
+  (`docs/file-watching.md: root-return-re-adopts`) — pinned by `test/unit/rootReadoption.test.ts`
+  with two mutations. **And the stale image survived on a second surface**: the report said "a preview of
+  the very last image it saw", and the floating panel's minimap (`#thumb-canvas`) is exactly that —
+  a full 150x94 minimap, 14 100 opaque pixels of the last frame, still on screen with the main canvas
+  hidden, in both shapes.
+  The spec now counts opaque pixels on that canvas (0 after, non-zero before, so it cannot pass
+  vacuously) rather than trusting a class.
+
+- **A bed that shut a provider down without awaiting what the shutdown starts — Windows-only, and the
+  third of that shape** *(fixed)* — `test/unit/rootReadoption.test.ts` passed every assertion on all
+  three OSes and was still reported FAILED on Windows: its `afterAll` threw
+  `ENOTEMPTY: directory not empty, rmdir '…\globalStorage\thumbnail-cache'`. The bed called
+  `provider.dispose()` and returned. `dispose()` is synchronous **by contract** and only *starts* the
+  pack write (`docs/image-backends.md: thumb-pack-survives-close`); `deactivate` is the one shutdown
+  path that awaits it, via `provider.flush()`. Measured on Linux, `thumbs.pack` and `thumbs.idx`
+  landed **1-3 ms after `dispose()` returned** — inside the `rmSync` that followed, which on POSIX
+  merely recreates files under a directory being walked and on Windows fails the `rmdir` outright.
+  The teardown *pattern* was not the differentiator (`pollCost.test.ts` uses byte-identical teardown
+  and is green): `rootReadoption` is the only bed that drives a **provider** into writing its
+  thumbnail cache at all. Instrumenting the `vscode` mock's `writeFile` across the whole unit layer
+  recorded **139 writes, none failed**, from exactly seven suites (grouped by their temp roots): the
+  six that construct `ThumbnailService` directly — `thumbSharedWait`, `thumbPackFlush`,
+  `thumbTierStats`, `thumbCacheExpiry`, `thumbCacheKeying`, `jimpFallback` — plus this one. Every *other* provider bed —
+  `pollCost` included, 12 beds snapshotted after teardown, 0 changed, no `globalStorage` present at
+  all — never requests a thumbnail, so no write is even attempted.
+
+  Two claims in earlier drafts of this paragraph were wrong, and both are recorded here because the
+  paragraph's whole job is to tell the next author where the trap is. The first said the other beds'
+  writes *fail with ENOENT*: they do not happen at all — right conclusion, invented mechanism. The
+  second said the six direct-`ThumbnailService` suites "all already `await flush()`", which was
+  another claim asserted rather than measured, and **two of them did not**. `jimpFallback` calls
+  `initialize()` (`:79`), which creates the cache directory, then writes a `.jpg` into it un-awaited,
+  with no `flush()` or `dispose()` anywhere and the same recursive `afterAll` `rmSync`: under a 3 s
+  write delay it went green in 716 ms with the write outstanding and `rmSync` running against the
+  directory the file was about to appear in. `thumbPackFlush` — the suite that owns this rule —
+  ended with three writes still outstanding, because the tests that exercise the fire-and-forget
+  `dispose()` deliberately await nothing and its `afterAll` slept 100 ms instead. Both are fixed the
+  same way rather than documented around: each bed keeps the services it built and `afterAll` awaits
+  `flush()` on every one before removing the roots (which also retires that `sleep(100)` — a flush is
+  what the sleep was approximating).
+
+  What replaces the assertion is a measurement, and it is the one to repeat when this comes up again:
+  run the whole unit layer with every `.jpg` write delayed 500 ms at the `node:fs` seam — a setup file
+  wrapping `fs.promises.writeFile` that logs each write's issue and completion. Two practical notes,
+  both learned by getting them wrong. `fs.rmSync` **cannot** be wrapped the same way (non-configurable
+  on the module namespace: `TypeError: Cannot redefine property`), so the file boundary has to come
+  from the runner — register the wrapper through `setupFiles`, which means either a temporary entry in
+  `test/vitest.config.ts` or a second config passed with `-c`; the probe itself is the only part that
+  can live outside the tree. Against **both pre-image beds**: 78 writes issued, 74 completed,
+  **4 outstanding at exit** — three from `thumbPackFlush`, one from `jimpFallback`. After both fixes
+  (plus the writes the two new tests issue): **82 issued, 82 completed, 0 outstanding, 0 failed,
+  627/627 green**, reproduced at 200 ms, 500 ms and 1000 ms — i.e. no unit bed now ends with a cache
+  write in flight, on any OS. A first draft of this paragraph said 3, because the count had been taken
+  after `jimpFallback` was already fixed — a before/after pair whose "before" was not re-derived from
+  the "before" tree. The lesson to carry is exactly that: a census is evidence only if every row is
+  read, and against the state it claims to describe. `ic-jimp` was in the first measurement's own
+  output all along.
+
+  Both bed teardowns now go through `settleServices` in `test/helpers/providerQuiesce.ts` rather than
+  each hand-rolling the loop, and `thumbPackFlush` pins it (a 200 ms write must have landed when it
+  returns, asserted on the write's own completion flag rather than on a file, so it cannot pass by
+  timing) with a mutation entry that removes the flush and is verified SURVIVING without that test.
+
+  Fixing the bed was **not enough, and the first attempt to stop there is the instructive part**. A
+  bed-only fix drains the work pool, then runs `deactivate`'s order — `await flush()`, `dispose()`,
+  a trailing `await flush()` for the write `dispose()` queues — and asserts the temp tree does not
+  move for 250 ms. That is causal for the *pack* write and was verified so. It is **not** causal for
+  the per-entry `.jpg`: `getThumbnail` issued `saveToDiskCache` un-awaited and returned on the next
+  line, so the pooled task settles — `pending`/`running` both 0 — while the write is still in flight,
+  and no drain can see it. Probed by making every `.jpg` write take 3 s at the mock's `writeFile`
+  seam: teardown returned in **256 ms with 0 of 2 files written**, both landing 4 s later, i.e. during
+  `afterAll`. Everything separating that from the Windows error was a wall-clock margin that shrinks
+  under load. A 250 ms window against a 1-3 ms write is `maxRetries` in better clothes.
+
+  So the writer was made awaitable in the product, where the leak actually lives:
+  `ThumbnailService` registers each fire-and-forget cache write and `flush()` settles them
+  (`src/thumbnailService.ts`, `docs/image-backends.md: thumb-pack-survives-close`). This is a real if
+  minor production defect in its own right — `deactivate` awaits `flush()`, and a `flush()` that
+  returns with writes outstanding loses the newest thumbnails when the host exits. The generate path
+  is unchanged (still un-awaited; a thumbnail must not wait on a disk round-trip), and `flush()`
+  queues the pack snapshot **before** its first `await` so the synchronous entry capture that
+  `thumb-pack-survives-close` depends on survives the new wait — the pre-existing
+  `clearMemoryCache`-race test caught that ordering immediately when it did not. Under the same 3 s
+  probe, teardown now takes **3014 ms and returns with the files on disk**. Pinned by
+  `test/unit/thumbPackFlush.test.ts` ("flush() also waits for the per-entry .jpg writes it started"),
+  which fails against the old code with the same delay injected, plus the bed's own quiet-window
+  assertion in `test/helpers/providerQuiesce.ts` — which fails on all three `rootReadoption` tests
+  against the old teardown, for the exact files the Windows error named. Three mutations in
+  `scripts/mutation-check.mjs` — `flush()` dropping its per-entry settle, the queued pack write no
+  longer awaited, and the shared bed teardown skipping its flush — each verified KILLED with the new
+  tests and SURVIVING without them.
+  The pool drain stays, for the one thing no flush can reach backwards in time — a generate still
+  running would re-dirty the pack and register a new write after the flush had settled — and not for
+  the `.jpg`, which it never covered; on this runner it measures `pending=0 running=0` at every
+  teardown, which is exactly the luck a loaded Windows runner does not owe us.
+
+  The durable lesson is the *class*, and it is now three deep: a POSIX-only mental model — `fs.watch`
+  given a URI path, `fs.access` on a dangling symlink, and now an un-awaited write racing a recursive
+  `rm` — is invisible to a green Linux suite every time. The two earlier ones were closed by faking
+  the platform's verdict at the `node:fs` seam; this one cannot be, because nothing about the *call*
+  differs — what differs is whether a concurrent write is tolerated. The rule that replaces it:
+  **make the async work finish, and assert that it did, rather than pick a window and hope**. If the
+  code offers no way to await it, that is the bug — fix it there, not in the bed. The next bed that
+  gives a provider a real `thumbnail-cache` directory inherits all of this: tear it down through
+  `test/helpers/providerQuiesce.ts`, and a bed holding a bare `ThumbnailService` must `await flush()`
+  before its temp root goes. Both warnings sit where the next author will be standing rather than only
+  here — `test/unit/pollCost.test.ts`'s `finish()` and `test/unit/jimpFallback.test.ts`'s `afterAll`.
+
 ## The generated-output rule
 
 **A generator writes only into a directory `.gitignore` already covers — and it writes.** Not a style
@@ -948,8 +1162,8 @@ Playwright harness, not for reading.
 Failures here are invisible to CI, so they are worth walking before a release. Two former entries
 are automated now and dropped from the walk: three-mode scanning/commands run in the headless
 integration layer (`npm run test:integration`), and placeholder rendering plus the webview
-interactions run in the Playwright layer (`npm run test:webview`) — both on every push via
-`.github/workflows/test.yml`. What remains manual:
+interactions run in the Playwright layer (`npm run test:webview`) — both on every PR and every
+`main` push via `.github/workflows/test.yml`. What remains manual:
 
 2. Rename detection — a quick delete+create must move the image, not drop the row.
 4. A remote filesystem (SSH, WSL) or a FUSE/network mount, where the watchers do not fire and the

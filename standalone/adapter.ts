@@ -567,7 +567,7 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
       await handleExportPptx(s, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
       break;
     case 'setCurrentModality':
-      // Same report, same aim: neither product may learn the clicked column later than the other (docs/loading-architecture.md: click-reports-its-column).
+      // Same report, same aim: neither product may learn the picked column later than the other (docs/loading-architecture.md: picked-column-reports-itself).
       s.sweepAim.noteStrip(message);
       break;
     case 'tupleFullyLoaded': {

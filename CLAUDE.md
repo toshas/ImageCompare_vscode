@@ -100,8 +100,9 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
+- **`webview/emptyNotice.ts`** - Pure (no vscode/DOM): what an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
-- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split → `docs/loading-architecture.md`
+- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 - **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
 
@@ -265,7 +266,9 @@ says so itself and exits 2.
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
 checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but
 runs only in the pre-commit hook — it needs the gitignored `.words-to-check.txt`.) The `gates` job in `test.yml` runs all three
-`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every push/PR; the publish-path `test` job still has **no `tsc --noEmit`
+`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every PR and on
+pushes to `main` or `test/**` — its push trigger is branch-limited, so a push to any other branch
+runs nothing until a PR is open; the publish-path `test` job still has **no `tsc --noEmit`
 step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
 `npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
 transpiles with esbuild and type-checks nothing; `tsconfig.test.json` in the gates job is what
@@ -337,7 +340,15 @@ packaged, and `build` needs both: `test` (ubuntu — compile, the four checker s
 the mutation check) and `test-full`, which is `uses: ./.github/workflows/test.yml` and therefore
 runs the whole three-OS matrix. Naming only the ubuntu job here once led to the false conclusion
 that a tag could publish a build that fails on Windows; it cannot. Then it builds one VSIX per
-platform target. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
+platform target. **A pull request builds every target and publishes nothing**
+(`docs/image-backends.md: pull-request-builds-never-publish`): the same ten-leg `build` job and the
+`codium-smoke` install check run on `pull_request`, so a packaging defect surfaces on the PR instead
+of at the tag, while the `publish` and `verify-openvsx` jobs are gated off by event — a fork PR
+included. The two gating jobs are the ones a PR *skips*: `test` is a subset of test.yml's `gates`
+job and `test-full` IS test.yml, both of which already run on the PR, so a PR costs eleven jobs here
+(ten legs + smoke) and nothing duplicated. On a tag they still both gate `build`, whose `if:` — it
+needs one only because they are skipped on a PR — refuses a gate that failed or was cancelled, since
+an `if:` replaces the implicit `success()`. Superseded PR runs are cancelled; a tag run never is. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
 
 ### Release Checklist (for Claude)
 
@@ -350,7 +361,10 @@ a tag would *not* publish a broken build — `publish.yml`'s `build` job declare
 full three-OS matrix. So a red Windows suite stops the release before anything is packaged. What a
 premature tag costs is a **public tag pointing at a commit that fails CI**, and a burned version
 number: recovering means deleting a pushed tag or skipping to the next patch. The branch step turns
-that into an ordinary red build on a branch nobody has released from.
+that into an ordinary red build on a branch nobody has released from. Since a pull request now builds
+all ten VSIXes with the same recipe, the packaging half of a release is proven before the tag too —
+which removes a *surprise*, not the rule: the cost above is unchanged, and a branch with no PR open
+has still had none of it checked.
 
 When the user asks to "release" or "prepare a release":
 
@@ -362,11 +376,18 @@ When the user asks to "release" or "prepare a release":
    (`git log`, `git diff` against it).
 5. **Run the full local battery** (Verification, above). `npm run test:integration` cannot run on a
    box with no X server — say so rather than reporting it passed.
-6. **Commit and push the branch.** Do NOT tag yet.
-7. **Wait for CI on the branch to go green** — `test.yml` runs `gates`, `engines-floor` and the
-   three-OS `test` matrix on every push. **This is the step that exists because the local battery
+6. **Commit and push the branch, then open the pull request.** Do NOT tag yet. **The PR is what
+   starts CI**, not the push: `test.yml`'s push trigger is branch-limited (`main` and `test/**`), so
+   pushing a branch named anything else — `release/0.4.1`, `fix/…` — starts *no run at all*, and a
+   checks page with nothing red is indistinguishable from one that is green. Opening the PR runs
+   `test.yml` (`gates`, `engines-floor`, the three-OS `test` matrix) *and* `publish.yml`'s ten-leg
+   build on the tag's own packaging recipe, so both halves of a release — the suites and the VSIXes —
+   are proven before the tag. (Naming the branch `test/…` also triggers on push, but then a PR runs
+   everything twice; open the PR.)
+7. **Wait for CI on the PR to go green.** **This is the step that exists because the local battery
    is Linux-only**: a Windows-only defect is invisible until this runs, and one shipped undetected
-   for several releases precisely this way — see the Findings list in docs/testing.md.
+   for several releases precisely this way — see the Findings list in docs/testing.md. Silence is not
+   success: no checks on the PR means no run happened, which is a red flag, not a green one.
 8. **Fix anything red and push again.** Repeat until green. A release is not "nearly ready" while
    any platform is red.
 9. **Merge to `main`** once green.
@@ -379,24 +400,30 @@ wait to be told.
 
 ### Release Checklist (manual verification after CI)
 
-11. **Verify the publish run** — green builds on all 6 platform targets.
+11. **Verify the publish run** — green builds on all 10 matrix legs (nine platform targets plus universal).
 12. **Verify both marketplaces** — the new version live on VS Code Marketplace and Open VSX.
 
 ### What the CI does for each platform
 
 1. `npm ci` — installs all dependencies (including jimp, which webpack will bundle)
-2. Removes native Sharp, reinstalls for target platform (`--os=X --cpu=Y`)
-3. Installs `@img/sharp-wasm32` via `npm pack` + extract — the WASM fallback for older CPUs.
-   **This is the only way the tier ships**: npm always skips the `optionalDependencies` entry, so a
-   locally built VSIX has no WASM at all. The step order here is load-bearing; step 6 is what catches
-   you if you get it wrong. See `docs/image-backends.md`
-4. Installs `@emnapi/runtime` (WASM runtime dependency)
+2. Removes native Sharp, reinstalls for target platform (`--os=X --cpu=Y`, `--libc` on the alpine legs)
+3. Installs `@emnapi/runtime` (WASM runtime dependency), then prunes `@img` to the target's own
+   native pair — every `npm install` runs before the hand-extract, and the lockfile records no `libc`
+   for `@img`, so the flag alone leaves a glibc tier behind (`docs/image-backends.md`)
+4. Installs `@img/sharp-wasm32` via `npm pack` + extract, as the step's last action — the WASM
+   fallback for older CPUs. **This is the only way the tier ships**: npm always skips the
+   `optionalDependencies` entry, so a locally built VSIX has no WASM at all. The step order here is
+   load-bearing; step 6 is what catches you if you get it wrong. See `docs/image-backends.md`
 5. Runs `npx vsce package --target <platform>` which triggers webpack (bundles Jimp into `dist/extension.js`)
-6. **Verifies the WASM fallback is in the VSIX** — scans the packed zip's entry names for
-   `@img/sharp-wasm32/lib/sharp-wasm32.node.wasm` and `@emnapi/runtime/`, and fails the build if
-   either is missing. This is the artifact check for steps 3-4; it does *not* cover the rest of the
-   `.vscodeignore` un-ignore list (`docs/image-backends.md`)
-7. Uploads the VSIX as artifact `vsix-<target>`; the `publish` job downloads all six and pushes each
+6. **Verifies the VSIX carries the right binaries** — scans the packed zip's central directory and
+   fails the build unless `@img/sharp-wasm32/lib/sharp-wasm32.node.wasm` and `@emnapi/runtime/` are
+   present *and* the packed `@img/*` set is exactly `colour` + this target's own native pair +
+   `sharp-wasm32`. One rule, every leg — the check it replaced looked only for the WASM tier's two
+   paths and never read the `@img` set, which is how the four-tier `linux-arm64` VSIX 0.4.0 shipped
+   passed it green (a per-target deny-list, drafted as its successor and rejected, would have passed
+   it too). This is the artifact check for steps 3-4; it does *not* cover
+   the rest of the `.vscodeignore` un-ignore list (`docs/image-backends.md`)
+7. Uploads the VSIX as artifact `vsix-<target>`; the `publish` job downloads all ten and pushes each
    to Open VSX and the Marketplace
 
 ### Required GitHub Secrets
@@ -477,13 +504,24 @@ but vanishes on reload, and the CLI then refuses to reinstall. Extract the VSIX 
 | `linux-arm64` | Linux ARM64 |
 | `darwin-x64` | macOS Intel |
 | `darwin-arm64` | macOS Apple Silicon |
+| `alpine-x64` | musl libc, 64-bit — Alpine and slim container images |
+| `alpine-arm64` | musl libc, ARM64 |
+| `linux-armhf` | 32-bit ARM (npm calls this cpu `arm`, not `armhf`) |
+| *(universal)* | no native Sharp: WASM tier, then the Jimp backstop. The floor for any host with no build of its own |
+
+Nine platform targets plus the universal floor. VS Code matches the **server's** platform on a
+remote or WSL window, not the client's, and when nothing matches it reports "not compatible with
+the current version" — naming the version, which is never the cause. That message is VS Code's own
+and cannot be reworded, so the universal target exists to make it unreachable.
 
 ### Package Size
 
 Almost all of it is libvips, and everything else is rounding error. On Linux, Sharp splits
-`libvips-cpp.so` by libc — glibc *and* musl, ~17 MB each uncompressed — so two land in a single
-Linux VSIX; macOS ships one per arch and Windows has no separate `@img/sharp-libvips-win32-*` at all
-(the binary lives inside the platform package). `dist/extension.js` (Jimp bundled in) is under 1 MB.
+`libvips-cpp.so` by libc — glibc *and* musl, ~17 MB each uncompressed — and npm installs both
+whatever `--libc` says, so the publish recipe prunes each VSIX to its own tier (a Linux VSIX that
+carries two is the pre-prune shape; `docs/image-backends.md: one-native-tier-per-target`); macOS
+ships one per arch and Windows has no separate `@img/sharp-libvips-win32-*` at all (the binary lives
+inside the platform package). `dist/extension.js` (Jimp bundled in) is under 1 MB.
 A CI build adds the wasm32 tier on top; a locally built VSIX has no WASM at all (see Publishing
 above).
 

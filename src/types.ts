@@ -84,7 +84,7 @@ export type WebViewMessage =
   // sibling: off-screen modality. tail: sibling past the nearest two (docs/loading-architecture.md: sibling-tail-never-competes). forceReload: bypass cached bytes so a failed decode can retry.
   | { type: 'requestImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; sibling?: boolean; tail?: boolean; forceReload?: boolean }
   | { type: 'setCurrentTuple'; tupleIndex: TupleIndex }
-  // The strip as displayed, the moment the user picks a column: the sweep's aim, ahead of any load (docs/loading-architecture.md: click-reports-its-column).
+  // The strip as displayed, the moment the user picks a column: the sweep's aim, ahead of any load (docs/loading-architecture.md: picked-column-reports-itself).
   | { type: 'setCurrentModality'; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[]; visibleRows?: number }
   // Carries the modality strip as displayed: prefetch speculates on the column on screen, not the whole tuple (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column). visibleRows is the carousel's screenful — the sweep's cross radius (docs/loading-architecture.md: sweep-cross-then-row-major).
   | { type: 'tupleFullyLoaded'; tupleIndex: TupleIndex; modalityOrder: OriginalModalityIndex[]; currentDisplayIndex: DisplayModalityIndex; hiddenModalities: OriginalModalityIndex[]; visibleRows?: number }
@@ -111,6 +111,8 @@ export type ExtensionMessage =
   | { type: 'tupleAdded'; tuple: TupleInfo; tupleIndex: TupleIndex }
   | { type: 'modalityAdded'; modality: string; modalityPath: string; modalityColors: string[]; modalityIndex: OriginalModalityIndex }
   | { type: 'modalityRemoved'; modalityIndex: OriginalModalityIndex }
+  // The comparison's own directory: its path once the host has established the folder is gone, null the moment it lists again (docs/file-watching.md: root-loss-reported-as-an-edge)
+  | { type: 'rootMissing'; path: string | null }
   | { type: 'winnerUpdated'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null }
   | { type: 'winnersReset'; winners: Record<number, OriginalModalityIndex> } // For when results.txt is regenerated
   | { type: 'cropComplete'; tupleIndex: TupleIndex; count: number; paths: string[] }

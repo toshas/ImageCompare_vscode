@@ -451,13 +451,33 @@ and the field case is why: it fires only when *every* modality of the tuple has 
 265×136 grid is a whole cold tuple away and, since a tuple arrival only ever requests the on-screen
 column and its nearest siblings, may not happen at all. A tile clicked in the 5th column of an
 un-arrived row therefore left the aim on the column it already had — column 0, the strip's first,
-which is what a host with no report at all gets. So a **carousel tile click reports its own column**,
-in a `setCurrentModality` message carrying the same strip and nothing else, sent the moment the tile
-is clicked and independent of any load; both hosts feed it to the same `noteStrip`. The gap is
-narrowed, not closed: a column switched from the keyboard or a pill still waits for
-`tupleFullyLoaded`, and the keyboard half is deliberate — `[`/`]`, the arrows and the digits repeat,
-and an undwelled re-aim per repeat is the churn `sweep-centre-dwells` exists to prevent, while a
-click is a settled destination by construction. A column inserted or removed mid-sweep leaves
+which is what a host with no report at all gets. So **every route that picks a column reports it**,
+in a `setCurrentModality` message carrying the same strip and nothing else, independent of any load;
+both hosts feed it to the same `noteStrip`.
+
+The click half shipped first and left the keyboard open, and the maintainer found the seam it left:
+after one carousel click the sweep kept filling the clicked column while the arrows, the digits and
+`[` / `]` moved the view somewhere else. (The *row* was never part of that — `ArrowUp`/`ArrowDown`
+post `setCurrentTuple`, which the tuple dwell has always settled; what looks like a stuck row is that
+dwell, by design.) The keyboard is now reported too, and the churn objection that kept it out is
+answered where it arises rather than absorbed downstream: a host does not coalesce reports — each one
+moves the aim and drops what the sweep had queued (`sweep-cancels-on-reaim`), measured as eleven
+re-aims for eleven reports in both products — so the **webview** gates the post instead.
+A click that names a column (a tile, a pill) is a settled destination by construction and reports at
+once; a move that can repeat — the arrows, the digits, and a reorder, from `[` / `]` or from the
+tools buttons that call the same function — waits out a trailing-edge dwell of `LOAD_DEBOUNCE_MS` and
+reports the column the burst ended on, so a held arrow key is one report rather than one per repeat,
+and a pick cancels a dwell still waiting rather than letting it land afterwards and aim back at the
+column the user left. The `Space` peek reports nothing on purpose: it is held rather than navigated
+to and restores the column it came from on release, so reporting it would buy two re-aims for a
+gesture that ends where it started. Gating at
+the source is available here and is not available for the row: `setCurrentTuple` has a second
+consumer that must stay ungated (`cancelImageLoads`), while `setCurrentModality` has exactly one, so
+the coalescing also keeps a held key off the wire. And only the webview can tell a pick from a burst
+at all — the policy sees one message shape, whoever sent it. That gate is `ColumnReportGate`
+(`src/webview/tupleLoadPlan.ts`), pure and unit-pinned rather than DOM-pinned, and it cannot diverge
+between the products for the same reason the strip cannot: both ship the same webview bundle.
+A column inserted or removed mid-sweep leaves
 the reported strip stale until the next report, which can only *mis-order* what is left: the plan is
 fixed at open and every settle re-addresses to the file's live slot
 (`docs/tuple-matching.md: revalidate-slot-before-write`), so no slot is lost by it. The decision — what any of it means for order
@@ -991,6 +1011,38 @@ A frame can fail to decode in the webview (a partial read while a training step 
 bytes first — without that the retry gets the same undecodable payload and can never succeed. Only if
 the retry also fails is the slot marked unavailable.
 
+## When there is nothing left to draw
+
+A comparison can empty out under the user — most bluntly by `rm -rf` on its root — and it arrives at
+that in two different shapes, because two detectors race. The per-file sweep commits each removal in
+turn, and the last one takes the row and then the columns it emptied, so the webview lands on **zero
+tuples**. The modality-dir watcher instead removes whole columns, and `removeModalityStep` strips
+every image but leaves the emptied rows behind, so the webview lands on **zero modalities with rows
+still in place**. Neither shape used to reach a rendered state at all: at zero tuples nothing called
+`render()` and the last drawn frame simply survived, and at zero modalities `loadTuple` turned the
+spinner on, found the (vacuously) complete cache and returned without issuing a request, so nothing
+could ever turn it off. Both are now the same terminal notice, decided by `webview/emptyNotice.ts`
+and raised at the one site (`applyEmptyNotice`) that hides the canvas.
+
+Two facts, deliberately not one message. "Every image was deleted" is all the webview can know on
+its own; "the folder no longer exists" is a fact only the host can establish, and to someone staring
+at an experiment output directory they are not the same news. The host establishes it in mode 1 only
+(the base directory is that mode's whole shape) and reports it as an edge — see
+`docs/file-watching.md: root-loss-reported-as-an-edge`. The standalone reaches the notice through the
+same shared bundle, always with the generic wording: a File System Access root handle cannot tell
+"gone" from "unreadable", and guessing would put a wrong fact on screen.
+
+The notice is not a dead end. These directories are experiment outputs and they come back; the base
+directory stays watched after its modalities are released
+(`docs/file-watching.md: watchers-released-with-modality`), and re-adoption then arrives as an
+ordinary `modalityAdded` / `tupleAdded` pair — but only because the adoption path itself was made
+reachable from a *completely* emptied scan, which it was not
+(`docs/file-watching.md: root-return-re-adopts`; the guard there returned before its first
+filesystem call, so the total-loss case — the reported repro — could never recover). Both handlers
+shift the cursor past the insertion point, which is right when there is a column or row to be past
+and off the end when there is not — so each, on the transition out of empty, re-aims at the arriving
+content instead.
+
 ## Filesystem watching
 
 Watchers are primary; the existence sweep is a fallback for mounts where they don't fire. Which
@@ -1058,6 +1110,17 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`empty-comparison-is-terminal`** — a comparison with no rows *or* no columns left renders a
+  terminal notice: the spinner off, **every** surface that can carry the last frame cleared — the
+  canvas hidden *and* the floating panel's minimap (plus its viewport rect), which is a second copy
+  of the same image and was exactly the "preview of the very last image it saw" in the report — and
+  no request issued (nothing would answer one, and the reply is what clears a spinner —
+  `reply-exactly-once`). It is raised at one site, from a pure decision
+  (`webview/emptyNotice.ts`), so both shapes and all three modes reach the identical state, and it
+  is terminal only for as long as the emptiness is: the same site clears it, the row and column add
+  handlers re-aim the cursor at arriving content when they are what ends the empty state, and the
+  host side of that return is `docs/file-watching.md: root-return-re-adopts`. A notice that survives
+  the folder's return is a worse bug than the spinner it replaced.
 - **`reply-exactly-once`** — every `requestImage` yields exactly one terminal reply (`image` or
   `imageError`), re-addressed to the slot the file occupies at delivery. When the file has left the
   view the reply still goes to the enqueued slot — even one that no longer exists, which the
@@ -1210,19 +1273,31 @@ mount latency — but the same shape applies, so neither product can quietly div
   modality index aims at whatever column happens to sit at that original position, which on an
   un-rearranged strip is silently correct and on a rearranged one is silently wrong
   (`docs/tuple-matching.md: wire-index-is-original`).
-- **`click-reports-its-column`** — the aim's column is reported when the user *picks* it, not when
-  the tuple it belongs to finishes loading. `tupleFullyLoaded` fires only once every modality of a
+- **`picked-column-reports-itself`** — the aim's column is reported when the user *picks* it, not when
+  the tuple it belongs to finishes loading, and **every** route that picks one reports: a carousel
+  tile, a pill, the arrows, the digits, and a `[`/`]` reorder, which moves no column but re-permutes
+  the strip the aim ranks the neighbours over. `tupleFullyLoaded` fires only once every modality of a
   tuple has arrived, so on a wide cold session it is far away or never comes, and until then the aim
-  keeps whatever column it last had — the strip's first, i.e. column 0, when it never had one. A
-  carousel tile click therefore posts `setCurrentModality` — the strip as displayed, unconditionally,
-  even when the clicked column is already on screen, because no report may have carried it yet. A pill
-  or keyboard switch still does not: a narrowed gap, not a closed one, described above. **Both**
-  hosts forward it to the same `SweepAimPolicy.noteStrip`, which un-permutes it
-  (`docs/tuple-matching.md: wire-index-is-original`). Three sites, each silently leaving the sweep
-  filling a column nobody is looking at: the post (`webview/main.ts`) and the two host handlers
-  (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that drops the message reproduces the
-  bug in that product alone, which is exactly the asymmetry the shared policy was made to prevent
-  (`docs/standalone.md: host-supplies-data-not-policy`). The report claims nothing about loading, so
+  keeps whatever column it last had — the strip's first, i.e. column 0, when it never had one. Each
+  route therefore posts `setCurrentModality` — the strip as displayed, unconditionally, even when the
+  picked column is already on screen, because no report may have carried it yet. The routes differ
+  only in *when*: a click that names a column is a settled destination and reports at once, while a
+  move that can repeat reports on a trailing-edge dwell of `LOAD_DEBOUNCE_MS` — exactly one report per
+  settled keypress, exactly one per held burst, and a pick cancels a burst still waiting rather than
+  letting it land after the click and aim back at the column the user left. The `Space` peek is the
+  one deliberate exclusion, described above. That dwell is the
+  webview's rather than the policy's, and both halves of the reason are load-bearing: the policy
+  cannot tell a pick from a burst (one message shape), and gating at the source is only *available*
+  here because `setCurrentModality` has a single consumer, where `setCurrentTuple` has a second one
+  that must stay ungated (`sweep-centre-dwells`). **Both** hosts forward the report to the same
+  `SweepAimPolicy.noteStrip`, which un-permutes it
+  (`docs/tuple-matching.md: wire-index-is-original`). Four sites, each silently leaving the sweep
+  filling a column nobody is looking at: the gate that decides when a report goes out
+  (`webview/tupleLoadPlan.ts`), the post and the routes that drive it (`webview/main.ts`), and the two
+  host handlers (`imageCompareProvider.ts`, `standalone/adapter.ts`) — a host that drops the message
+  reproduces the bug in that product alone, which is exactly the asymmetry the shared policy was made
+  to prevent (`docs/standalone.md: host-supplies-data-not-policy`), while a route that reports
+  through neither half of the gate reproduces it in both. The report claims nothing about loading, so
   it must not be `tupleFullyLoaded` with a lie in it: that message also drives prefetch
   (`prefetch-scoped-to-the-visible-column`).
 - **`sweep-cross-then-row-major`** — the order from that aim, and every tie-break in it. The focused

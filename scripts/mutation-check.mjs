@@ -28,10 +28,12 @@ const repoRoot = join(scriptDir, '..');
 /**
  * Each mutation names the file it edits and the suite that must kill it. Every
  * suite imports the real source, so a mutation hits src/* (or standalone/*, which the sandbox now
- * carries too: the host-equivalence suite drives the real adapter) — except the two rules at the end that
- * ARE test infrastructure (test/webview/standaloneArtifact.ts, test/webview/playwright.config.ts):
- * whether the webview layer serves a current, complete page, and how that layer sizes itself and
- * lays out its reports on a host CI never runs on. All suites live
+ * carries too: the host-equivalence suite drives the real adapter) — except the rules at the end that
+ * are not source at all: test infrastructure (test/webview/standaloneArtifact.ts,
+ * test/webview/playwright.config.ts) — whether the webview layer serves a current, complete page, and
+ * how that layer sizes itself and lays out its reports on a host CI never runs on — and the publish
+ * workflow (.github/workflows/publish.yml), whose platform-target matrix decides which hosts can
+ * install the extension at all and which nothing else in the tree checks. All suites live
  * under test/unit/ and are run through Vitest (the tuple-matching and pngText
  * mutations are killed there; the old in-test copies are gone).
  */
@@ -374,9 +376,25 @@ const mutations = [
     name: 'thumbPack: flush() no longer awaits the queued write (shutdown returns too early)',
     file: 'src/thumbnailService.ts',
     suite: 'test/unit/thumbPackFlush.test.ts',
-    find: '    await this.queuePackSnapshot();',
-    replace: '    void this.queuePackSnapshot();',
+    find: '    await snapshot;',
+    replace: '    void snapshot;',
     killedBy: 'flush() test (files must be on disk when flush resolves)'
+  },
+  {
+    name: 'bed teardown: settleServices stops flushing (a bed removes its temp root under a live cache write)',
+    file: 'test/helpers/providerQuiesce.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '  for (const svc of services) await svc.flush();',
+    replace: '  /* mutated: services no longer settled before the bed goes */',
+    killedBy: 'shared-teardown test (it must not return while a cache write is in flight — the Windows ENOTEMPTY shape)'
+  },
+  {
+    name: 'thumbPack: flush() stops settling the per-entry writes (a shutdown outlives its own cache writes)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '    await this.settleDiskWrites();',
+    replace: '    /* mutated: per-entry writes left in flight */',
+    killedBy: 'per-entry write test (a slow .jpg write must be on disk when flush resolves, not after it)'
   },
   {
     name: 'thumbPack: snapshot entries read inside the write instead of at queue time',
@@ -998,7 +1016,7 @@ const mutations = [
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepHostEquivalence.test.ts',
     find: `      case 'setCurrentModality':
-        // A clicked column aims the sweep at once; \`tupleFullyLoaded\` can be a whole cold tuple away (docs/loading-architecture.md: click-reports-its-column).
+        // A picked column aims the sweep at once; \`tupleFullyLoaded\` can be a whole cold tuple away (docs/loading-architecture.md: picked-column-reports-itself).
         state.sweepAim.noteStrip(message);
         break;
 `,
@@ -1010,7 +1028,7 @@ const mutations = [
     file: 'standalone/adapter.ts',
     suite: 'test/unit/sweepHostEquivalence.test.ts',
     find: `    case 'setCurrentModality':
-      // Same report, same aim: neither product may learn the clicked column later than the other (docs/loading-architecture.md: click-reports-its-column).
+      // Same report, same aim: neither product may learn the picked column later than the other (docs/loading-architecture.md: picked-column-reports-itself).
       s.sweepAim.noteStrip(message);
       break;
 `,
@@ -1024,6 +1042,43 @@ const mutations = [
     find: '      s.sweepAim.noteTuple(message.tupleIndex);\n',
     replace: '',
     killedBy: 'host-equivalence test (a host that stops feeding the policy diverges from the other one)'
+  },
+  {
+    name: 'sweep aim: only the first reported strip ever counts (a later pick never re-aims)',
+    file: 'src/sweepAimPolicy.ts',
+    suite: 'test/unit/sweepHostEquivalence.test.ts',
+    find: '    if (modality === undefined) return;',
+    replace: '    if (modality === undefined || this.strip !== undefined) return;',
+    killedBy: 'every-report-re-aims phase (the aim follows the LATEST report, so a key move after a click wins)'
+  },
+  {
+    name: 'column report: a keyed column move posts at once (a held key re-aims per repeat)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: `    this.pending = this.timers.setTimer(() => {
+      this.pending = undefined;
+      this.report(displayIndex);
+    }, LOAD_DEBOUNCE_MS);`,
+    replace: '    this.report(displayIndex);',
+    killedBy: 'held-key gate test (ten repeats inside the dwell must put nothing on the wire)'
+  },
+  {
+    name: 'column report: the key dwell is never reset (each repeat arms its own report)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: `  keyed(displayIndex: number): void {
+    this.cancel();`,
+    replace: `  keyed(displayIndex: number): void {`,
+    killedBy: 'held-key gate test (a burst is one report, at the column it ended on)'
+  },
+  {
+    name: 'column report: a pick leaves the pending burst armed (it lands after the click)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: `  picked(displayIndex: number): void {
+    this.cancel();`,
+    replace: `  picked(displayIndex: number): void {`,
+    killedBy: 'pick-cancels test (a dwell armed before a click must not aim back at the column left)'
   },
   {
     name: 'pptxDeck: nextPptxName increment dropped (suggests the max, not max+1)',
@@ -2305,12 +2360,356 @@ const mutations = [
     find: "  outputDir: './test-results',\n",
     replace: '',
     killedBy: 'report-layout test (the html report must not sit inside the test output folder)'
+  },
+
+  // ── The fallback tiers: nothing tested them, and the universal target now rests on both (docs/image-backends.md) ──
+  {
+    name: 'sharpLoader: the wasm32 exemption dropped, so the retry blocks the tier it exists to reach',
+    file: 'src/sharpLoader.ts',
+    suite: 'test/unit/sharpLoaderTiers.test.ts',
+    find: "        !request.includes('wasm32')",
+    replace: "        !request.includes('wasm32-never-matches')",
+    killedBy: 'WASM-retry test (wasm32 must stay resolvable while native @img is blocked)'
+  },
+  {
+    name: 'sharpLoader: the process-global resolver left patched',
+    file: 'src/sharpLoader.ts',
+    suite: 'test/unit/sharpLoaderTiers.test.ts',
+    find: '      Module._resolveFilename = origResolve;',
+    replace: '      Module._resolveFilename = Module._resolveFilename;',
+    killedBy: 'resolver-restored tests (docs/image-backends.md: resolver-always-restored)'
+  },
+  {
+    name: 'sharpLoader: every load error retried as an old CPU',
+    file: 'src/sharpLoader.ts',
+    suite: 'test/unit/sharpLoaderTiers.test.ts',
+    find: '    if (!isUnsupportedCpu) {',
+    replace: '    if (false && !isUnsupportedCpu) {',
+    killedBy: 'no-retry test (an unexpected error must report itself, not be reported as a WASM failure)'
+  },
+  {
+    name: 'thumbnailService: the Jimp tier stops resizing, so which backend ran becomes visible',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/jimpFallback.test.ts',
+    find: '    image.scaleToFit({ w: size, h: size });',
+    replace: '    void size;',
+    killedBy: 'Jimp thumbnail test (docs/image-backends.md: backends-agree-output — same box as the Sharp branch)'
+  },
+  {
+    name: 'thumbnailService: the Jimp tier emits PNG where Sharp emits JPEG',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/jimpFallback.test.ts',
+    find: "    return image.getBuffer('image/jpeg', { quality: 70 });",
+    replace: "    return image.getBuffer('image/png');",
+    killedBy: 'Jimp thumbnail test (docs/image-backends.md: backends-agree-output — both tiers store JPEG)'
+  },
+  {
+    name: 'thumbnailService: the Jimp full-image tier reports the encoded format wrong',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/jimpFallback.test.ts',
+    find: "    const pngBuffer: Buffer = await image.getBuffer('image/png');",
+    replace: "    const pngBuffer: Buffer = await image.getBuffer('image/jpeg');",
+    killedBy: 'Jimp full-image test (the bytes must be the PNG the reply announces)'
+  },
+
+  // ── Platform targets: a missing target is a user who cannot install, reported as an engines mismatch (docs/testing.md findings) ──
+  {
+    name: 'publish workflow: the alpine-x64 target dropped from the build matrix',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            target: alpine-x64\n',
+    replace: '',
+    killedBy: 'target-set test (all nine VS Code platform targets plus universal must be built)'
+  },
+  {
+    name: 'publish workflow: the alpine matrix entry loses its musl libc',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            npm_libc: musl\n',
+    replace: '',
+    killedBy: 'npm-flags test (an alpine target without --libc=musl packages glibc under a musl name)'
+  },
+  {
+    name: 'publish workflow: the libc flag never reaches npm',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: 'LIBC_FLAG="--libc=${{ matrix.npm_libc }}"',
+    replace: 'LIBC_FLAG=""',
+    killedBy: 'libc-passthrough test (the matrix field is inert unless the install step passes it)'
+  },
+  {
+    name: 'publish workflow: the native prune dropped, so npm\'s restored glibc tier ships in the musl VSIX',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '          for dir in node_modules/@img/sharp-*; do\n',
+    replace: '          for dir in /nonexistent/@img/sharp-*; do\n',
+    killedBy: 'prune test (the flags cannot filter what the lockfile does not record; only the prune can)'
+  },
+  {
+    name: 'publish workflow: the artifact scan stops noticing strays, so a four-tier VSIX passes again',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            const stray = [...packed].filter(p => !expected.has(p)).sort();',
+    replace: '            const stray = [];',
+    killedBy: 'packed-VSIX scan tests (a per-target deny-list would leave six of the ten legs unchecked exactly this way)'
+  },
+  {
+    name: 'publish workflow: the artifact scan stops noticing a tier that is missing',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            const absent = [...expected].filter(p => !packed.has(p)).sort();',
+    replace: '            const absent = [];',
+    killedBy: 'packed-VSIX scan tests (an over-eager prune leaves a platform package with no libvips)'
+  },
+  {
+    name: 'publish workflow: the win32 carve-out dropped, so both Windows legs expect a package that does not exist',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '              if (!pkg.startsWith("sharp-win32-")) { expected.add(pkg.replace("sharp-", "sharp-libvips-")); }',
+    replace: '              expected.add(pkg.replace("sharp-", "sharp-libvips-"));',
+    killedBy: 'packed-VSIX scan tests (win32 libvips ships inside the platform package)'
+  },
+  {
+    name: 'publish workflow: an apostrophe in the scan body ends the shell string it lives in',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '// Exactly one native pair, the one this target names:',
+    replace: "// Exactly one native pair, this target's own:",
+    killedBy: 'scan-quote test (the step would die with a bash syntax error, checking nothing)'
+  },
+  {
+    name: 'publish workflow: an unquoted apostrophe lands in the verify step before the node -e window',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "        run: |\n          node -e '\n",
+    replace: "        run: |\n          echo scanning for this target's own pair\n          node -e '\n",
+    killedBy: 'shell-execution + scan-quote tests (bash exits 2 before the scan runs, and a quote count that starts at the node -e window never sees it)'
+  },
+  {
+    name: 'publish workflow: the verify step swallows its own failure, so a stray-carrying VSIX still publishes',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "\n          '\n\n      - name: Upload artifact",
+    replace: "\n          ' || true\n\n      - name: Upload artifact",
+    killedBy: 'shell-execution test (the scan still exits 1; only running the whole step under bash sees the job go green regardless)'
+  },
+
+  // ── A pull request builds every VSIX and publishes nothing: the ten-leg recipe used to run first at tag time ──
+  {
+    name: 'publish on a PR: the pull_request trigger dropped, so nothing is packaged until the tag',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '\n  pull_request:\n',
+    replace: '\n',
+    killedBy: 'PR-builds test (with no pull_request trigger not one of the ten legs runs before the irreversible step)'
+  },
+  {
+    name: 'publish on a PR: the publish job loses its event gate, so a pull request could reach a marketplace',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    if: ${{ github.event_name != 'pull_request' }}\n    runs-on: ubuntu-latest\n\n    steps:",
+    replace: '    runs-on: ubuntu-latest\n\n    steps:',
+    killedBy: 'PR-publishes-nothing test (the step-level conditions let a push-triggered PR run straight through)'
+  },
+  {
+    name: 'publish on a PR: the build job stops depending on the full three-OS matrix',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '    needs: [test, test-full]',
+    replace: '    needs: [test]',
+    killedBy: 'tag-gating test (a tag could then publish a build that fails on Windows)'
+  },
+  {
+    name: 'publish on a PR: the build gate stops requiring both suites to have succeeded',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "(needs.test.result == 'success' && needs['test-full'].result == 'success')",
+    replace: 'true',
+    killedBy: 'tag-gating test (an if: replaces the implicit success(), so a failed gate no longer stops the build)'
+  },
+  {
+    name: 'publish on a PR: the build condition uses always(), so a cancelled run still builds',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    if: ${{ !cancelled() && (github.event_name == 'pull_request'",
+    replace: "    if: ${{ always() && (github.event_name == 'pull_request'",
+    killedBy: 'tag-gating test (always() is the documented trap: it runs past a cancellation !cancelled() refuses)'
+  },
+  {
+    name: 'publish on a PR: the test job runs on a pull request again, duplicating test.yml gates',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    # test.yml's `gates` job already runs this battery on every PR; running it again here buys nothing.\n    if: ${{ github.event_name != 'pull_request' }}\n",
+    replace: '',
+    killedBy: 'no-duplicate-work test (the same battery test.yml already ran on the PR)'
+  },
+  {
+    name: 'publish on a PR: test-full calls test.yml on a pull request, doubling the three-OS matrix',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    # This IS test.yml, which triggers on pull_request itself — calling it again would double the matrix.\n    if: ${{ github.event_name != 'pull_request' }}\n",
+    replace: '',
+    killedBy: 'no-duplicate-work test (test-full IS the workflow already running on the PR)'
+  },
+  {
+    name: 'publish on a PR: superseded-run cancellation applied to tag runs too',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+    replace: '  cancel-in-progress: true',
+    killedBy: 'concurrency test (a publish cut mid-flight leaves the two marketplaces half-updated)'
+  },
+  {
+    name: 'publish on a PR: the package step opts out on a pull request, so the PR build proves nothing',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '      - name: Package extension\n        shell: bash\n',
+    replace: "      - name: Package extension\n        if: ${{ github.event_name != 'pull_request' }}\n        shell: bash\n",
+    killedBy: 'same-steps test (a green PR build that packaged nothing is worse than no PR build)'
+  },
+  {
+    name: 'publish on a PR: a job renamed out from under the model, so the reachability cases cover nothing',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '  codium-smoke:\n    needs: build',
+    replace: '  smoke:\n    needs: build',
+    killedBy: 'job-set test (a model that silently stops naming a job stops proving anything about it)'
+  },
+  {
+    name: 'publish on a PR: the ten-leg recipe copied into test.yml',
+    file: '.github/workflows/test.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '      - run: npm run compile\n      - run: npx tsc --noEmit -p tsconfig.json',
+    replace: '      - run: npm run compile\n      - run: npx vsce package --target linux-x64\n      - run: npx tsc --noEmit -p tsconfig.json',
+    killedBy: 'one-recipe test (a second copy of the packaging steps is exactly what drifts from the first)'
+  },
+  {
+    name: 'publish on a PR: the implicit success() rule dropped from the workflow model',
+    file: 'test/unit/publishTargets.test.ts',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '  return namesStatusFunction(expr) ? value : ctx.status.success && value;',
+    replace: '  return value;',
+    killedBy: 'Actions-semantics test (a model that ignores the implicit success() would call a doomed build green)'
+  },
+
+  // ── The emptied comparison's terminal notice, and the sweep's root-existence edge ──
+  {
+    name: 'emptyNotice: a comparison with rows but no columns counted as drawable',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    replace: '  if (input.tupleCount > 0 || input.modalityCount > 0) return null;',
+    killedBy: 'zero-columns test (removeModalityStep leaves the emptied rows behind, and that shape must still speak)'
+  },
+  {
+    name: 'emptyNotice: zero rows no longer ends the drawing (the last frame survives again)',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    replace: '  if (input.modalityCount > 0) return null;',
+    killedBy: 'zero-rows test (the per-file sweep path empties the rows first, whatever the columns still say)'
+  },
+  {
+    name: 'emptyNotice: a missing root outranks content (the notice survives the folder returning)',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    replace: '  if (input.missingRootPath === null && input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    killedBy: 'recovery test (a dead end that outlives the folder is worse than the spinner it replaced)'
+  },
+  {
+    name: 'emptyNotice: the two facts collapsed into one (a deleted folder reads as deleted files)',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.missingRootPath !== null) {',
+    replace: '  if (false) {',
+    killedBy: 'named-folder test (the path is the whole point of the message the host can establish)'
+  },
+  {
+    name: 'emptyNotice: the generic case stops saying what happened',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: "  return { title: 'Nothing left to compare', detail: 'Every image in this comparison was deleted or moved.' };",
+    replace: "  return { title: 'Nothing left to compare', detail: '' };",
+    killedBy: 'two-facts test (an emptied comparison must still name its own fact)'
+  },
+  {
+    name: 'root edge: a failed base-dir listing swallowed again (the reported bug)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '      await this.reportRootExistence(state, false);\n      return;',
+    replace: '      return;',
+    killedBy: 'root-gone test (rm -rf on the root must be a fact of its own, not N file deletions)'
+  },
+  {
+    name: 'root edge: the return never posted (the notice becomes a dead end)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '    await this.reportRootExistence(state, true);',
+    replace: '    void 0;',
+    killedBy: 'root-returns test (these directories are experiment outputs; they come back)'
+  },
+  {
+    name: 'root edge: posted every cycle instead of on the transition',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '    if (state.disposed || missing === (state.rootMissing ?? false)) return;',
+    replace: '    if (state.disposed) return;',
+    killedBy: 'edge-not-heartbeat test (a panel already showing the notice is told again every 10s)'
+  },
+  {
+    name: 'root edge: the folder no longer named',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: "    state.panel.webview.postMessage({ type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });",
+    replace: "    state.panel.webview.postMessage({ type: 'rootMissing', path: null });",
+    killedBy: 'root-gone test (the extension knows the path, and a nameless notice is the vague one it replaced)'
+  },
+  {
+    name: "root edge: the re-verifying probe's verdict inverted",
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '        await fs.promises.stat(state.baseUri.fsPath);\n      } catch {\n        missing = true;\n      }',
+    replace: '        await fs.promises.stat(state.baseUri.fsPath);\n        missing = true;\n      } catch {\n      }',
+    killedBy: 'root-gone test (a probe read backwards reports a live root and stays silent about a dead one)'
+  },
+  {
+    name: 're-adoption: the re-adopted directory adopted but never watched',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/rootReadoption.test.ts',
+    find: '        if (!state.watchedDirs.has(dirUri.path)) {\n          state.watchedDirs.add(dirUri.path);\n          this.watchDirectory(state, dirUri.path, scheme, true);\n        }',
+    replace: '        if (false) {\n          state.watchedDirs.add(dirUri.path);\n          this.watchDirectory(state, dirUri.path, scheme, true);\n        }',
+    killedBy: 'watcher test (a column discovered later must arm its own watcher or stay deaf until reopen)'
+  },
+  {
+    name: 're-adoption: the scheme read only from a file the emptied scan no longer has (the notice becomes permanent)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/rootReadoption.test.ts',
+    find: '    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme ?? state.baseUri.scheme;\n\n    state.adoptingDirs.add(dirUri.path);',
+    replace: '    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme;\n    if (!scheme) return;\n\n    state.adoptingDirs.add(dirUri.path);',
+    killedBy: 'root-recreated test (adoption returned before its first filesystem call, so the folder could never come back)'
+  },
+  {
+    name: 're-adoption bed: flush() stops awaiting the write, so the pack lands after teardown returns',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/rootReadoption.test.ts',
+    find: '    await snapshot;',
+    replace: '    void snapshot;',
+    killedBy: 'the teardown quiet window (a pack still being written while afterAll rmdirs the cache dir is ENOTEMPTY on Windows)'
+  },
+  {
+    name: 'root edge: the failed listing reported without re-verifying',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '    let missing = false;\n    if (!listed) {',
+    replace: '    let missing = !listed;\n    if (false) {',
+    killedBy: 'unreadable-root test (unreadable is not gone, and telling the user it is is a lie)'
   }
 ];
 
 // ── Sandbox: mutations land on a throwaway copy, never the working tree (docs/testing.md) ──
 function copyList() {
-  const roots = ['src', 'standalone', 'test', 'package.json'];
+  const roots = ['src', 'standalone', 'test', '.github', 'package.json'];
   for (const entry of readdirSync(repoRoot)) {
     if (/^tsconfig.*\.json$/.test(entry)) roots.push(entry);
   }

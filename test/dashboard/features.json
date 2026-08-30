@@ -990,6 +990,80 @@
           ]
         },
         {
+          "id": "empty-comparison-notice",
+          "name": "Emptied comparison / removed folder: the terminal notice instead of a spinner over the last frame, and recovery when content returns",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "every row deleted leaves a notice, not a spinner over the last frame"
+            },
+            {
+              "suite": "webview",
+              "match": "the last frame does not survive the last row"
+            },
+            {
+              "suite": "webview",
+              "match": "every modality removed leaves the same notice"
+            },
+            {
+              "suite": "webview",
+              "match": "a comparison whose folder is gone names the folder instead"
+            },
+            {
+              "suite": "webview",
+              "match": "a folder that comes back clears the notice and shows its images"
+            },
+            {
+              "suite": "unit",
+              "match": "says nothing while there is anything to draw"
+            },
+            {
+              "suite": "unit",
+              "match": "speaks at zero rows, whatever the columns say"
+            },
+            {
+              "suite": "unit",
+              "match": "speaks at zero columns, though the emptied rows survive"
+            },
+            {
+              "suite": "unit",
+              "match": "names the folder when the host established the root is gone"
+            },
+            {
+              "suite": "unit",
+              "match": "distinguishes an emptied comparison from a folder that went away"
+            },
+            {
+              "suite": "unit",
+              "match": "falls silent again as soon as content returns"
+            },
+            {
+              "suite": "unit",
+              "match": "the comparison root going away is reported by name"
+            },
+            {
+              "suite": "unit",
+              "match": "the root coming back clears the notice"
+            },
+            {
+              "suite": "unit",
+              "match": "a root that merely cannot be listed reports nothing"
+            },
+            {
+              "suite": "unit",
+              "match": "then re-adopts the column and rows when it comes back"
+            },
+            {
+              "suite": "unit",
+              "match": "re-arms a watcher for every re-adopted directory"
+            },
+            {
+              "suite": "unit",
+              "match": "adds nothing a second time when the next sweep sees the same recreated tree"
+            }
+          ]
+        },
+        {
           "id": "match-crossplatform",
           "name": "Path disambiguation, and the URI-vs-filesystem path space at the node fs seam (POSIX/Windows parity)",
           "tests": [
@@ -1060,6 +1134,14 @@
             },
             {
               "suite": "unit",
+              "match": "flush() also waits for the per-entry .jpg writes it started"
+            },
+            {
+              "suite": "unit",
+              "match": "the shared bed teardown does not return while a cache write is still in flight"
+            },
+            {
+              "suite": "unit",
               "match": "never publishes an empty pack over a good one"
             },
             {
@@ -1109,6 +1191,42 @@
             {
               "suite": "integration",
               "match": "a symlinked cache entry lists as File|SymbolicLink and still expires by age"
+            }
+          ]
+        },
+        {
+          "id": "backend-jimp-tier",
+          "name": "Jimp fallback tier (Sharp unavailable → real thumbnails, same box and format)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "generates a real thumbnail when Sharp is unavailable"
+            },
+            {
+              "suite": "unit",
+              "match": "converts a full image to PNG when Sharp is unavailable"
+            }
+          ]
+        },
+        {
+          "id": "backend-wasm-tier",
+          "name": "Sharp WASM tier selection (native blocked, wasm32 exempt, resolver restored)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "retries on Unsupported CPU with native @img blocked"
+            },
+            {
+              "suite": "unit",
+              "match": "restores the process-global resolver after a successful WASM retry"
+            },
+            {
+              "suite": "unit",
+              "match": "returns null instead of throwing when the WASM tier fails too"
+            },
+            {
+              "suite": "unit",
+              "match": "does not retry an error that is not the CPU/loader signature"
             }
           ]
         }
@@ -1533,6 +1651,98 @@
               "match": "parses CRLF-encoded results text"
             }
           ]
+        },
+        {
+          "id": "publish-platform-targets",
+          "name": "Platform targets published (every host VS Code can ask for, plus universal)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "builds every VS Code platform target plus a universal fallback"
+            },
+            {
+              "suite": "unit",
+              "match": "gives each native target npm flags that match its platform"
+            },
+            {
+              "suite": "unit",
+              "match": "passes the matrix libc through to npm"
+            },
+            {
+              "suite": "unit",
+              "match": "prunes the natives npm restores, keeping only the target pair"
+            },
+            {
+              "suite": "unit",
+              "match": "registers a packed-VSIX binary expectation for every matrix target"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the scan body free of the quote that would truncate it"
+            },
+            {
+              "suite": "unit",
+              "match": "accepts every pruned leg, including the two win32 shapes and universal"
+            },
+            {
+              "suite": "unit",
+              "match": "rejects the four-tier linux-arm64 shape that 0.4.0 shipped"
+            },
+            {
+              "suite": "unit",
+              "match": "rejects the pre-prune shape on every leg that can carry one, universal included"
+            },
+            {
+              "suite": "unit",
+              "match": "runs the whole step under a real shell: exit 0 for a conforming VSIX, exit 1 for a stray"
+            },
+            {
+              "suite": "unit",
+              "match": "still fails a VSIX that lost the WASM tier, or its own native binary, or names no known target"
+            }
+          ]
+        },
+        {
+          "id": "publish-pr-builds-never-publishes",
+          "name": "A pull request builds every target and publishes nothing (gates, cancellation, one recipe)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "defines exactly the jobs these cases reason about"
+            },
+            {
+              "suite": "unit",
+              "match": "builds every platform target and universal on a pull_request"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the ten-leg recipe in exactly one workflow"
+            },
+            {
+              "suite": "unit",
+              "match": "cannot reach either marketplace, or the post-publish check"
+            },
+            {
+              "suite": "unit",
+              "match": "skips its own test and test-full jobs on a pull_request"
+            },
+            {
+              "suite": "unit",
+              "match": "still runs the whole chain on a tag when both gates pass"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses to build on a tag when either gate failed or was cancelled"
+            },
+            {
+              "suite": "unit",
+              "match": "cancels a superseded pull-request run and never a tag run"
+            },
+            {
+              "suite": "unit",
+              "match": "models the Actions semantics these cases lean on"
+            }
+          ]
         }
       ]
     },
@@ -1830,6 +2040,54 @@
             {
               "suite": "webview",
               "match": "the reported column is the display position within the reported order"
+            },
+            {
+              "suite": "webview",
+              "match": "an arrow-key column move reports its column once the burst settles"
+            },
+            {
+              "suite": "webview",
+              "match": "a held arrow key reports once, at the column the burst ended on"
+            },
+            {
+              "suite": "webview",
+              "match": "a digit jump reports the column it landed on"
+            },
+            {
+              "suite": "webview",
+              "match": "a bracket reorder reports the strip it rearranged"
+            },
+            {
+              "suite": "webview",
+              "match": "a click inside the dwell window cancels the pending key report"
+            },
+            {
+              "suite": "webview",
+              "match": "a pill click reports its column at once, with no dwell"
+            },
+            {
+              "suite": "unit",
+              "match": "holds a held key open for the whole burst and reports once"
+            },
+            {
+              "suite": "unit",
+              "match": "reports exactly once for a settled keypress"
+            },
+            {
+              "suite": "unit",
+              "match": "reports once per settled keypress"
+            },
+            {
+              "suite": "unit",
+              "match": "reports a picked column at once, with no dwell of any kind"
+            },
+            {
+              "suite": "unit",
+              "match": "lets a pick cancel a burst still waiting"
+            },
+            {
+              "suite": "unit",
+              "match": "lets a key re-arm after a pick"
             }
           ]
         },

@@ -207,7 +207,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 export async function deactivate(): Promise<void> {
   if (provider) {
-    // VS Code awaits this promise, which is the only shutdown point that can await the pack write (docs/image-backends.md: thumb-pack-survives-close).
+    // VS Code awaits this promise, the only shutdown point that can await the pack and per-entry cache writes (docs/image-backends.md: thumb-pack-survives-close).
     await provider.flush();
     provider.dispose();
     provider = undefined;
