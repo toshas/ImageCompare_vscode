@@ -1830,6 +1830,54 @@
             {
               "suite": "webview",
               "match": "the reported column is the display position within the reported order"
+            },
+            {
+              "suite": "webview",
+              "match": "an arrow-key column move reports its column once the burst settles"
+            },
+            {
+              "suite": "webview",
+              "match": "a held arrow key reports once, at the column the burst ended on"
+            },
+            {
+              "suite": "webview",
+              "match": "a digit jump reports the column it landed on"
+            },
+            {
+              "suite": "webview",
+              "match": "a bracket reorder reports the strip it rearranged"
+            },
+            {
+              "suite": "webview",
+              "match": "a click inside the dwell window cancels the pending key report"
+            },
+            {
+              "suite": "webview",
+              "match": "a pill click reports its column at once, with no dwell"
+            },
+            {
+              "suite": "unit",
+              "match": "holds a held key open for the whole burst and reports once"
+            },
+            {
+              "suite": "unit",
+              "match": "reports exactly once for a settled keypress"
+            },
+            {
+              "suite": "unit",
+              "match": "reports once per settled keypress"
+            },
+            {
+              "suite": "unit",
+              "match": "reports a picked column at once, with no dwell of any kind"
+            },
+            {
+              "suite": "unit",
+              "match": "lets a pick cancel a burst still waiting"
+            },
+            {
+              "suite": "unit",
+              "match": "lets a key re-arm after a pick"
             }
           ]
         },

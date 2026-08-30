@@ -998,7 +998,7 @@ const mutations = [
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/sweepHostEquivalence.test.ts',
     find: `      case 'setCurrentModality':
-        // A clicked column aims the sweep at once; \`tupleFullyLoaded\` can be a whole cold tuple away (docs/loading-architecture.md: click-reports-its-column).
+        // A picked column aims the sweep at once; \`tupleFullyLoaded\` can be a whole cold tuple away (docs/loading-architecture.md: picked-column-reports-itself).
         state.sweepAim.noteStrip(message);
         break;
 `,
@@ -1010,7 +1010,7 @@ const mutations = [
     file: 'standalone/adapter.ts',
     suite: 'test/unit/sweepHostEquivalence.test.ts',
     find: `    case 'setCurrentModality':
-      // Same report, same aim: neither product may learn the clicked column later than the other (docs/loading-architecture.md: click-reports-its-column).
+      // Same report, same aim: neither product may learn the picked column later than the other (docs/loading-architecture.md: picked-column-reports-itself).
       s.sweepAim.noteStrip(message);
       break;
 `,
@@ -1024,6 +1024,43 @@ const mutations = [
     find: '      s.sweepAim.noteTuple(message.tupleIndex);\n',
     replace: '',
     killedBy: 'host-equivalence test (a host that stops feeding the policy diverges from the other one)'
+  },
+  {
+    name: 'sweep aim: only the first reported strip ever counts (a later pick never re-aims)',
+    file: 'src/sweepAimPolicy.ts',
+    suite: 'test/unit/sweepHostEquivalence.test.ts',
+    find: '    if (modality === undefined) return;',
+    replace: '    if (modality === undefined || this.strip !== undefined) return;',
+    killedBy: 'every-report-re-aims phase (the aim follows the LATEST report, so a key move after a click wins)'
+  },
+  {
+    name: 'column report: a keyed column move posts at once (a held key re-aims per repeat)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: `    this.pending = this.timers.setTimer(() => {
+      this.pending = undefined;
+      this.report(displayIndex);
+    }, LOAD_DEBOUNCE_MS);`,
+    replace: '    this.report(displayIndex);',
+    killedBy: 'held-key gate test (ten repeats inside the dwell must put nothing on the wire)'
+  },
+  {
+    name: 'column report: the key dwell is never reset (each repeat arms its own report)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: `  keyed(displayIndex: number): void {
+    this.cancel();`,
+    replace: `  keyed(displayIndex: number): void {`,
+    killedBy: 'held-key gate test (a burst is one report, at the column it ended on)'
+  },
+  {
+    name: 'column report: a pick leaves the pending burst armed (it lands after the click)',
+    file: 'src/webview/tupleLoadPlan.ts',
+    suite: 'test/unit/tupleLoadPlan.test.ts',
+    find: `  picked(displayIndex: number): void {
+    this.cancel();`,
+    replace: `  picked(displayIndex: number): void {`,
+    killedBy: 'pick-cancels test (a dwell armed before a click must not aim back at the column left)'
   },
   {
     name: 'pptxDeck: nextPptxName increment dropped (suggests the max, not max+1)',

@@ -71,6 +71,13 @@ const outboundLength = (page: Page): Promise<number> =>
 const getStateOf = (page: Page): Promise<any> =>
   page.evaluate(() => (window as any).__ic_test.getState());
 
+/** Every column report posted since `start`, in order — the sweep's aim moves once per one of these. */
+const columnReports = (page: Page, start: number): Promise<any[]> =>
+  page.evaluate(
+    (s) => (window as any).__ic_outbound.slice(s).filter((m: any) => m && m.type === 'setCurrentModality'),
+    start,
+  );
+
 test.describe('tuple arrival asks for one image, not the whole tuple', () => {
   test('a navigation requests only the modality on screen', async ({ page }) => {
     await loadPartial(page);
@@ -214,7 +221,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
   // host half of the same rule is pinned there instead (test/unit/sweepHostEquivalence.test.ts,
   // "drives the same burst through the real provider and the real standalone adapter", whose clicked-
   // column phase has a mutation per host).
-  // (docs/loading-architecture.md: click-reports-its-column)
+  // (docs/loading-architecture.md: picked-column-reports-itself)
   test('clicking a tile in another column reports that column at once, not when the tuple loads', async ({ page }) => {
     await loadPartial(page);
     const start = await outboundLength(page);
@@ -244,6 +251,9 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await pressAndCapture(page, ['BracketRight']);
     const order = (await getStateOf(page)).modalityOrder;
     expect(order.slice(0, 2)).toEqual([1, 0]);
+    // The reorder reports the strip it rearranged, on the key dwell; let that land before measuring,
+    // so the report read below is the click's (docs/loading-architecture.md: picked-column-reports-itself).
+    await page.waitForTimeout(PAST_DWELL_MS);
 
     const start = await outboundLength(page);
     // Display position 0 now shows original modality 1 — the tile addressed by what it shows.
@@ -253,6 +263,117 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(report, 'the click posted no setCurrentModality').toBeTruthy();
     expect(report.currentDisplayIndex).toBe(0);
     expect(report.modalityOrder).toEqual(order);
+  });
+
+  // The maintainer's report: a carousel click re-aimed the sweep and the keyboard did not, so after
+  // one click every later arrow, digit or reorder kept filling the column the click had named. The
+  // fix is a report per *picked* column, and the reason it is dwelled rather than posted per
+  // keystroke is that keys repeat: what a per-keystroke report would cost the sweep is measured at
+  // the host layer (test/unit/sweepHostEquivalence.test.ts, "every report the hosts get re-aims"),
+  // and what a burst produces is measured here, as a count. Key -> message is a DOM measurement, so
+  // this layer is the only one that can see it — the mutation harness runs Vitest suites only, and
+  // the pure gate this drives is pinned there instead (test/unit/tupleLoadPlan.test.ts).
+  // (docs/loading-architecture.md: picked-column-reports-itself)
+  test('an arrow-key column move reports its column once the burst settles', async ({ page }) => {
+    await loadPartial(page);
+    const start = await outboundLength(page);
+    await pressAndCapture(page, ['ArrowRight']);
+    // Nothing yet: a key that may be the first repeat of a held burst is not a destination.
+    expect(await columnReports(page, start)).toHaveLength(0);
+    await page.waitForTimeout(PAST_DWELL_MS);
+
+    const reports = await columnReports(page, start);
+    expect(reports).toHaveLength(1);
+    const state = await getStateOf(page);
+    expect(state.currentModalityIndex).toBe(1);
+    expect(reports[0].currentDisplayIndex).toBe(state.currentModalityIndex);
+    expect(reports[0].modalityOrder).toEqual(state.modalityOrder);
+    expect(reports[0].hiddenModalities).toEqual(state.hiddenModalities);
+    // Non-vacuous: the tuple never moved, so the report that used to carry the column never fired.
+    const since = await page.evaluate((s) => (window as any).__ic_outbound.slice(s), start);
+    expect(since.some((m: any) => m && m.type === 'tupleFullyLoaded')).toBe(false);
+  });
+
+  // The churn objection, answered by measurement: ten repeats are one report, not ten.
+  // (docs/loading-architecture.md: picked-column-reports-itself)
+  test('a held arrow key reports once, at the column the burst ended on', async ({ page }) => {
+    await loadPartial(page);
+    const start = await outboundLength(page);
+    // Ten repeats in one turn — strictly inside the dwell, which is the shape a held key produces.
+    await pressAndCapture(page, new Array(10).fill('ArrowRight'));
+    expect(await columnReports(page, start)).toHaveLength(0);
+    await page.waitForTimeout(PAST_DWELL_MS);
+
+    const reports = await columnReports(page, start);
+    expect(reports).toHaveLength(1);
+    // Cycling does not wrap, so ten steps right over six pills end on the last one.
+    expect(reports[0].currentDisplayIndex).toBe(SPEC.modalities.length - 1);
+    expect((await getStateOf(page)).currentModalityIndex).toBe(SPEC.modalities.length - 1);
+  });
+
+  // (docs/loading-architecture.md: picked-column-reports-itself)
+  test('a digit jump reports the column it landed on', async ({ page }) => {
+    await loadPartial(page);
+    const start = await outboundLength(page);
+    await pressAndCapture(page, ['Digit5']);
+    await page.waitForTimeout(PAST_DWELL_MS);
+
+    const reports = await columnReports(page, start);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].currentDisplayIndex).toBe(4);
+    expect(reports[0].modalityOrder).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  // A reorder does not change which modality is on screen, it changes what the aim's stored
+  // modalityOrder means — so the sweep ranks the neighbours of the column over a strip that no
+  // longer exists (docs/loading-architecture.md: picked-column-reports-itself).
+  test('a bracket reorder reports the strip it rearranged', async ({ page }) => {
+    await loadPartial(page);
+    const start = await outboundLength(page);
+    await pressAndCapture(page, ['BracketRight']);
+    await page.waitForTimeout(PAST_DWELL_MS);
+
+    const reports = await columnReports(page, start);
+    expect(reports).toHaveLength(1);
+    const state = await getStateOf(page);
+    expect(state.modalityOrder.slice(0, 2)).toEqual([1, 0]);
+    expect(reports[0].modalityOrder).toEqual(state.modalityOrder);
+    expect(reports[0].currentDisplayIndex).toBe(state.currentModalityIndex);
+    // The same modality, in a new place: the aim's column is unchanged, its ordering is not.
+    expect(reports[0].modalityOrder[reports[0].currentDisplayIndex]).toBe(0);
+  });
+
+  // Ordering trap: a dwell armed just before a click must not land after it and aim the sweep back
+  // at the column the user left (docs/loading-architecture.md: picked-column-reports-itself).
+  test('a click inside the dwell window cancels the pending key report', async ({ page }) => {
+    await loadPartial(page);
+    await page.locator('.carousel-row[data-tuple-index="4"] .carousel-thumb[data-modality="3"]').waitFor();
+    const start = await outboundLength(page);
+    // Both in one turn, so no timer can fire between them — a driver round-trip can outlast the dwell.
+    await page.evaluate(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true }));
+      (document.querySelector('.carousel-row[data-tuple-index="4"] .carousel-thumb[data-modality="3"]') as HTMLElement).click();
+    });
+    // The click's own report is on the wire before any dwell could fire.
+    expect(await columnReports(page, start)).toHaveLength(1);
+    await page.waitForTimeout(PAST_DWELL_MS);
+
+    const reports = await columnReports(page, start);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].currentDisplayIndex).toBe(3);
+  });
+
+  // A pill is a click, so it is a settled destination and reports at once, like a tile
+  // (docs/loading-architecture.md: picked-column-reports-itself).
+  test('a pill click reports its column at once, with no dwell', async ({ page }) => {
+    await loadPartial(page);
+    const start = await outboundLength(page);
+    await page.locator('.modality-btn[data-display-index="2"]').click();
+
+    const reports = await columnReports(page, start);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].currentDisplayIndex).toBe(2);
+    expect((await getStateOf(page)).currentModalityIndex).toBe(2);
   });
 
   test('flipping to a sibling inside the dwell window loads it at once', async ({ page }) => {

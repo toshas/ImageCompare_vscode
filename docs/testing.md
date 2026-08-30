@@ -355,6 +355,25 @@ the fix, the docs, and the CI check.
 
 ## Findings (caught by this testbed)
 
+- **Only a mouse re-aimed the sweep; the keyboard never did** *(fixed)* — reported from the field:
+  after clicking a carousel tile the sweep kept filling that column while the arrows, the digits and
+  `[` / `]` moved the view elsewhere. The click path posted `setCurrentModality`, and no keyboard
+  route posted anything at all — so the column half of the aim was frozen at whatever the last click
+  (or the last `tupleFullyLoaded`, a whole cold tuple away) had said. The *row* half was never
+  broken: `ArrowUp`/`ArrowDown` post `setCurrentTuple`, which the trailing-edge dwell has always
+  settled, so what looks like a stuck row is that dwell working as designed — no test was written for
+  a bug that was not there. The reason the keyboard had been left out was churn, and the measurement
+  is what settled where to answer it: driven through both real hosts, **eleven reports buy eleven
+  re-aims** (each drops the sweep's queued dispatches), so a report per keystroke would have been the
+  thrash `sweep-centre-dwells` exists to prevent. The gate therefore sits in the webview, which is
+  the only place that can tell a settled pick from a burst, and is pure so it can be pinned:
+  `ColumnReportGate` (`src/webview/tupleLoadPlan.ts`) reports a click at once and a key on the
+  navigation debounce — **ten held repeats are one report** (`test/webview/tuple-load.spec.ts`
+  counts them off the real bundle; `test/unit/tupleLoadPlan.test.ts` pins the gate on a fake clock,
+  `test/unit/sweepHostEquivalence.test.ts` pins the churn and the latest-report-wins rule in both
+  products), with four mutations in `scripts/mutation-check.mjs`
+  (docs/loading-architecture.md: picked-column-reports-itself).
+
 - **The poll's dir grouping silently degraded to per-file on Windows — and the fs.watch backup never
   armed there at all** *(fixed)* — `watchedDirs`, `watchersByDir` and the sweep's per-directory
   grouping are keyed in URI-path space (`/C:/data/exp1/GT`); node's `fs` takes filesystem paths. On

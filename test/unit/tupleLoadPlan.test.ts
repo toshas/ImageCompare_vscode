@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ColumnReportGate,
   LOAD_DEBOUNCE_MS,
   NEAREST_SIBLINGS,
+  ReportTimers,
   rankCovers,
   siblingLoadPlan,
   tupleArrivalPlan
@@ -132,5 +134,122 @@ describe('sibling load plan: only the nearest two are load-bearing', () => {
 
   it('is empty for a single-modality tuple', () => {
     expect(plan({ modalityOrder: [0], currentDisplayIndex: 0 })).toEqual([]);
+  });
+});
+
+
+// The other half of "where the user is": WHEN a column move is reported. The maintainer's report is
+// that only a carousel click re-aimed the sweep, so after one click the arrows, the digits and a
+// [ / ] reorder all kept filling the clicked column. Reporting per keystroke is not the fix — the
+// host re-aims per report and drops its queued dispatches each time (measured in
+// test/unit/sweepHostEquivalence.test.ts, "every report the hosts get re-aims"), which is the churn
+// the tuple dwell exists to prevent one axis over. So a pick reports at once and a key waits out the
+// burst it belongs to, here, in the one bundle both products run.
+// (docs/loading-architecture.md: picked-column-reports-itself, sweep-centre-dwells)
+
+/** A clock the test owns: timers fire only when it is advanced, and every armed one is visible. */
+function fakeClock(): ReportTimers & { advance(ms: number): void; armed(): number; delays: number[] } {
+  let now = 0;
+  let next = 1;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  return {
+    delays: [],
+    setTimer(run: () => void, ms: number): unknown {
+      const id = next++;
+      this.delays.push(ms);
+      timers.set(id, { at: now + ms, run });
+      return id;
+    },
+    clearTimer(handle: unknown): void {
+      timers.delete(handle as number);
+    },
+    advance(ms: number): void {
+      now += ms;
+      for (const [id, t] of [...timers]) {
+        if (t.at <= now) {
+          timers.delete(id);
+          t.run();
+        }
+      }
+    },
+    armed: () => timers.size
+  };
+}
+
+/** The gate plus the reports it produced, in order. */
+function gate(): { clock: ReturnType<typeof fakeClock>; sent: number[]; g: ColumnReportGate } {
+  const clock = fakeClock();
+  const sent: number[] = [];
+  return { clock, sent, g: new ColumnReportGate(clock, i => sent.push(i)) };
+}
+
+describe('column report gate: a picked column reports at once, a keyed one when the burst ends', () => {
+  it('holds a held key open for the whole burst and reports once, at the column it ended on', () => {
+    const { clock, sent, g } = gate();
+    // Ten repeats of ArrowRight, each well inside the dwell — the shape a held key produces.
+    for (const column of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      g.keyed(column);
+      clock.advance(20);
+      // Not one of them is on the wire: a host that saw ten would re-aim ten times.
+      expect(sent).toEqual([]);
+    }
+    expect(clock.armed()).toBe(1);
+
+    clock.advance(LOAD_DEBOUNCE_MS);
+    expect(sent).toEqual([10]);
+    expect(clock.armed()).toBe(0);
+  });
+
+  it('reports exactly once for a settled keypress, and waits the navigation debounce to do it', () => {
+    const { clock, sent, g } = gate();
+    g.keyed(3);
+    // Pinned from outside the gate: the wait IS the webview's navigation debounce, 150 ms.
+    expect(clock.delays).toEqual([150]);
+    clock.advance(LOAD_DEBOUNCE_MS - 1);
+    expect(sent).toEqual([]);
+    clock.advance(1);
+    expect(sent).toEqual([3]);
+    // And nothing more, however long nobody presses anything.
+    clock.advance(LOAD_DEBOUNCE_MS * 10);
+    expect(sent).toEqual([3]);
+  });
+
+  it('reports once per settled keypress — ten separate presses are ten reports', () => {
+    const { clock, sent, g } = gate();
+    for (const column of [1, 2, 3, 4, 5, 4, 3, 2, 1, 0]) {
+      g.keyed(column);
+      clock.advance(LOAD_DEBOUNCE_MS);
+    }
+    // Non-vacuous against the test above: the dwell coalesces a burst, it does not swallow moves.
+    expect(sent).toEqual([1, 2, 3, 4, 5, 4, 3, 2, 1, 0]);
+  });
+
+  it('reports a picked column at once, with no dwell of any kind', () => {
+    const { clock, sent, g } = gate();
+    g.picked(4);
+    expect(sent).toEqual([4]);
+    expect(clock.armed()).toBe(0);
+    clock.advance(LOAD_DEBOUNCE_MS * 10);
+    expect(sent).toEqual([4]);
+  });
+
+  it('lets a pick cancel a burst still waiting, so no stale report lands after it', () => {
+    const { clock, sent, g } = gate();
+    g.keyed(2);
+    clock.advance(20);
+    g.picked(5);
+    expect(sent).toEqual([5]);
+    // The pending dwell would otherwise fire here and aim the sweep back at the column left behind.
+    clock.advance(LOAD_DEBOUNCE_MS * 2);
+    expect(sent).toEqual([5]);
+    expect(clock.armed()).toBe(0);
+  });
+
+  it('lets a key re-arm after a pick, so the next burst still reports', () => {
+    const { clock, sent, g } = gate();
+    g.picked(5);
+    g.keyed(6);
+    clock.advance(LOAD_DEBOUNCE_MS);
+    expect(sent).toEqual([5, 6]);
   });
 });
