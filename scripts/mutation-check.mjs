@@ -28,10 +28,12 @@ const repoRoot = join(scriptDir, '..');
 /**
  * Each mutation names the file it edits and the suite that must kill it. Every
  * suite imports the real source, so a mutation hits src/* (or standalone/*, which the sandbox now
- * carries too: the host-equivalence suite drives the real adapter) — except the two rules at the end that
- * ARE test infrastructure (test/webview/standaloneArtifact.ts, test/webview/playwright.config.ts):
- * whether the webview layer serves a current, complete page, and how that layer sizes itself and
- * lays out its reports on a host CI never runs on. All suites live
+ * carries too: the host-equivalence suite drives the real adapter) — except the rules at the end that
+ * are not source at all: test infrastructure (test/webview/standaloneArtifact.ts,
+ * test/webview/playwright.config.ts) — whether the webview layer serves a current, complete page, and
+ * how that layer sizes itself and lays out its reports on a host CI never runs on — and the publish
+ * workflow (.github/workflows/publish.yml), whose platform-target matrix decides which hosts can
+ * install the extension at all and which nothing else in the tree checks. All suites live
  * under test/unit/ and are run through Vitest (the tuple-matching and pngText
  * mutations are killed there; the old in-test copies are gone).
  */
@@ -2305,12 +2307,144 @@ const mutations = [
     find: "  outputDir: './test-results',\n",
     replace: '',
     killedBy: 'report-layout test (the html report must not sit inside the test output folder)'
+  },
+
+  // ── The fallback tiers: nothing tested them, and the universal target now rests on both (docs/image-backends.md) ──
+  {
+    name: 'sharpLoader: the wasm32 exemption dropped, so the retry blocks the tier it exists to reach',
+    file: 'src/sharpLoader.ts',
+    suite: 'test/unit/sharpLoaderTiers.test.ts',
+    find: "        !request.includes('wasm32')",
+    replace: "        !request.includes('wasm32-never-matches')",
+    killedBy: 'WASM-retry test (wasm32 must stay resolvable while native @img is blocked)'
+  },
+  {
+    name: 'sharpLoader: the process-global resolver left patched',
+    file: 'src/sharpLoader.ts',
+    suite: 'test/unit/sharpLoaderTiers.test.ts',
+    find: '      Module._resolveFilename = origResolve;',
+    replace: '      Module._resolveFilename = Module._resolveFilename;',
+    killedBy: 'resolver-restored tests (docs/image-backends.md: resolver-always-restored)'
+  },
+  {
+    name: 'sharpLoader: every load error retried as an old CPU',
+    file: 'src/sharpLoader.ts',
+    suite: 'test/unit/sharpLoaderTiers.test.ts',
+    find: '    if (!isUnsupportedCpu) {',
+    replace: '    if (false && !isUnsupportedCpu) {',
+    killedBy: 'no-retry test (an unexpected error must report itself, not be reported as a WASM failure)'
+  },
+  {
+    name: 'thumbnailService: the Jimp tier stops resizing, so which backend ran becomes visible',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/jimpFallback.test.ts',
+    find: '    image.scaleToFit({ w: size, h: size });',
+    replace: '    void size;',
+    killedBy: 'Jimp thumbnail test (docs/image-backends.md: backends-agree-output — same box as the Sharp branch)'
+  },
+  {
+    name: 'thumbnailService: the Jimp tier emits PNG where Sharp emits JPEG',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/jimpFallback.test.ts',
+    find: "    return image.getBuffer('image/jpeg', { quality: 70 });",
+    replace: "    return image.getBuffer('image/png');",
+    killedBy: 'Jimp thumbnail test (docs/image-backends.md: backends-agree-output — both tiers store JPEG)'
+  },
+  {
+    name: 'thumbnailService: the Jimp full-image tier reports the encoded format wrong',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/jimpFallback.test.ts',
+    find: "    const pngBuffer: Buffer = await image.getBuffer('image/png');",
+    replace: "    const pngBuffer: Buffer = await image.getBuffer('image/jpeg');",
+    killedBy: 'Jimp full-image test (the bytes must be the PNG the reply announces)'
+  },
+
+  // ── Platform targets: a missing target is a user who cannot install, reported as an engines mismatch (docs/testing.md findings) ──
+  {
+    name: 'publish workflow: the alpine-x64 target dropped from the build matrix',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            target: alpine-x64\n',
+    replace: '',
+    killedBy: 'target-set test (all nine VS Code platform targets plus universal must be built)'
+  },
+  {
+    name: 'publish workflow: the alpine matrix entry loses its musl libc',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            npm_libc: musl\n',
+    replace: '',
+    killedBy: 'npm-flags test (an alpine target without --libc=musl packages glibc under a musl name)'
+  },
+  {
+    name: 'publish workflow: the libc flag never reaches npm',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: 'LIBC_FLAG="--libc=${{ matrix.npm_libc }}"',
+    replace: 'LIBC_FLAG=""',
+    killedBy: 'libc-passthrough test (the matrix field is inert unless the install step passes it)'
+  },
+  {
+    name: 'publish workflow: the native prune dropped, so npm\'s restored glibc tier ships in the musl VSIX',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '          for dir in node_modules/@img/sharp-*; do\n',
+    replace: '          for dir in /nonexistent/@img/sharp-*; do\n',
+    killedBy: 'prune test (the flags cannot filter what the lockfile does not record; only the prune can)'
+  },
+  {
+    name: 'publish workflow: the artifact scan stops noticing strays, so a four-tier VSIX passes again',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            const stray = [...packed].filter(p => !expected.has(p)).sort();',
+    replace: '            const stray = [];',
+    killedBy: 'packed-VSIX scan tests (a per-target deny-list would leave six of the ten legs unchecked exactly this way)'
+  },
+  {
+    name: 'publish workflow: the artifact scan stops noticing a tier that is missing',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '            const absent = [...expected].filter(p => !packed.has(p)).sort();',
+    replace: '            const absent = [];',
+    killedBy: 'packed-VSIX scan tests (an over-eager prune leaves a platform package with no libvips)'
+  },
+  {
+    name: 'publish workflow: the win32 carve-out dropped, so both Windows legs expect a package that does not exist',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '              if (!pkg.startsWith("sharp-win32-")) { expected.add(pkg.replace("sharp-", "sharp-libvips-")); }',
+    replace: '              expected.add(pkg.replace("sharp-", "sharp-libvips-"));',
+    killedBy: 'packed-VSIX scan tests (win32 libvips ships inside the platform package)'
+  },
+  {
+    name: 'publish workflow: an apostrophe in the scan body ends the shell string it lives in',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '// Exactly one native pair, the one this target names:',
+    replace: "// Exactly one native pair, this target's own:",
+    killedBy: 'scan-quote test (the step would die with a bash syntax error, checking nothing)'
+  },
+  {
+    name: 'publish workflow: an unquoted apostrophe lands in the verify step before the node -e window',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "        run: |\n          node -e '\n",
+    replace: "        run: |\n          echo scanning for this target's own pair\n          node -e '\n",
+    killedBy: 'shell-execution + scan-quote tests (bash exits 2 before the scan runs, and a quote count that starts at the node -e window never sees it)'
+  },
+  {
+    name: 'publish workflow: the verify step swallows its own failure, so a stray-carrying VSIX still publishes',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "\n          '\n\n      - name: Upload artifact",
+    replace: "\n          ' || true\n\n      - name: Upload artifact",
+    killedBy: 'shell-execution test (the scan still exits 1; only running the whole step under bash sees the job go green regardless)'
   }
 ];
 
 // ── Sandbox: mutations land on a throwaway copy, never the working tree (docs/testing.md) ──
 function copyList() {
-  const roots = ['src', 'standalone', 'test', 'package.json'];
+  const roots = ['src', 'standalone', 'test', '.github', 'package.json'];
   for (const entry of readdirSync(repoRoot)) {
     if (/^tsconfig.*\.json$/.test(entry)) roots.push(entry);
   }

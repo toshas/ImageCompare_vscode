@@ -62,6 +62,9 @@ jobs:
   build:
     needs: [test, test-full]
     strategy:
+      # One target's packaging defect must not cancel the other nine legs and hide its own siblings' results.
+      fail-fast: false
+      # Every target VS Code can ask for, or the host is refused with an engine-range message that names the wrong cause (docs/image-backends.md: all-platform-targets-built).
       matrix:
         include:
           # Native x64 builds
@@ -90,6 +93,25 @@ jobs:
             target: win32-arm64
             npm_os: win32
             npm_cpu: arm64
+          # Alpine/musl builds — --libc is what selects the musl libvips, not --os
+          - os: ubuntu-latest
+            target: alpine-x64
+            npm_os: linux
+            npm_cpu: x64
+            npm_libc: musl
+          - os: ubuntu-latest
+            target: alpine-arm64
+            npm_os: linux
+            npm_cpu: arm64
+            npm_libc: musl
+          # 32-bit ARM: VS Code calls the target armhf, npm calls the cpu arm
+          - os: ubuntu-latest
+            target: linux-armhf
+            npm_os: linux
+            npm_cpu: arm
+          # The platform-agnostic fallback: no native tier at all, so no npm_os/npm_cpu (docs/image-backends.md: universal-has-no-native)
+          - os: ubuntu-latest
+            target: universal
 
     runs-on: ${{ matrix.os }}
 
@@ -109,41 +131,121 @@ jobs:
         run: |
           SHARP_VERSION=$(node -p "require('./package.json').dependencies.sharp")
           rm -rf node_modules/sharp node_modules/@img
-          # Install native binaries for target platform
-          npm install --os=${{ matrix.npm_os }} --cpu=${{ matrix.npm_cpu }} --force "sharp@$SHARP_VERSION"
+          if [ "${{ matrix.target }}" = "universal" ]; then
+            # Universal ships no native tier at all; the prune below drops every one of them.
+            npm install --force "sharp@$SHARP_VERSION"
+          else
+            # Install native binaries for target platform; --libc is the only thing that picks musl over glibc
+            LIBC_FLAG=""
+            if [ -n "${{ matrix.npm_libc }}" ]; then LIBC_FLAG="--libc=${{ matrix.npm_libc }}"; fi
+            npm install --os=${{ matrix.npm_os }} --cpu=${{ matrix.npm_cpu }} $LIBC_FLAG --force "sharp@$SHARP_VERSION"
+          fi
+          # Every npm install runs FIRST: a later one re-adds the runner's own natives and can prune the
+          # hand-extracted wasm32 package (docs/image-backends.md: universal-has-no-native).
+          npm install @emnapi/runtime@^1.7.0
+          # package-lock.json records no libc for @img, so --libc filters nothing and the glibc tier lands
+          # beside the musl one; keep only this target's own pair (docs/image-backends.md: one-native-tier-per-target).
+          KEEP=""
+          if [ -n "${{ matrix.npm_cpu }}" ]; then
+            KEEP_OS="${{ matrix.npm_os }}"
+            if [ "${{ matrix.npm_libc }}" = "musl" ]; then KEEP_OS="linuxmusl"; fi
+            # On win32 the sharp-libvips-* half names no package that exists (that libvips is inside the platform package), so it keeps nothing.
+            KEEP="sharp-$KEEP_OS-${{ matrix.npm_cpu }} sharp-libvips-$KEEP_OS-${{ matrix.npm_cpu }}"
+          fi
+          for dir in node_modules/@img/sharp-*; do
+            case " $KEEP " in *" $(basename "$dir") "*) ;; *) rm -rf "$dir" ;; esac
+          done
           # Install WASM fallback for older CPUs (must use npm pack since --cpu flag doesn't work)
           npm pack "@img/sharp-wasm32@$SHARP_VERSION"
           mkdir -p node_modules/@img/sharp-wasm32
           tar -xzf img-sharp-wasm32-*.tgz -C node_modules/@img/sharp-wasm32 --strip-components=1
           rm img-sharp-wasm32-*.tgz
-          # Install WASM package dependencies
-          npm install @emnapi/runtime@^1.7.0
+          # What the packed VSIX will carry, in the log of the leg that built it.
+          ls node_modules/@img
         shell: bash
 
       - name: Package extension
-        run: npx vsce package --target ${{ matrix.target }}
-
-      # Losing the hand-extracted WASM tier is a silent perf cliff; see docs/image-backends.md.
-      - name: Verify WASM fallback is in the VSIX
         shell: bash
+        run: |
+          # A target-less package is what the marketplaces list as "(universal)".
+          if [ "${{ matrix.target }}" = "universal" ]; then
+            npx vsce package
+          else
+            npx vsce package --target ${{ matrix.target }}
+          fi
+
+      # Losing the hand-extracted WASM tier is a silent perf cliff, and a wrong-libc native tier
+      # installs and then fails at runtime; see docs/image-backends.md.
+      - name: Verify the VSIX carries the right binaries
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           node -e '
             const fs = require("fs");
+            const target = process.env.TARGET;
             const vsix = fs.readdirSync(".").find(f => f.endsWith(".vsix"));
             if (!vsix) { console.error("::error::no .vsix produced"); process.exit(1); }
             const bytes = fs.readFileSync(vsix);
-            // Zip entry names are stored uncompressed, so a substring scan needs no unzip dep.
-            const required = [
-              "node_modules/@img/sharp-wasm32/lib/sharp-wasm32.node.wasm",
-              "node_modules/@emnapi/runtime/",
-            ];
-            const missing = required.filter(p => !bytes.includes(p));
-            if (missing.length) {
-              console.error("::error::" + vsix + " is missing the WASM fallback: " + missing.join(", ") +
-                " — check the order of the Sharp install steps; see docs/image-backends.md");
+            // Names come from the zip central directory, so "which binary" is exact, not a byte scan.
+            const eocd = bytes.lastIndexOf(Buffer.from("PK\u0005\u0006", "latin1"));
+            if (eocd < 0) { console.error("::error::" + vsix + " has no zip end-of-central-directory record"); process.exit(1); }
+            const count = bytes.readUInt16LE(eocd + 10);
+            let off = bytes.readUInt32LE(eocd + 16);
+            const names = [];
+            for (let i = 0; i < count; i++) {
+              if (bytes.readUInt32LE(off) !== 0x02014b50) { console.error("::error::" + vsix + " central directory entry " + i + " is malformed"); process.exit(1); }
+              const nameLen = bytes.readUInt16LE(off + 28);
+              names.push(bytes.toString("utf8", off + 46, off + 46 + nameLen));
+              off += 46 + nameLen + bytes.readUInt16LE(off + 30) + bytes.readUInt16LE(off + 32);
+            }
+            const has = (p) => names.some(n => n.includes(p));
+            const missingWasm = ["node_modules/@img/sharp-wasm32/lib/sharp-wasm32.node.wasm", "node_modules/@emnapi/runtime/"].filter(p => !has(p));
+            if (missingWasm.length) {
+              console.error("::error::" + vsix + " is missing the WASM fallback: " + missingWasm.join(", ") +
+                " - check the order of the Sharp install steps; see docs/image-backends.md");
               process.exit(1);
             }
-            console.log("OK: " + vsix + " contains the WASM fallback");
+            const nativeByTarget = {
+              "linux-x64": "node_modules/@img/sharp-linux-x64/lib/sharp-linux-x64.node",
+              "linux-arm64": "node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64.node",
+              "linux-armhf": "node_modules/@img/sharp-linux-arm/lib/sharp-linux-arm.node",
+              "alpine-x64": "node_modules/@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64.node",
+              "alpine-arm64": "node_modules/@img/sharp-linuxmusl-arm64/lib/sharp-linuxmusl-arm64.node",
+              "darwin-x64": "node_modules/@img/sharp-darwin-x64/lib/sharp-darwin-x64.node",
+              "darwin-arm64": "node_modules/@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node",
+              "win32-x64": "node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64.node",
+              "win32-arm64": "node_modules/@img/sharp-win32-arm64/lib/sharp-win32-arm64.node",
+              "universal": null
+            };
+            if (!(target in nativeByTarget)) {
+              console.error("::error::no binary expectation is registered for target " + target + " - add one here when adding a matrix entry; see docs/image-backends.md");
+              process.exit(1);
+            }
+            const native = nativeByTarget[target];
+            if (native && !has(native)) {
+              console.error("::error::" + vsix + " (" + target + ") is missing its native Sharp binary " + native +
+                " - the --os/--cpu/--libc flags did not select it; see docs/image-backends.md");
+              process.exit(1);
+            }
+            // Exactly one native pair, the one this target names: an allow-set every leg is held to, not a per-target deny-list that leaves the unlisted legs unchecked (docs/image-backends.md: universal-has-no-native, one-native-tier-per-target).
+            const expected = new Set(["colour", "sharp-wasm32"]);
+            if (native) {
+              const pkg = native.split("/")[2];
+              expected.add(pkg);
+              // Windows ships no separate @img/sharp-libvips-win32-* package; that libvips lives inside the platform package.
+              if (!pkg.startsWith("sharp-win32-")) { expected.add(pkg.replace("sharp-", "sharp-libvips-")); }
+            }
+            const packed = new Set(names.map(n => /node_modules\/@img\/([^/]+)\//.exec(n)).filter(Boolean).map(m => m[1]));
+            const stray = [...packed].filter(p => !expected.has(p)).sort();
+            const absent = [...expected].filter(p => !packed.has(p)).sort();
+            if (stray.length || absent.length) {
+              console.error("::error::" + vsix + " (" + target + ") must carry exactly @img/{" + [...expected].sort().join(", ") + "}" +
+                (stray.length ? "; strays: " + stray.join(", ") : "") + (absent.length ? "; missing: " + absent.join(", ") : "") +
+                " - a stray or wrong-libc native tier installs and then fails at runtime, and every one is ~17 MB nobody can use; see docs/image-backends.md");
+              process.exit(1);
+            }
+            console.log("OK: " + vsix + " (" + target + ") carries exactly @img/{" + [...expected].sort().join(", ") + "}");
           '
 
       - name: Upload artifact

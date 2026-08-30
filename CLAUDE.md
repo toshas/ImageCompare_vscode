@@ -379,24 +379,30 @@ wait to be told.
 
 ### Release Checklist (manual verification after CI)
 
-11. **Verify the publish run** — green builds on all 6 platform targets.
+11. **Verify the publish run** — green builds on all 10 matrix legs (nine platform targets plus universal).
 12. **Verify both marketplaces** — the new version live on VS Code Marketplace and Open VSX.
 
 ### What the CI does for each platform
 
 1. `npm ci` — installs all dependencies (including jimp, which webpack will bundle)
-2. Removes native Sharp, reinstalls for target platform (`--os=X --cpu=Y`)
-3. Installs `@img/sharp-wasm32` via `npm pack` + extract — the WASM fallback for older CPUs.
-   **This is the only way the tier ships**: npm always skips the `optionalDependencies` entry, so a
-   locally built VSIX has no WASM at all. The step order here is load-bearing; step 6 is what catches
-   you if you get it wrong. See `docs/image-backends.md`
-4. Installs `@emnapi/runtime` (WASM runtime dependency)
+2. Removes native Sharp, reinstalls for target platform (`--os=X --cpu=Y`, `--libc` on the alpine legs)
+3. Installs `@emnapi/runtime` (WASM runtime dependency), then prunes `@img` to the target's own
+   native pair — every `npm install` runs before the hand-extract, and the lockfile records no `libc`
+   for `@img`, so the flag alone leaves a glibc tier behind (`docs/image-backends.md`)
+4. Installs `@img/sharp-wasm32` via `npm pack` + extract, as the step's last action — the WASM
+   fallback for older CPUs. **This is the only way the tier ships**: npm always skips the
+   `optionalDependencies` entry, so a locally built VSIX has no WASM at all. The step order here is
+   load-bearing; step 6 is what catches you if you get it wrong. See `docs/image-backends.md`
 5. Runs `npx vsce package --target <platform>` which triggers webpack (bundles Jimp into `dist/extension.js`)
-6. **Verifies the WASM fallback is in the VSIX** — scans the packed zip's entry names for
-   `@img/sharp-wasm32/lib/sharp-wasm32.node.wasm` and `@emnapi/runtime/`, and fails the build if
-   either is missing. This is the artifact check for steps 3-4; it does *not* cover the rest of the
-   `.vscodeignore` un-ignore list (`docs/image-backends.md`)
-7. Uploads the VSIX as artifact `vsix-<target>`; the `publish` job downloads all six and pushes each
+6. **Verifies the VSIX carries the right binaries** — scans the packed zip's central directory and
+   fails the build unless `@img/sharp-wasm32/lib/sharp-wasm32.node.wasm` and `@emnapi/runtime/` are
+   present *and* the packed `@img/*` set is exactly `colour` + this target's own native pair +
+   `sharp-wasm32`. One rule, every leg — the check it replaced looked only for the WASM tier's two
+   paths and never read the `@img` set, which is how the four-tier `linux-arm64` VSIX 0.4.0 shipped
+   passed it green (a per-target deny-list, drafted as its successor and rejected, would have passed
+   it too). This is the artifact check for steps 3-4; it does *not* cover
+   the rest of the `.vscodeignore` un-ignore list (`docs/image-backends.md`)
+7. Uploads the VSIX as artifact `vsix-<target>`; the `publish` job downloads all ten and pushes each
    to Open VSX and the Marketplace
 
 ### Required GitHub Secrets
@@ -477,13 +483,24 @@ but vanishes on reload, and the CLI then refuses to reinstall. Extract the VSIX 
 | `linux-arm64` | Linux ARM64 |
 | `darwin-x64` | macOS Intel |
 | `darwin-arm64` | macOS Apple Silicon |
+| `alpine-x64` | musl libc, 64-bit — Alpine and slim container images |
+| `alpine-arm64` | musl libc, ARM64 |
+| `linux-armhf` | 32-bit ARM (npm calls this cpu `arm`, not `armhf`) |
+| *(universal)* | no native Sharp: WASM tier, then the Jimp backstop. The floor for any host with no build of its own |
+
+Nine platform targets plus the universal floor. VS Code matches the **server's** platform on a
+remote or WSL window, not the client's, and when nothing matches it reports "not compatible with
+the current version" — naming the version, which is never the cause. That message is VS Code's own
+and cannot be reworded, so the universal target exists to make it unreachable.
 
 ### Package Size
 
 Almost all of it is libvips, and everything else is rounding error. On Linux, Sharp splits
-`libvips-cpp.so` by libc — glibc *and* musl, ~17 MB each uncompressed — so two land in a single
-Linux VSIX; macOS ships one per arch and Windows has no separate `@img/sharp-libvips-win32-*` at all
-(the binary lives inside the platform package). `dist/extension.js` (Jimp bundled in) is under 1 MB.
+`libvips-cpp.so` by libc — glibc *and* musl, ~17 MB each uncompressed — and npm installs both
+whatever `--libc` says, so the publish recipe prunes each VSIX to its own tier (a Linux VSIX that
+carries two is the pre-prune shape; `docs/image-backends.md: one-native-tier-per-target`); macOS
+ships one per arch and Windows has no separate `@img/sharp-libvips-win32-*` at all (the binary lives
+inside the platform package). `dist/extension.js` (Jimp bundled in) is under 1 MB.
 A CI build adds the wasm32 tier on top; a locally built VSIX has no WASM at all (see Publishing
 above).
 

@@ -1111,6 +1111,42 @@
               "match": "a symlinked cache entry lists as File|SymbolicLink and still expires by age"
             }
           ]
+        },
+        {
+          "id": "backend-jimp-tier",
+          "name": "Jimp fallback tier (Sharp unavailable → real thumbnails, same box and format)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "generates a real thumbnail when Sharp is unavailable"
+            },
+            {
+              "suite": "unit",
+              "match": "converts a full image to PNG when Sharp is unavailable"
+            }
+          ]
+        },
+        {
+          "id": "backend-wasm-tier",
+          "name": "Sharp WASM tier selection (native blocked, wasm32 exempt, resolver restored)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "retries on Unsupported CPU with native @img blocked"
+            },
+            {
+              "suite": "unit",
+              "match": "restores the process-global resolver after a successful WASM retry"
+            },
+            {
+              "suite": "unit",
+              "match": "returns null instead of throwing when the WASM tier fails too"
+            },
+            {
+              "suite": "unit",
+              "match": "does not retry an error that is not the CPU/loader signature"
+            }
+          ]
         }
       ]
     },
@@ -1531,6 +1567,56 @@
             {
               "suite": "unit",
               "match": "parses CRLF-encoded results text"
+            }
+          ]
+        },
+        {
+          "id": "publish-platform-targets",
+          "name": "Platform targets published (every host VS Code can ask for, plus universal)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "builds every VS Code platform target plus a universal fallback"
+            },
+            {
+              "suite": "unit",
+              "match": "gives each native target npm flags that match its platform"
+            },
+            {
+              "suite": "unit",
+              "match": "passes the matrix libc through to npm"
+            },
+            {
+              "suite": "unit",
+              "match": "prunes the natives npm restores, keeping only the target pair"
+            },
+            {
+              "suite": "unit",
+              "match": "registers a packed-VSIX binary expectation for every matrix target"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the scan body free of the quote that would truncate it"
+            },
+            {
+              "suite": "unit",
+              "match": "accepts every pruned leg, including the two win32 shapes and universal"
+            },
+            {
+              "suite": "unit",
+              "match": "rejects the four-tier linux-arm64 shape that 0.4.0 shipped"
+            },
+            {
+              "suite": "unit",
+              "match": "rejects the pre-prune shape on every leg that can carry one, universal included"
+            },
+            {
+              "suite": "unit",
+              "match": "runs the whole step under a real shell: exit 0 for a conforming VSIX, exit 1 for a stray"
+            },
+            {
+              "suite": "unit",
+              "match": "still fails a VSIX that lost the WASM tier, or its own native binary, or names no known target"
             }
           ]
         }

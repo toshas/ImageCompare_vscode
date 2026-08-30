@@ -312,11 +312,13 @@ the fix, the docs, and the CI check.
 
 ## What nothing covers
 
-- **The image backends.** Nothing tests Jimp or `sharpLoader.ts`, and nothing tests the fallback
-  chain. `test/unit/pngTextChunk.test.ts` uses Sharp only to mint a fixture PNG and re-read it — that
-  exercises Sharp incidentally, not the loader or the tiers. See the Testing section of `docs/image-backends.md` for
-  why a real test is awkward: the `Unsupported CPU` path needs a CPU no CI runner has, so it would
-  have to be simulated, and the wasm32 tier it falls back to is absent from any normal install.
+- **A real wasm32 decode.** The tiers themselves are covered now — `test/unit/sharpLoaderTiers.test.ts`
+  pins the loader's decision (native blocked, wasm32 exempt, resolver restored, null rather than a
+  throw) and `test/unit/jimpFallback.test.ts` drives the real `ThumbnailService` onto the real Jimp —
+  but no suite ever *decodes* through WASM, because `@img/sharp-wasm32` declares `cpu: ["wasm32"]` and
+  no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
+  builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
+  mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
 - **Most of `imageCompareProvider.ts`** (the largest file). The integration layer covers
   activation, command registration, real-fs scanning, results.txt I/O, and the real API's entry
   types (the dangling-symlink premise every `type & FileType.File` gate rests on), but the provider's
@@ -354,6 +356,43 @@ the fix, the docs, and the CI check.
   and silent.
 
 ## Findings (caught by this testbed)
+
+- **Three platform targets were never published, and VS Code blamed the engine range** *(fixed)* —
+  a remote-session install failed with *"not compatible with the current version of Visual Studio
+  Code (version 1.135.0)"* against `engines.vscode: ^1.85.0`, which accepts it. The message is VS
+  Code's own and names the wrong cause: the real condition is *no published target matches this
+  host*, and VS Code matches the **server's** platform, so a Linux remote decides it. Six of nine
+  targets were built — `alpine-x64`, `alpine-arm64` and `linux-armhf` were not — and nothing in the
+  repo could see that, because a platform target is a line in a workflow matrix that no suite read.
+  This one was **not** caught by the testbed; it was caught by a user, and the testbed's answer is
+  `test/unit/publishTargets.test.ts`: the matrix must carry all nine targets plus the universal
+  build, `--libc` must actually reach npm (musl and glibc are both `--os=linux`), and every matrix
+  target must have an entry in the artifact scan's expectation table. The flag is *not* sufficient,
+  which review caught before the first alpine leg ran: `package-lock.json` carries no `libc` for
+  `@img/sharp-*`, so a lockfile-driven install restores the glibc tier beside the musl one and the
+  artifact scan would have failed the leg — hence the prune the suite now also pins
+  (`docs/image-backends.md: one-native-tier-per-target`). Eight mutations, each surviving without that
+  suite. The same round covered the
+  two fallback tiers underneath, which had no tests at all while a whole platform target was about
+  to rest on them. (`docs/image-backends.md: all-platform-targets-built`, `universal-has-no-native`)
+
+- **The artifact scan passed the very VSIX that shipped the defect** *(fixed, same round)* — the
+  scan added above was a per-target *deny*-list naming strays for four of the ten legs. The other
+  six were checked only for the presence of their own binary, so anything extra rode along. Packaging
+  a `linux-arm64` VSIX with the pre-change recipe reproduced the shipped 0.4.0 artifact — four
+  libvips tiers, 36,092,593 bytes — and the scan printed `OK` and exited 0. The lesson is the one the copy-trap
+  section already makes: a check written per-case is only as good as its case list, and reading it is
+  not testing it. It is now one rule every leg is held to (the packed `@img` set must equal `colour`
+  + this target's own pair + `sharp-wasm32`), and the suite no longer pins the scan's *text* — it
+  extracts the real `node -e` program from the workflow and runs it against synthetic VSIX zips whose
+  entry names are the measured shapes, so the shipped four-tier artifact is a red test. Writing it
+  also found a second defect the text-pinning could never have: an apostrophe in the scan's own
+  comment ended the `node -e '...'` shell string, and the step died with a bash syntax error instead
+  of checking anything. That is pinned too — and so, since a quote count is only a proxy for it, is the
+  property that actually matters: one case takes the step's `run:` body verbatim and executes it under
+  the shell Actions uses (`bash --noprofile --norc -eo pipefail`), asserting exit 0 for a conforming
+  VSIX and exactly 1 for a stray-carrying one. Exactly, because bash's own exit 2 for a step that never
+  parsed is otherwise indistinguishable from the check firing — which is the shape both defects took.
 
 - **The poll's dir grouping silently degraded to per-file on Windows — and the fs.watch backup never
   armed there at all** *(fixed)* — `watchedDirs`, `watchersByDir` and the sweep's per-directory
