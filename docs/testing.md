@@ -1003,6 +1003,106 @@ the fix, the docs, and the CI check.
   The spec now counts opaque pixels on that canvas (0 after, non-zero before, so it cannot pass
   vacuously) rather than trusting a class.
 
+- **A bed that shut a provider down without awaiting what the shutdown starts — Windows-only, and the
+  third of that shape** *(fixed)* — `test/unit/rootReadoption.test.ts` passed every assertion on all
+  three OSes and was still reported FAILED on Windows: its `afterAll` threw
+  `ENOTEMPTY: directory not empty, rmdir '…\globalStorage\thumbnail-cache'`. The bed called
+  `provider.dispose()` and returned. `dispose()` is synchronous **by contract** and only *starts* the
+  pack write (`docs/image-backends.md: thumb-pack-survives-close`); `deactivate` is the one shutdown
+  path that awaits it, via `provider.flush()`. Measured on Linux, `thumbs.pack` and `thumbs.idx`
+  landed **1-3 ms after `dispose()` returned** — inside the `rmSync` that followed, which on POSIX
+  merely recreates files under a directory being walked and on Windows fails the `rmdir` outright.
+  The teardown *pattern* was not the differentiator (`pollCost.test.ts` uses byte-identical teardown
+  and is green): `rootReadoption` is the only bed that drives a **provider** into writing its
+  thumbnail cache at all. Instrumenting the `vscode` mock's `writeFile` across the whole unit layer
+  recorded **139 writes, none failed**, from exactly seven suites (grouped by their temp roots): the
+  six that construct `ThumbnailService` directly — `thumbSharedWait`, `thumbPackFlush`,
+  `thumbTierStats`, `thumbCacheExpiry`, `thumbCacheKeying`, `jimpFallback` — plus this one. Every *other* provider bed —
+  `pollCost` included, 12 beds snapshotted after teardown, 0 changed, no `globalStorage` present at
+  all — never requests a thumbnail, so no write is even attempted.
+
+  Two claims in earlier drafts of this paragraph were wrong, and both are recorded here because the
+  paragraph's whole job is to tell the next author where the trap is. The first said the other beds'
+  writes *fail with ENOENT*: they do not happen at all — right conclusion, invented mechanism. The
+  second said the six direct-`ThumbnailService` suites "all already `await flush()`", which was
+  another claim asserted rather than measured, and **two of them did not**. `jimpFallback` calls
+  `initialize()` (`:79`), which creates the cache directory, then writes a `.jpg` into it un-awaited,
+  with no `flush()` or `dispose()` anywhere and the same recursive `afterAll` `rmSync`: under a 3 s
+  write delay it went green in 716 ms with the write outstanding and `rmSync` running against the
+  directory the file was about to appear in. `thumbPackFlush` — the suite that owns this rule —
+  ended with three writes still outstanding, because the tests that exercise the fire-and-forget
+  `dispose()` deliberately await nothing and its `afterAll` slept 100 ms instead. Both are fixed the
+  same way rather than documented around: each bed keeps the services it built and `afterAll` awaits
+  `flush()` on every one before removing the roots (which also retires that `sleep(100)` — a flush is
+  what the sleep was approximating).
+
+  What replaces the assertion is a measurement, and it is the one to repeat when this comes up again:
+  run the whole unit layer with every `.jpg` write delayed 500 ms at the `node:fs` seam — a setup file
+  wrapping `fs.promises.writeFile` that logs each write's issue and completion. Two practical notes,
+  both learned by getting them wrong. `fs.rmSync` **cannot** be wrapped the same way (non-configurable
+  on the module namespace: `TypeError: Cannot redefine property`), so the file boundary has to come
+  from the runner — register the wrapper through `setupFiles`, which means either a temporary entry in
+  `test/vitest.config.ts` or a second config passed with `-c`; the probe itself is the only part that
+  can live outside the tree. Against **both pre-image beds**: 78 writes issued, 74 completed,
+  **4 outstanding at exit** — three from `thumbPackFlush`, one from `jimpFallback`. After both fixes
+  (plus the writes the two new tests issue): **82 issued, 82 completed, 0 outstanding, 0 failed,
+  627/627 green**, reproduced at 200 ms, 500 ms and 1000 ms — i.e. no unit bed now ends with a cache
+  write in flight, on any OS. A first draft of this paragraph said 3, because the count had been taken
+  after `jimpFallback` was already fixed — a before/after pair whose "before" was not re-derived from
+  the "before" tree. The lesson to carry is exactly that: a census is evidence only if every row is
+  read, and against the state it claims to describe. `ic-jimp` was in the first measurement's own
+  output all along.
+
+  Both bed teardowns now go through `settleServices` in `test/helpers/providerQuiesce.ts` rather than
+  each hand-rolling the loop, and `thumbPackFlush` pins it (a 200 ms write must have landed when it
+  returns, asserted on the write's own completion flag rather than on a file, so it cannot pass by
+  timing) with a mutation entry that removes the flush and is verified SURVIVING without that test.
+
+  Fixing the bed was **not enough, and the first attempt to stop there is the instructive part**. A
+  bed-only fix drains the work pool, then runs `deactivate`'s order — `await flush()`, `dispose()`,
+  a trailing `await flush()` for the write `dispose()` queues — and asserts the temp tree does not
+  move for 250 ms. That is causal for the *pack* write and was verified so. It is **not** causal for
+  the per-entry `.jpg`: `getThumbnail` issued `saveToDiskCache` un-awaited and returned on the next
+  line, so the pooled task settles — `pending`/`running` both 0 — while the write is still in flight,
+  and no drain can see it. Probed by making every `.jpg` write take 3 s at the mock's `writeFile`
+  seam: teardown returned in **256 ms with 0 of 2 files written**, both landing 4 s later, i.e. during
+  `afterAll`. Everything separating that from the Windows error was a wall-clock margin that shrinks
+  under load. A 250 ms window against a 1-3 ms write is `maxRetries` in better clothes.
+
+  So the writer was made awaitable in the product, where the leak actually lives:
+  `ThumbnailService` registers each fire-and-forget cache write and `flush()` settles them
+  (`src/thumbnailService.ts`, `docs/image-backends.md: thumb-pack-survives-close`). This is a real if
+  minor production defect in its own right — `deactivate` awaits `flush()`, and a `flush()` that
+  returns with writes outstanding loses the newest thumbnails when the host exits. The generate path
+  is unchanged (still un-awaited; a thumbnail must not wait on a disk round-trip), and `flush()`
+  queues the pack snapshot **before** its first `await` so the synchronous entry capture that
+  `thumb-pack-survives-close` depends on survives the new wait — the pre-existing
+  `clearMemoryCache`-race test caught that ordering immediately when it did not. Under the same 3 s
+  probe, teardown now takes **3014 ms and returns with the files on disk**. Pinned by
+  `test/unit/thumbPackFlush.test.ts` ("flush() also waits for the per-entry .jpg writes it started"),
+  which fails against the old code with the same delay injected, plus the bed's own quiet-window
+  assertion in `test/helpers/providerQuiesce.ts` — which fails on all three `rootReadoption` tests
+  against the old teardown, for the exact files the Windows error named. Three mutations in
+  `scripts/mutation-check.mjs` — `flush()` dropping its per-entry settle, the queued pack write no
+  longer awaited, and the shared bed teardown skipping its flush — each verified KILLED with the new
+  tests and SURVIVING without them.
+  The pool drain stays, for the one thing no flush can reach backwards in time — a generate still
+  running would re-dirty the pack and register a new write after the flush had settled — and not for
+  the `.jpg`, which it never covered; on this runner it measures `pending=0 running=0` at every
+  teardown, which is exactly the luck a loaded Windows runner does not owe us.
+
+  The durable lesson is the *class*, and it is now three deep: a POSIX-only mental model — `fs.watch`
+  given a URI path, `fs.access` on a dangling symlink, and now an un-awaited write racing a recursive
+  `rm` — is invisible to a green Linux suite every time. The two earlier ones were closed by faking
+  the platform's verdict at the `node:fs` seam; this one cannot be, because nothing about the *call*
+  differs — what differs is whether a concurrent write is tolerated. The rule that replaces it:
+  **make the async work finish, and assert that it did, rather than pick a window and hope**. If the
+  code offers no way to await it, that is the bug — fix it there, not in the bed. The next bed that
+  gives a provider a real `thumbnail-cache` directory inherits all of this: tear it down through
+  `test/helpers/providerQuiesce.ts`, and a bed holding a bare `ThumbnailService` must `await flush()`
+  before its temp root goes. Both warnings sit where the next author will be standing rather than only
+  here — `test/unit/pollCost.test.ts`'s `finish()` and `test/unit/jimpFallback.test.ts`'s `afterAll`.
+
 ## The generated-output rule
 
 **A generator writes only into a directory `.gitignore` already covers — and it writes.** Not a style

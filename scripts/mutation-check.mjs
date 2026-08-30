@@ -376,9 +376,25 @@ const mutations = [
     name: 'thumbPack: flush() no longer awaits the queued write (shutdown returns too early)',
     file: 'src/thumbnailService.ts',
     suite: 'test/unit/thumbPackFlush.test.ts',
-    find: '    await this.queuePackSnapshot();',
-    replace: '    void this.queuePackSnapshot();',
+    find: '    await snapshot;',
+    replace: '    void snapshot;',
     killedBy: 'flush() test (files must be on disk when flush resolves)'
+  },
+  {
+    name: 'bed teardown: settleServices stops flushing (a bed removes its temp root under a live cache write)',
+    file: 'test/helpers/providerQuiesce.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '  for (const svc of services) await svc.flush();',
+    replace: '  /* mutated: services no longer settled before the bed goes */',
+    killedBy: 'shared-teardown test (it must not return while a cache write is in flight — the Windows ENOTEMPTY shape)'
+  },
+  {
+    name: 'thumbPack: flush() stops settling the per-entry writes (a shutdown outlives its own cache writes)',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/thumbPackFlush.test.ts',
+    find: '    await this.settleDiskWrites();',
+    replace: '    /* mutated: per-entry writes left in flight */',
+    killedBy: 'per-entry write test (a slow .jpg write must be on disk when flush resolves, not after it)'
   },
   {
     name: 'thumbPack: snapshot entries read inside the write instead of at queue time',
@@ -2672,6 +2688,14 @@ const mutations = [
     find: '    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme ?? state.baseUri.scheme;\n\n    state.adoptingDirs.add(dirUri.path);',
     replace: '    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme;\n    if (!scheme) return;\n\n    state.adoptingDirs.add(dirUri.path);',
     killedBy: 'root-recreated test (adoption returned before its first filesystem call, so the folder could never come back)'
+  },
+  {
+    name: 're-adoption bed: flush() stops awaiting the write, so the pack lands after teardown returns',
+    file: 'src/thumbnailService.ts',
+    suite: 'test/unit/rootReadoption.test.ts',
+    find: '    await snapshot;',
+    replace: '    void snapshot;',
+    killedBy: 'the teardown quiet window (a pack still being written while afterAll rmdirs the cache dir is ENOTEMPTY on Windows)'
   },
   {
     name: 'root edge: the failed listing reported without re-verifying',

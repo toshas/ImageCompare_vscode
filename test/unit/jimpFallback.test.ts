@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { Uri } from '../mocks/vscode';
 import { makeSolidPng } from '../fixtures/synthetic';
+import { settleServices, type FlushableService } from '../helpers/providerQuiesce';
 
 // The last tier of the chain (docs/image-backends.md): Sharp absent -> Jimp. Nothing tested it, and
 // the universal VSIX now ships with no native tier at all, so this is the tier a whole platform
@@ -14,7 +15,12 @@ import { makeSolidPng } from '../fixtures/synthetic';
 // JPEG's SOF marker, so neither end of the assertion comes from an image library.
 
 const tmpRoots: string[] = [];
-afterAll(() => {
+// Every service this file built: `initialize()` creates a real thumbnail-cache dir and `getThumbnail`
+// writes into it un-awaited, so without the flush a .jpg can land inside the rmSync below — invisible
+// on POSIX, ENOTEMPTY on Windows (docs/image-backends.md: thumb-pack-survives-close; docs/testing.md).
+const services: FlushableService[] = [];
+afterAll(async () => {
+  await settleServices(services);
   for (const r of tmpRoots) fs.rmSync(r, { recursive: true, force: true });
 });
 
@@ -77,6 +83,7 @@ async function bedWithoutSharp(image: Buffer, name = 'src.png'): Promise<Bed> {
   const ctx = { globalStorageUri: Uri.file(path.join(root, 'storage')) } as any;
   const svc = new ThumbnailService(ctx);
   await svc.initialize();
+  services.push(svc);
   return { svc, src: Uri.file(file), sharp };
 }
 

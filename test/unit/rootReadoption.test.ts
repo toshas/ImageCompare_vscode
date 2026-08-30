@@ -6,6 +6,7 @@ import { Uri, __resetChannels, __resetConfig } from '../mocks/vscode';
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { TransportBudget } from '../../src/transportBudget';
 import { makeSolidPng } from '../fixtures/synthetic';
+import { tearDownProvider } from '../helpers/providerQuiesce';
 
 // The contract's own repro, driven end to end on the real provider: `rm -rf` the root of a mode-1
 // comparison, let every per-file deletion commit (the scan empties in place), then recreate the
@@ -22,6 +23,8 @@ const uriPath = (nativePath: string): string => Uri.file(nativePath).path;
 interface Bed {
   provider: ImageCompareProvider;
   state: Record<string, unknown>;
+  /** The temp dir afterAll removes: the session tree AND the provider's globalStorage live under it. */
+  root: string;
   base: string;
   posts: Array<{ type: string; [k: string]: unknown }>;
 }
@@ -79,7 +82,7 @@ function makeBed(tuples: number, modalities: number): Bed {
     wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
     prefetchWaves: new Map(),
   };
-  return { provider, state, base, posts };
+  return { provider, state, root, base, posts };
 }
 
 const runSweep = (bed: Bed) =>
@@ -91,9 +94,12 @@ const settle = (ms = 700) => new Promise(r => setTimeout(r, ms));
 const scanOf = (bed: Bed) => bed.state.scanResult as { tuples: Array<{ name: string; images: unknown[] }>; modalities: string[] };
 const types = (bed: Bed): string[] => bed.posts.filter(p => p.type !== '_debug').map(p => p.type);
 
-function finish(bed: Bed): void {
+// This bed is the only unit bed that gives the provider a real `thumbnail-cache` directory, so it is
+// the only one whose shutdown write has somewhere to land — which is why the Windows leg failed here
+// and nowhere else. tearDownProvider asserts the write is already done when it returns.
+async function finish(bed: Bed): Promise<void> {
   (bed.state as { disposed: boolean }).disposed = true;
-  bed.provider.dispose();
+  await tearDownProvider(bed.provider, bed.root);
 }
 
 /** Delete the root and let every per-file removal commit, which empties the scan in place. */
@@ -139,7 +145,7 @@ describe('a mode-1 root deleted and recreated (real ImageCompareProvider)', () =
     // The root's return edge precedes the content, so the notice never re-raises behind it.
     expect(types(bed).indexOf('rootMissing')).toBeLessThan(types(bed).indexOf('modalityAdded'));
     expect(bed.posts.find(p => p.type === 'rootMissing')).toEqual({ type: 'rootMissing', path: null });
-    finish(bed);
+    await finish(bed);
   });
 
   it('re-arms a watcher for every re-adopted directory', async () => {
@@ -155,7 +161,7 @@ describe('a mode-1 root deleted and recreated (real ImageCompareProvider)', () =
     expect(scanOf(bed).modalities).toEqual(['mod0', 'mod1']);
     // A column with no watcher is deaf until the panel is reopened (docs/file-watching.md: watched-dirs-have-watchers).
     for (const m of ['mod0', 'mod1']) expect(watched.has(uriPath(path.join(bed.base, m)))).toBe(true);
-    finish(bed);
+    await finish(bed);
   });
 
   it('adds nothing a second time when the next sweep sees the same recreated tree', async () => {
@@ -173,6 +179,6 @@ describe('a mode-1 root deleted and recreated (real ImageCompareProvider)', () =
     expect(types(bed)).not.toContain('tupleAdded');
     expect(scanOf(bed).modalities).toEqual(['mod0']);
     expect(scanOf(bed).tuples).toHaveLength(1);
-    finish(bed);
+    await finish(bed);
   });
 });

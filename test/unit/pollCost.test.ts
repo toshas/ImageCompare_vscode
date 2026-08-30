@@ -139,6 +139,10 @@ function countPollTasks(bed: Bed): () => number {
   return () => pollTasksByKey.get(key) ?? 0;
 }
 
+// No `thumbnail-cache` directory and no thumbnail ever requested, so this provider writes nothing and
+// plain dispose() is enough. A bed that DOES let a provider write there must tear down through
+// `test/helpers/providerQuiesce.ts` instead — an un-awaited cache write racing afterAll's rmSync is
+// ENOTEMPTY on Windows and invisible on POSIX (docs/testing.md, Findings).
 function finish(bed: Bed): void {
   (bed.state as { disposed: boolean }).disposed = true; // the 500ms rename window must not outlive the test
   bed.provider.dispose();

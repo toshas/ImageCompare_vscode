@@ -230,9 +230,13 @@ file — and the snapshot is idle-debounced, written to temp names and published
 debounce is 30s of idle, which is longer than a testing-style session lives: closing the window
 inside that window used to *cancel* the pending write, so a user who reloads often could go many
 cycles with no pack on disk at all and every open paying the per-entry read path. A close now
-publishes instead of cancelling (`thumb-pack-survives-close`), which is also the only shutdown work
-this service does — bounded by the memory-cache cap, and safe to lose, since publication is still
-rename-only.
+publishes instead of cancelling (`thumb-pack-survives-close`), which with the per-entry writes it
+settles is all the shutdown work this service does — bounded by the memory-cache cap, and safe to
+lose, since publication is still rename-only. The per-entry `.jpg` write is deliberately *not*
+awaited where it is issued — a thumbnail is on screen as soon as its bytes exist, never after a disk
+round-trip — so it is registered instead, and `flush()` is where the wait happens. A `flush()` that
+returned while those writes were outstanding dropped the newest thumbnails on a host exit, and in a
+test bed left files landing in a directory the teardown was already removing.
 
 ## What the cache key sees, and when the cache dies
 
@@ -346,11 +350,17 @@ expectation table.
   temp files. A discarded pack costs a slower open; a torn pair that served bytes would show wrong
   thumbnails. Writers never append — two windows snapshotting concurrently means the last rename
   wins wholesale, never an interleaved file.
-- **`thumb-pack-survives-close`** — a dirty snapshot is never dropped on the way out: `dispose()`
-  *starts* the pending write rather than cancelling the timer, `flush()` awaits both the write in
-  flight and the pending one, and `deactivate` awaits `flush()` (through the provider) before the
-  host exits. Entries are captured when a write is *queued*, so the `clearMemoryCache()` on the same
-  shutdown path cannot turn a queued write into an empty pack published over a good one. Nothing
+- **`thumb-pack-survives-close`** — no write the *thumbnail path* started is dropped on the way out:
+  `dispose()` *starts* the pending pack write rather than cancelling the timer, `flush()` awaits the
+  pack write in flight, the pending one **and** the per-entry cache writes still outstanding — the
+  `.jpg` save and the supersede-delete, both issued un-awaited on purpose and therefore registered
+  where they are issued — and `deactivate` awaits `flush()` (through the provider) before the host
+  exits. The age sweep `initialize()` starts is deliberately **outside** this: it only deletes, so it
+  can lose nothing and can create nothing under a directory someone is removing, and awaiting a whole
+  cache scan would buy a free re-run next session at the price of a slow exit. Entries are captured when a write is *queued* — `flush()`
+  therefore queues the snapshot before its first `await`, or the per-entry wait would reintroduce
+  exactly the gap the capture closes — so the `clearMemoryCache()` on the same shutdown path cannot
+  turn a queued write into an empty pack published over a good one. Nothing
   about a violation is visible at runtime — no error, no wrong pixel, just a cold next open, which is
   exactly the slowness this pack exists to remove.
 - **`thumb-key-sees-overwrite`** — the cache key covers the file's content identity, not just its

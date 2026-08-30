@@ -1134,6 +1134,14 @@
             },
             {
               "suite": "unit",
+              "match": "flush() also waits for the per-entry .jpg writes it started"
+            },
+            {
+              "suite": "unit",
+              "match": "the shared bed teardown does not return while a cache write is still in flight"
+            },
+            {
+              "suite": "unit",
               "match": "never publishes an empty pack over a good one"
             },
             {

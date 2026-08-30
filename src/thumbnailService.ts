@@ -36,6 +36,8 @@ export class ThumbnailService {
   private keyByUri: Map<string, string> = new Map();
   /** Serializes snapshot writes, and is what `flush()` awaits (docs/image-backends.md: thumb-pack-survives-close). */
   private packWrite: Promise<void> = Promise.resolve();
+  /** Per-entry cache writes still in flight; the generate path never waits for one, `flush()` does (docs/image-backends.md: thumb-pack-survives-close). */
+  private diskWrites: Set<Promise<unknown>> = new Set();
   /** Lazily loaded Jimp constructor — only required when Sharp is unavailable. */
   private jimpModule: any = undefined;
   private jimpLoadAttempted = false;
@@ -69,7 +71,7 @@ export class ThumbnailService {
       );
     }
 
-    this.cleanupOldCache(); // deliberately not awaited
+    this.cleanupOldCache(); // deliberately not awaited, and deliberately outside flush(): delete-only work loses nothing (docs/image-backends.md: thumb-pack-survives-close)
   }
 
   // ---------------------------------------------------------------------------
@@ -167,7 +169,7 @@ export class ThumbnailService {
       this.packDirty = true;
     }
     this.packMap?.delete(prev);
-    void this.deleteFromDiskCache(prev);
+    this.trackDiskWrite(this.deleteFromDiskCache(prev)); // registered because it is not awaited here (docs/image-backends.md: thumb-pack-survives-close)
   }
 
   /** Snapshot of the cumulative per-tier accounting; empty unless `imageCompare.debug` was on. */
@@ -240,7 +242,7 @@ export class ThumbnailService {
       const bytes = await this.generateThumbnail(uri, size);
 
       this.rememberInMemory(cacheKey, bytes, true);
-      this.saveToDiskCache(cacheKey, bytes); // deliberately not awaited
+      this.trackDiskWrite(this.saveToDiskCache(cacheKey, bytes)); // not awaited here; registered so flush() can (docs/image-backends.md: thumb-pack-survives-close)
 
       if (timed) this.noteTier('generated', startedAt, waitedMs, bytes.length, uri);
       return bytes;
@@ -465,6 +467,19 @@ export class ThumbnailService {
     }
   }
 
+  /** Register a fire-and-forget cache write, so a shutdown can wait for IO the caller deliberately did not (docs/image-backends.md: thumb-pack-survives-close). */
+  private trackDiskWrite(write: Promise<unknown>): void {
+    this.diskWrites.add(write);
+    void write.catch(() => undefined).finally(() => this.diskWrites.delete(write));
+  }
+
+  /** Resolve once no per-entry write is in flight; drained in a loop because one settling can start the next (docs/image-backends.md: thumb-pack-survives-close). */
+  private async settleDiskWrites(): Promise<void> {
+    while (this.diskWrites.size > 0) {
+      await Promise.allSettled([...this.diskWrites]);
+    }
+  }
+
   private async saveToDiskCache(cacheKey: string, bytes: Buffer): Promise<void> {
     const cacheFile = vscode.Uri.joinPath(this.cacheDir, `${cacheKey}.jpg`);
     try {
@@ -569,13 +584,16 @@ export class ThumbnailService {
     }
   }
 
-  /** Publish any pending snapshot and resolve once it is on disk; the shutdown path awaits this (docs/image-backends.md: thumb-pack-survives-close). */
+  /** Publish any pending snapshot, settle every per-entry write, and resolve once both are on disk; the shutdown path awaits this (docs/image-backends.md: thumb-pack-survives-close). */
   async flush(): Promise<void> {
     if (this.packTimer) {
       clearTimeout(this.packTimer);
       this.packTimer = undefined;
     }
-    await this.queuePackSnapshot();
+    // Queued before the first await, so the entry capture stays synchronous (docs/image-backends.md: thumb-pack-survives-close).
+    const snapshot = this.queuePackSnapshot();
+    await this.settleDiskWrites();
+    await snapshot;
   }
 
   dispose(): void {
