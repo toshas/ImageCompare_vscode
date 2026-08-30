@@ -4,6 +4,43 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-30
+
+### Added
+- **Three more platform targets** — `alpine-x64`, `alpine-arm64` and `linux-armhf`, taking the set to
+  nine plus the universal fallback. VS Code matches the **server's** platform on a remote or WSL
+  window, and when nothing matches it refuses the install with *"not compatible with the current
+  version of Visual Studio Code"* — a message that names the version, which is never the cause.
+  Reported from a musl remote where no target existed
+- **A pull request builds every target and publishes nothing**: the ten-leg build, the per-target
+  Sharp install, the libvips prune and the packed-VSIX scan now run on every PR, from the same single
+  definition a tag uses, with the publish jobs gated off by event. Packaging defects surface on the
+  PR instead of at the tag, which is the first irreversible step
+- **A comparison whose folder disappears says so** instead of showing a spinner over the last image
+  it happened to have. The panel names the missing folder, clears every surface carrying a stale
+  frame, and recovers on its own when the directory comes back — these are experiment outputs, and
+  they do come back
+
+### Changed
+- **The keyboard re-aims loading, not just the mouse.** Clicking a tile re-aimed image loading;
+  arrows, digits and `[` / `]` did not, so after a keyboard move everything kept arriving in the
+  order the last click established. Every picking route now reports through one gate, on the
+  navigation debounce, so a held arrow key produces one re-aim at the destination rather than one
+  per repeat
+- **A Linux ARM64 install is ~12 MB instead of ~36 MB.** Sharp splits libvips by libc and npm
+  installs every tier the flags do not exclude; each VSIX now carries only its own
+
+### Fixed
+- **The packaging check now reads what it packs.** The artifact scan looked only for the WASM
+  tier's two paths and never at the `@img` set, so the 0.4.0 `linux-arm64` VSIX shipped four libvips
+  tiers past a green build. It is now an allow-set every leg is held to — the published 0.4.0
+  artifact fails it
+- **Thumbnails are no longer droppable when the host exits.** `flush()` returned while per-entry
+  cache writes were still in flight, and `deactivate` awaits `flush()` before disposing, so the most
+  recent thumbnails could be lost. It now settles the writes it started
+- **The existence poll recognises a comparison's root going away** as its own fact rather than as
+  N unrelated per-file deletions, and re-adopts the directory when it returns
+
 ## [0.4.0] - 2026-08-25
 
 ### Added
