@@ -990,6 +990,80 @@
           ]
         },
         {
+          "id": "empty-comparison-notice",
+          "name": "Emptied comparison / removed folder: the terminal notice instead of a spinner over the last frame, and recovery when content returns",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "every row deleted leaves a notice, not a spinner over the last frame"
+            },
+            {
+              "suite": "webview",
+              "match": "the last frame does not survive the last row"
+            },
+            {
+              "suite": "webview",
+              "match": "every modality removed leaves the same notice"
+            },
+            {
+              "suite": "webview",
+              "match": "a comparison whose folder is gone names the folder instead"
+            },
+            {
+              "suite": "webview",
+              "match": "a folder that comes back clears the notice and shows its images"
+            },
+            {
+              "suite": "unit",
+              "match": "says nothing while there is anything to draw"
+            },
+            {
+              "suite": "unit",
+              "match": "speaks at zero rows, whatever the columns say"
+            },
+            {
+              "suite": "unit",
+              "match": "speaks at zero columns, though the emptied rows survive"
+            },
+            {
+              "suite": "unit",
+              "match": "names the folder when the host established the root is gone"
+            },
+            {
+              "suite": "unit",
+              "match": "distinguishes an emptied comparison from a folder that went away"
+            },
+            {
+              "suite": "unit",
+              "match": "falls silent again as soon as content returns"
+            },
+            {
+              "suite": "unit",
+              "match": "the comparison root going away is reported by name"
+            },
+            {
+              "suite": "unit",
+              "match": "the root coming back clears the notice"
+            },
+            {
+              "suite": "unit",
+              "match": "a root that merely cannot be listed reports nothing"
+            },
+            {
+              "suite": "unit",
+              "match": "then re-adopts the column and rows when it comes back"
+            },
+            {
+              "suite": "unit",
+              "match": "re-arms a watcher for every re-adopted directory"
+            },
+            {
+              "suite": "unit",
+              "match": "adds nothing a second time when the next sweep sees the same recreated tree"
+            }
+          ]
+        },
+        {
           "id": "match-crossplatform",
           "name": "Path disambiguation, and the URI-vs-filesystem path space at the node fs seam (POSIX/Windows parity)",
           "tests": [

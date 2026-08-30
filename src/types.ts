@@ -111,6 +111,8 @@ export type ExtensionMessage =
   | { type: 'tupleAdded'; tuple: TupleInfo; tupleIndex: TupleIndex }
   | { type: 'modalityAdded'; modality: string; modalityPath: string; modalityColors: string[]; modalityIndex: OriginalModalityIndex }
   | { type: 'modalityRemoved'; modalityIndex: OriginalModalityIndex }
+  // The comparison's own directory: its path once the host has established the folder is gone, null the moment it lists again (docs/file-watching.md: root-loss-reported-as-an-edge)
+  | { type: 'rootMissing'; path: string | null }
   | { type: 'winnerUpdated'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null }
   | { type: 'winnersReset'; winners: Record<number, OriginalModalityIndex> } // For when results.txt is regenerated
   | { type: 'cropComplete'; tupleIndex: TupleIndex; count: number; paths: string[] }

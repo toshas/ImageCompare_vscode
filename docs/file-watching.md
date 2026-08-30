@@ -81,6 +81,23 @@ candidate rule safe to be *loose*: a transient stat failure on a network mount c
 `Unknown`, and the cost of that is two `access` calls and no report. Watcher-sourced deletes don't
 need any of this because the create that follows an overwrite cancels the pending delete (below).
 
+### The root going away is its own fact
+
+`rm -rf` on a mode-1 comparison's base directory reaches the state as N independent file deletions —
+true, and useless: the user is told nothing, and the panel's only remaining signal is that it emptied
+(`docs/loading-architecture.md: empty-comparison-is-terminal`). The base-dir sweep is the one place
+that looks at the root itself every cycle, so it reports the root's existence there, as an edge:
+`rootMissing` with the directory's path when it goes, and with `null` the moment it lists again. It is
+the same shape as a candidate deletion — a failed listing is only a suspicion, re-verified by a
+`stat` before it becomes a report — because the two failure modes must not be confused: an unreadable
+directory is plainly still there, and telling the user it no longer exists is a lie the extension is
+in no position to tell. Only mode 1 has a single root to name; the branch is on `state.baseUri`
+existing, never on the numeric mode (`docs/session-files.md: mode-is-explicit`).
+
+The return edge is not the whole recovery, only its announcement: what actually repopulates the
+panel is the same adoption path a first-time modality dir takes, and that path had a guard which an
+emptied scan could never pass (`root-return-re-adopts`).
+
 ## Rename detection
 
 A rename is indistinguishable from a delete followed by an unrelated create, so deletion is
@@ -406,6 +423,35 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   the same two rules at its own listing site (an unreadable dir lists as no names; a non-`File`
   entry is filtered out), re-verifying each candidate with `stat` — the two products must not
   diverge here.
+- **`root-loss-reported-as-an-edge`** — the base directory's disappearance is reported to the
+  webview as an edge, not as a per-cycle heartbeat and not as N file deletions: `rootMissing` carries
+  the path once when the sweep's listing fails *and* a re-verifying `stat` fails too
+  (`sweep-reverifies-before-report` — an unreadable directory is not a missing one, and reports
+  nothing at all), and carries `null` once when the directory lists again, ahead of anything being
+  re-adopted from it. Both edges are posted from the same place that decides them, so the panel's
+  view of the root can never disagree with the sweep's. The webview treats the path as wording only:
+  what it shows is decided by whether anything is left to draw
+  (`docs/loading-architecture.md: empty-comparison-is-terminal`), so a root that flickers while
+  content survives changes nothing on screen. The standalone has no counterpart: a File System Access
+  root handle cannot distinguish gone from unreadable, so it reaches the same notice with the generic
+  wording rather than guessing. That silence is enforced rather than merely observed:
+  `scripts/check-sidedness.mjs` gate (e) fails if anything the standalone ships posts `rootMissing`,
+  and equally if the provider stops posting it (which would leave the rule guarding nothing).
+- **`root-return-re-adopts`** — a mode-1 comparison whose scan emptied *completely* still re-adopts
+  its root's content when it comes back. Nothing on the adoption path may be conditional on the
+  previous scan still holding a file: the URI scheme `adoptNewModalityDir` needs comes from
+  `state.baseUri` when no tracked image is left to read one from. The guard that read it only from
+  `tuples[0].images[0]` returned *before the first filesystem call*, so after `rm -rf`
+  the panel could never recover — and the whole terminal notice
+  (`docs/loading-architecture.md: empty-comparison-is-terminal`) rests on this: a notice that
+  outlives the folder's return is worse than the spinner it replaced. The rest of the path already
+  holds — the base dir stays watched when its modalities are released
+  (`watchers-released-with-modality`), the sweep is the detector that always works
+  (`new-modality-dir-adopted`), and the re-adopted directory arms its own watcher inside adoption,
+  before any file of its reaches the column insert (`watched-dirs-have-watchers`) — which is why
+  only the one site needs the fallback. Pinned end to end on the real provider over a temp dir
+  (`test/unit/rootReadoption.test.ts`): delete the root, let every removal commit, recreate, and the
+  `modalityAdded` + `tupleAdded` the webview needs are actually posted.
 - **`sweep-reverifies-before-report`** — the sweep re-verifies before reporting a deletion. A batched
   "missing" observation — a name a listing lost, or a file whose own check failed — is stale by the
   time it is acted on, so the report happens only after a second probe still fails. Both of the

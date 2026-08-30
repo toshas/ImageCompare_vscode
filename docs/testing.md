@@ -109,6 +109,8 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `thumbTierStats` | real source | Which cache tier answered `getThumbnail`, against a real cache directory: memory/pack/disk/generated attributed correctly, bytes recorded, and *nothing* counted while `imageCompare.debug` is off or after it is switched off mid-session |
 | `thumbSharedWait` | real source | What a tier's `ms` means when N requests share one pack read (the read is slowed through the mock): the tiers report per-item work only, the shared read is counted once with the callers it blocked, and the sweep rollup prints both terms |
 | `pollNoise` | real source | The existence poll's pool line: quiet cycles print once and then go silent, a busy pool prints every cycle even unchanged, and a cycle that finds a deletion still reports it |
+| `rootReadoption` | real source | The reported repro on the real provider over a temp dir: `rm -rf` the mode-1 root, every per-file removal committed (scan empties in place), then the directory recreated — the `modalityAdded`/`tupleAdded` the webview needs are posted (and after the root's return edge, not before), every re-adopted dir is watched again, and a second sweep over the same tree adds nothing. The bed builds real `watchersByDir` records, because their absence is what keeps a released dir in `watchedDirs` and re-adopts through a route production does not have |
+| `emptyNotice` | real source | The emptied comparison's terminal notice: silent while anything is drawable, speaking at zero rows *and* at zero columns (the two shapes the two detectors produce), the folder named only when the host established it is gone, and content winning over a still-flagged missing root — the recoverability rule in pure form |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
@@ -962,6 +964,44 @@ the fix, the docs, and the CI check.
   **not** check is behaviour — a shim static that exists and lies is a test's job, which is why the
   mutation that flips `isBuffer` to answer `true` for a plain `Uint8Array` is there too.
   (`docs/standalone.md: shim-covers-bundled-calls`)
+
+- **Deleting a comparison's folder left a spinner over the last image it happened to have**
+  *(fixed)* — and the layer could not see it, because **no webview spec anywhere asserted anything at
+  zero tuples or zero modalities**: 71 specs, all of them on a comparison that still had content. The
+  two shapes an emptying comparison arrives in both ended badly and for different reasons — at zero
+  rows `handleTupleDeleted` skipped `loadTuple`, and `render()` is the only writer of the canvas, so
+  the last frame simply stayed; at zero columns `loadTuple` turned the spinner on and then found the
+  vacuously-complete cache and returned, issuing no request, and a reply is the only thing that turns
+  a spinner off. Two more traps were found by *writing* the test rather than by reasoning: the row and
+  column add handlers each shift the cursor past the insertion point, which lands off the end when
+  the list was empty, so re-adoption after the folder returned would have stranded the view (the
+  recovery test caught both), and the guard had to go **ahead of** `loadTuple`'s `index >= tuples.length`
+  early return, which at zero rows returns before anything could render. A probe against the unfixed
+  bundle recorded the symptom in both shapes (`spinnerActive: true`, canvas visible, status stuck at
+  `Loading...`) before a line changed. Pinned by `test/webview/empty-comparison.spec.ts` (the rendered
+  end state and the recovery), `test/unit/emptyNotice.test.ts` (the decision, five mutations) and
+  three cases in `test/unit/pollCost.test.ts` driving the real `runDeleteSweep` (the root-existence
+  edge, six mutations). (`docs/loading-architecture.md: empty-comparison-is-terminal`,
+  `docs/file-watching.md: root-loss-reported-as-an-edge`)
+
+  Two further defects, both found by *driving* the scenario rather than reading it, and both worse
+  than the bug being fixed. **The notice was a dead end in exactly its own repro**: after a total
+  `rm -rf` the scan empties, and `adoptNewModalityDir` read the URI scheme from
+  `tuples[0].images[0]`, so it returned before its first filesystem call and no recreated directory
+  was ever adopted — the panel would have said "Nothing left to compare" forever while the job wrote
+  a new epoch beside it. A first bed missed this and reported the recovery healthy, because it left
+  `watchersByDir` empty: `unwatchModalityDir` then returns *before* dropping the dir from
+  `watchedDirs`, the sweep keeps leaf-listing a released directory, and the arrival lands through a
+  route production does not have. Fixed with a `?? state.baseUri.scheme` fallback at
+  `adoptNewModalityDir`'s scheme read — the one site on the path an emptied scan can reach; the
+  sibling read in `addNewModality` needs none, and the mutation that pretended otherwise survived
+  (`docs/file-watching.md: root-return-re-adopts`) — pinned by `test/unit/rootReadoption.test.ts`
+  with two mutations. **And the stale image survived on a second surface**: the report said "a preview of
+  the very last image it saw", and the floating panel's minimap (`#thumb-canvas`) is exactly that —
+  a full 150x94 minimap, 14 100 opaque pixels of the last frame, still on screen with the main canvas
+  hidden, in both shapes.
+  The spec now counts opaque pixels on that canvas (0 after, non-zero before, so it cannot pass
+  vacuously) rather than trusting a class.
 
 ## The generated-output rule
 

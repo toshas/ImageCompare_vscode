@@ -2574,6 +2574,112 @@ const mutations = [
     find: '  return namesStatusFunction(expr) ? value : ctx.status.success && value;',
     replace: '  return value;',
     killedBy: 'Actions-semantics test (a model that ignores the implicit success() would call a doomed build green)'
+  },
+
+  // ── The emptied comparison's terminal notice, and the sweep's root-existence edge ──
+  {
+    name: 'emptyNotice: a comparison with rows but no columns counted as drawable',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    replace: '  if (input.tupleCount > 0 || input.modalityCount > 0) return null;',
+    killedBy: 'zero-columns test (removeModalityStep leaves the emptied rows behind, and that shape must still speak)'
+  },
+  {
+    name: 'emptyNotice: zero rows no longer ends the drawing (the last frame survives again)',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    replace: '  if (input.modalityCount > 0) return null;',
+    killedBy: 'zero-rows test (the per-file sweep path empties the rows first, whatever the columns still say)'
+  },
+  {
+    name: 'emptyNotice: a missing root outranks content (the notice survives the folder returning)',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    replace: '  if (input.missingRootPath === null && input.tupleCount > 0 && input.modalityCount > 0) return null;',
+    killedBy: 'recovery test (a dead end that outlives the folder is worse than the spinner it replaced)'
+  },
+  {
+    name: 'emptyNotice: the two facts collapsed into one (a deleted folder reads as deleted files)',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: '  if (input.missingRootPath !== null) {',
+    replace: '  if (false) {',
+    killedBy: 'named-folder test (the path is the whole point of the message the host can establish)'
+  },
+  {
+    name: 'emptyNotice: the generic case stops saying what happened',
+    file: 'src/webview/emptyNotice.ts',
+    suite: 'test/unit/emptyNotice.test.ts',
+    find: "  return { title: 'Nothing left to compare', detail: 'Every image in this comparison was deleted or moved.' };",
+    replace: "  return { title: 'Nothing left to compare', detail: '' };",
+    killedBy: 'two-facts test (an emptied comparison must still name its own fact)'
+  },
+  {
+    name: 'root edge: a failed base-dir listing swallowed again (the reported bug)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '      await this.reportRootExistence(state, false);\n      return;',
+    replace: '      return;',
+    killedBy: 'root-gone test (rm -rf on the root must be a fact of its own, not N file deletions)'
+  },
+  {
+    name: 'root edge: the return never posted (the notice becomes a dead end)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '    await this.reportRootExistence(state, true);',
+    replace: '    void 0;',
+    killedBy: 'root-returns test (these directories are experiment outputs; they come back)'
+  },
+  {
+    name: 'root edge: posted every cycle instead of on the transition',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '    if (state.disposed || missing === (state.rootMissing ?? false)) return;',
+    replace: '    if (state.disposed) return;',
+    killedBy: 'edge-not-heartbeat test (a panel already showing the notice is told again every 10s)'
+  },
+  {
+    name: 'root edge: the folder no longer named',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: "    state.panel.webview.postMessage({ type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });",
+    replace: "    state.panel.webview.postMessage({ type: 'rootMissing', path: null });",
+    killedBy: 'root-gone test (the extension knows the path, and a nameless notice is the vague one it replaced)'
+  },
+  {
+    name: "root edge: the re-verifying probe's verdict inverted",
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '        await fs.promises.stat(state.baseUri.fsPath);\n      } catch {\n        missing = true;\n      }',
+    replace: '        await fs.promises.stat(state.baseUri.fsPath);\n        missing = true;\n      } catch {\n      }',
+    killedBy: 'root-gone test (a probe read backwards reports a live root and stays silent about a dead one)'
+  },
+  {
+    name: 're-adoption: the re-adopted directory adopted but never watched',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/rootReadoption.test.ts',
+    find: '        if (!state.watchedDirs.has(dirUri.path)) {\n          state.watchedDirs.add(dirUri.path);\n          this.watchDirectory(state, dirUri.path, scheme, true);\n        }',
+    replace: '        if (false) {\n          state.watchedDirs.add(dirUri.path);\n          this.watchDirectory(state, dirUri.path, scheme, true);\n        }',
+    killedBy: 'watcher test (a column discovered later must arm its own watcher or stay deaf until reopen)'
+  },
+  {
+    name: 're-adoption: the scheme read only from a file the emptied scan no longer has (the notice becomes permanent)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/rootReadoption.test.ts',
+    find: '    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme ?? state.baseUri.scheme;\n\n    state.adoptingDirs.add(dirUri.path);',
+    replace: '    const scheme = state.scanResult.tuples[0]?.images[0]?.uri.scheme;\n    if (!scheme) return;\n\n    state.adoptingDirs.add(dirUri.path);',
+    killedBy: 'root-recreated test (adoption returned before its first filesystem call, so the folder could never come back)'
+  },
+  {
+    name: 'root edge: the failed listing reported without re-verifying',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/pollCost.test.ts',
+    find: '    let missing = false;\n    if (!listed) {',
+    replace: '    let missing = !listed;\n    if (false) {',
+    killedBy: 'unreadable-root test (unreadable is not gone, and telling the user it is is a lie)'
   }
 ];
 

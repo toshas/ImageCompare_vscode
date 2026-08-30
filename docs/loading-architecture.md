@@ -1011,6 +1011,38 @@ A frame can fail to decode in the webview (a partial read while a training step 
 bytes first — without that the retry gets the same undecodable payload and can never succeed. Only if
 the retry also fails is the slot marked unavailable.
 
+## When there is nothing left to draw
+
+A comparison can empty out under the user — most bluntly by `rm -rf` on its root — and it arrives at
+that in two different shapes, because two detectors race. The per-file sweep commits each removal in
+turn, and the last one takes the row and then the columns it emptied, so the webview lands on **zero
+tuples**. The modality-dir watcher instead removes whole columns, and `removeModalityStep` strips
+every image but leaves the emptied rows behind, so the webview lands on **zero modalities with rows
+still in place**. Neither shape used to reach a rendered state at all: at zero tuples nothing called
+`render()` and the last drawn frame simply survived, and at zero modalities `loadTuple` turned the
+spinner on, found the (vacuously) complete cache and returned without issuing a request, so nothing
+could ever turn it off. Both are now the same terminal notice, decided by `webview/emptyNotice.ts`
+and raised at the one site (`applyEmptyNotice`) that hides the canvas.
+
+Two facts, deliberately not one message. "Every image was deleted" is all the webview can know on
+its own; "the folder no longer exists" is a fact only the host can establish, and to someone staring
+at an experiment output directory they are not the same news. The host establishes it in mode 1 only
+(the base directory is that mode's whole shape) and reports it as an edge — see
+`docs/file-watching.md: root-loss-reported-as-an-edge`. The standalone reaches the notice through the
+same shared bundle, always with the generic wording: a File System Access root handle cannot tell
+"gone" from "unreadable", and guessing would put a wrong fact on screen.
+
+The notice is not a dead end. These directories are experiment outputs and they come back; the base
+directory stays watched after its modalities are released
+(`docs/file-watching.md: watchers-released-with-modality`), and re-adoption then arrives as an
+ordinary `modalityAdded` / `tupleAdded` pair — but only because the adoption path itself was made
+reachable from a *completely* emptied scan, which it was not
+(`docs/file-watching.md: root-return-re-adopts`; the guard there returned before its first
+filesystem call, so the total-loss case — the reported repro — could never recover). Both handlers
+shift the cursor past the insertion point, which is right when there is a column or row to be past
+and off the end when there is not — so each, on the transition out of empty, re-aims at the arriving
+content instead.
+
 ## Filesystem watching
 
 Watchers are primary; the existence sweep is a fallback for mounts where they don't fire. Which
@@ -1078,6 +1110,17 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`empty-comparison-is-terminal`** — a comparison with no rows *or* no columns left renders a
+  terminal notice: the spinner off, **every** surface that can carry the last frame cleared — the
+  canvas hidden *and* the floating panel's minimap (plus its viewport rect), which is a second copy
+  of the same image and was exactly the "preview of the very last image it saw" in the report — and
+  no request issued (nothing would answer one, and the reply is what clears a spinner —
+  `reply-exactly-once`). It is raised at one site, from a pure decision
+  (`webview/emptyNotice.ts`), so both shapes and all three modes reach the identical state, and it
+  is terminal only for as long as the emptiness is: the same site clears it, the row and column add
+  handlers re-aim the cursor at arriving content when they are what ends the empty state, and the
+  host side of that return is `docs/file-watching.md: root-return-re-adopts`. A notice that survives
+  the folder's return is a worse bug than the spinner it replaced.
 - **`reply-exactly-once`** — every `requestImage` yields exactly one terminal reply (`image` or
   `imageError`), re-addressed to the slot the file occupies at delivery. When the file has left the
   view the reply still goes to the enqueued slot — even one that no longer exists, which the

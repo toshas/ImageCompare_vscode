@@ -100,6 +100,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
+- **`webview/emptyNotice.ts`** - Pure (no vscode/DOM): what an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
 - **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
