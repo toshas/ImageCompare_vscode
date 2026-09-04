@@ -6,26 +6,23 @@
 # silently dead from the day that config landed, which is why it is inlined below rather than
 # left where a reader would assume it still runs.
 #
-# Guard 1 — identity. What pins it is the repo-local config:
-#   git config --local user.email "anton.obukhov@gmail.com"
-# This fails loudly if that is ever missing or overridden, which is how a commit once went out
-# under the wrong account. It verifies rather than calling `git_iam_toshas`: that is a shell alias
-# (absent in a non-interactive hook) which restarts ssh-agent and sets the *global* identity,
-# re-pointing every other repo on this machine.
+# Guard 1 — the repo must commit under an identity of its OWN. The failure it exists for is a
+# commit going out under the global identity this machine inherits from another account; setting
+# user.email repo-locally is what prevents that, so its absence is the thing to catch. Deliberately
+# identity-agnostic: it asserts that a local identity is set, never which one. The address used to
+# be hardcoded here, which put a personal email in a tracked file for no benefit — the check does
+# not need to know it, and a repo that names its author in a hook cannot be shared or forked.
 #
 # Guard 2 — no personal/host identifier in any non-ignored file (scripts/check-no-personal-refs.mjs).
 
-expected_email="anton.obukhov@gmail.com"
-actual_email="$(git config user.email)"
-
-if [ "$actual_email" != "$expected_email" ]; then
-  echo "pre-commit: refusing to commit under the wrong identity." >&2
-  echo "  expected: $expected_email" >&2
-  echo "  actual:   ${actual_email:-<unset>}" >&2
+if ! git config --local --get user.email >/dev/null 2>&1; then
+  echo "pre-commit: this repo has no identity of its own." >&2
+  echo "  Without a repo-local user.email, the commit inherits your global identity," >&2
+  echo "  which is how a commit once went out under the wrong account." >&2
   echo "" >&2
   echo "  Fix (repo-local, does not touch your global identity):" >&2
-  echo "    git config --local user.email \"$expected_email\"" >&2
-  echo "    git config --local user.name  \"Anton Obukhov\"" >&2
+  echo "    git config --local user.email \"<the address this repo commits under>\"" >&2
+  echo "    git config --local user.name  \"<the name this repo commits under>\"" >&2
   echo "" >&2
   echo "  For the matching SSH key when pushing, run in your shell: git_iam_toshas" >&2
   exit 1

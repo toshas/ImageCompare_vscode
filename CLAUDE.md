@@ -12,6 +12,13 @@
   like it is live. That is not hypothetical: the identity guard sat in `.git/hooks/pre-commit`
   and had not run since the hooksPath config landed. `.githooks/pre-commit` now carries it,
   ahead of `check-no-personal-refs.mjs`.
+- **A tracked hook names nobody.** The identity guard asserts that `user.email` is set
+  *repo-locally* — never which address it is. The failure it exists for is a commit inheriting the
+  machine's global identity from another account, and an unset local value is exactly that
+  condition; the expected address adds nothing the check needs. It was hardcoded at first, which
+  put a personal email into a tracked file and past `check-no-personal-refs.mjs`, whose word list
+  and machine-path prefixes do not look for one. A repo that names its author in a hook cannot be
+  forked or shared either.
 
 ## Documentation Rules
 
