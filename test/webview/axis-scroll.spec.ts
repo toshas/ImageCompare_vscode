@@ -278,6 +278,40 @@ test.describe('axis scrolling', () => {
     expect(altTravel).toBeCloseTo(afterPlain * 5, 0);
   });
 
+  // Reported: after a sweep re-aim, scrolling froze for about a second. Every arriving thumbnail ran
+  // an attribute-selector search over the whole carousel subtree, and a re-aim delivers hundreds.
+  // Counting the searches is the discriminator — the tiles land correctly either way.
+  test('a burst of thumbnails searches the carousel DOM zero times', async ({ page }) => {
+    await loadInited(page, WIDE);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__q = 0;
+      const el = document.getElementById('carousel')!;
+      const real = el.querySelector.bind(el);
+      el.querySelector = (sel: string) => { w.__q++; return real(sel); };
+      const realAll = el.querySelectorAll.bind(el);
+      el.querySelectorAll = (sel: string) => { w.__q++; return realAll(sel); };
+    });
+
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    for (let t = 0; t < 3; t++) {
+      for (let m = 0; m < 24; m++) {
+        await page.evaluate(
+          ([tupleIndex, modalityIndex, dataUrl]) =>
+            (window as any).__ic_send({ type: 'thumbnail', tupleIndex, modalityIndex, dataUrl }),
+          [t, m, png] as [number, number, string],
+        );
+      }
+    }
+
+    expect(await page.evaluate(() => (window as any).__q)).toBe(0);
+    // The thumbnails still landed: tiles on the bound rows are painting from blob urls.
+    await expect
+      .poll(() => page.$$eval('.carousel-row .carousel-thumb', (imgs) =>
+        imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length))
+      .toBeGreaterThan(0);
+  });
+
   test('Alt makes a zoom notch travel further, and the help modal says so', async ({ page }) => {
     await loadInited(page);
     const zoomOf = () => getState(page).then((s) => s.zoom);

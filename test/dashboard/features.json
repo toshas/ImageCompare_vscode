@@ -734,6 +734,16 @@
               "match": "travels their exact sum, in one apply"
             }
           ]
+        },
+        {
+          "id": "carousel-no-dom-search",
+          "name": "Thumbnail arrivals never search the DOM",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "searches the carousel DOM zero times"
+            }
+          ]
         }
       ]
     },

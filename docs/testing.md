@@ -341,6 +341,12 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **The carousel's cost rules, by mutation.** Two of the axis-scroll spec's tests assert *how much
+  work* happens rather than what it produces: a wheel burst applying once per frame, and a thumbnail
+  burst searching the carousel DOM zero times. Both count operations through a patched
+  `querySelector`/a `MutationObserver`, which no Vitest suite can do, and both are the only evidence
+  that the fix landed — the offsets and the painted tiles are identical either way. Pre-fix they read
+  8 applies and 72 searches for 72 thumbnails; post-fix, 1 and 0.
 - **The pill strip's and the carousel's rendering rules, by mutation.** `test/webview/axis-scroll.spec.ts`
   also pins what a user *sees*: the active pill's 2px outer ring clearing the strip's box, no overlay
   scrollbar painting across the pills, a modality switch mutating class attributes and never the

@@ -1110,6 +1110,21 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`carousel-dom-never-searched`** — nothing on a per-tile or per-arrival path may search the
+  carousel's DOM. The carousel holds `pool x modalities` tiles — thousands at a wide grid — so an
+  attribute-selector search costs a subtree scan, and the two places that did it ran *per item*:
+  `handleThumbnail`/`handleThumbnailError` (and the watcher's delete/restore) searched
+  `.carousel-thumb[data-tuple=..][data-modality=..]` for **every arriving thumbnail**, and
+  `bindCarouselRow` ran a `querySelectorAll` per row plus a `querySelector` per tile for the vote
+  circle. A sweep re-aim delivers hundreds of thumbnails at once, which is how a re-aim bought a
+  second of frozen scrolling. Both are index lookups now: rows are ring-mapped
+  (`slot = tupleIndex % pool`), so the row holding a tuple is arithmetic, and each row's tiles and
+  circles are captured once at creation in `rowParts`. A tile is `parts.imgs[displayIndex]`. The
+  ring mapping is what makes this possible at all, so a change to it must keep `carouselTileFor`
+  honest: it verifies `carouselRowBound[slot] === tupleIndex` before returning, and a slot bound to
+  another tuple correctly returns null rather than the wrong tile. Columns are still not
+  virtualized (`dev_backlog/carousel-column-virtualization.md`), so bind cost remains linear in the
+  modality count — this removes the constant factor, not the term.
 - **`wheel-coalesced-to-one-frame`** — the carousel's row axis is a virtualized wall: an offset
   change rebinds rows and repaints every tile in them, and `bindCarouselRow` touches *every modality*
   of each bound row (columns are not virtualized —

@@ -619,10 +619,7 @@ function handleThumbnail(message: { tupleIndex: TupleIndex; modalityIndex: numbe
   // Binary payload -> Blob URL, like the full-image path: base64 thumbs cost ×1.33 on the wire and string churn at ~1000 tiles.
   const url = URL.createObjectURL(new Blob([message.bytes as Uint8Array<ArrayBuffer>], { type: message.mime }));
 
-  // Update carousel thumb if exists
-  const thumb = carouselEl.querySelector(
-    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
-  ) as HTMLImageElement | null;
+  const thumb = carouselTileFor(message.tupleIndex, message.modalityIndex);
 
   thumbnailUrls.set(key, url, () => {
     if (!thumb) return;
@@ -658,10 +655,7 @@ function handleThumbnailError(message: { tupleIndex: TupleIndex; modalityIndex: 
   // Store placeholder in the url cache so it persists across carousel rebuilds
   const key = `${message.tupleIndex}-${message.modalityIndex}`;
 
-  // Show placeholder in carousel
-  const thumb = carouselEl.querySelector(
-    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
-  ) as HTMLImageElement | null;
+  const thumb = carouselTileFor(message.tupleIndex, message.modalityIndex);
 
   thumbnailUrls.set(key, PLACEHOLDER_THUMB, () => {
     if (!thumb) return;
@@ -814,9 +808,7 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
   const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
 
   // Update carousel to show placeholder for missing file
-  const thumb = carouselEl.querySelector(
-    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
-  ) as HTMLImageElement | null;
+  const thumb = carouselTileFor(message.tupleIndex, message.modalityIndex);
   thumbnailUrls.set(thumbKey, PLACEHOLDER_THUMB, () => {
     if (!thumb) return;
     thumb.src = PLACEHOLDER_THUMB;
@@ -857,9 +849,7 @@ function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: nu
   thumbnailUrls.delete(thumbKey);
 
   // Update carousel to remove missing state
-  const thumb = carouselEl.querySelector(
-    `.carousel-thumb[data-tuple="${message.tupleIndex}"][data-modality="${message.modalityIndex}"]`
-  ) as HTMLImageElement | null;
+  const thumb = carouselTileFor(message.tupleIndex, message.modalityIndex);
   if (thumb) {
     thumb.classList.remove('missing');
   }
@@ -1632,9 +1622,14 @@ function ensureVisibleCarouselRows() {
   }
 }
 
+/** A pooled row's tiles and vote circles, captured once at creation (docs/loading-architecture.md: carousel-dom-never-searched). */
+interface RowParts { imgs: HTMLImageElement[]; circles: (HTMLElement | null)[] }
+const rowParts = new WeakMap<HTMLElement, RowParts>();
+
 function createCarouselRowShell(): HTMLElement {
   const row = document.createElement('div');
   row.className = 'carousel-row';
+  const parts: RowParts = { imgs: [], circles: [] };
   // Born hidden: with the pool oversized for the smallest row height, some shells stay unbound — visible unbound shells would stack at top 0.
   row.style.display = 'none';
   for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
@@ -1650,14 +1645,33 @@ function createCarouselRowShell(): HTMLElement {
       if (img.src !== PLACEHOLDER_THUMB) thumbRetried.delete(`${img.dataset.tuple}-${img.dataset.modality}`);
     };
     container.appendChild(img);
+    parts.imgs.push(img);
+    let circle: HTMLElement | null = null;
     if (votingEnabled) {
-      const circle = document.createElement('div');
+      circle = document.createElement('div');
       circle.className = 'winner-circle';
       container.appendChild(circle);
     }
+    parts.circles.push(circle);
     row.appendChild(container);
   }
+  rowParts.set(row, parts);
   return row;
+}
+
+/**
+ * The tile showing a slot, or null when no bound row is holding it. Ring-mapped, so this is an index
+ * lookup: a DOM search per arriving thumbnail scanned the whole carousel subtree, and a sweep
+ * delivers hundreds at once (docs/loading-architecture.md: carousel-dom-never-searched).
+ */
+function carouselTileFor(tupleIndex: number, originalModalityIndex: number): HTMLImageElement | null {
+  const pool = carouselRowPool.length;
+  if (pool === 0) return null;
+  const slot = tupleIndex % pool;
+  if (carouselRowBound[slot] !== tupleIndex) return null;
+  const displayIdx = modalityOrder.indexOf(asOriginal(originalModalityIndex));
+  if (displayIdx < 0) return null;
+  return rowParts.get(carouselRowPool[slot])?.imgs[displayIdx] ?? null;
 }
 
 /** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
@@ -1665,8 +1679,9 @@ function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
   el.dataset.tupleIndex = String(tupleIdx);
   el.classList.toggle('current', tupleIdx === currentTupleIndex);
   const winnerIdx = winners.get(asTuple(tupleIdx));
-  const imgs = el.querySelectorAll('.carousel-thumb') as NodeListOf<HTMLImageElement>;
-  imgs.forEach((img, displayIdx) => {
+  const parts = rowParts.get(el);
+  if (!parts) return;
+  parts.imgs.forEach((img, displayIdx) => {
     const originalIdx = modalityOrder[displayIdx];
     img.dataset.tuple = String(tupleIdx);
     img.dataset.modality = String(originalIdx);
@@ -1683,7 +1698,7 @@ function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
     }
     img.classList.toggle('active', tupleIdx === currentTupleIndex);
     img.classList.toggle('selected', tupleIdx === currentTupleIndex && displayIdx === currentModalityIndex);
-    const circle = img.parentElement?.querySelector('.winner-circle');
+    const circle = parts.circles[displayIdx];
     if (circle) circle.classList.toggle('winner', winnerIdx === displayIdx);
   });
 }
