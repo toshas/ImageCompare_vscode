@@ -28,8 +28,6 @@ interface RigOpts {
   existing?: string[];
   failAt?: 'list' | 'ctor' | 'build' | 'save';
   cancelAt?: 'save';
-  onSaved?: (path: string) => void | Promise<void>;
-  onError?: (message: string) => void;
 }
 
 function makeRig(opts: RigOpts = {}) {
@@ -65,8 +63,6 @@ function makeRig(opts: RigOpts = {}) {
       else log.push(`post:${m.type}`);
     },
     isCancelled: (err: unknown) => typeof err === 'object' && err !== null && (err as { cancelled?: boolean }).cancelled === true,
-    onSaved: opts.onSaved ? (p: string) => { log.push('onSaved'); return opts.onSaved!(p); } : undefined,
-    onError: opts.onError ? (m: string) => { log.push('onError'); opts.onError!(m); } : undefined,
   };
   return { io, log };
 }
@@ -86,35 +82,26 @@ describe('exportDeck (real pptxDeck flow code)', () => {
   });
 
   it.each(['list', 'ctor', 'build', 'save'] as const)('a throw at %s posts pptxError exactly once and never pptxComplete', async stage => {
-    const seen: string[] = [];
-    const { io, log } = makeRig({ failAt: stage, onError: m => seen.push(m) });
+    const { io, log } = makeRig({ failAt: stage });
     await exportDeck(scanTuples, modalities, request, io);
     const posts = log.filter(l => l.startsWith('post:'));
     expect(posts).toHaveLength(1);
     expect(posts[0]).toMatch(/^post:pptxError:/);
-    expect(seen).toHaveLength(1);
     expect(log.filter(l => l.startsWith('save:')).length).toBe(stage === 'save' ? 1 : 0);
   });
 
   it('a cancellation posts nothing at all — no answer is owed to a gone panel', async () => {
-    const { io, log } = makeRig({ cancelAt: 'save', onError: () => undefined });
+    const { io, log } = makeRig({ cancelAt: 'save' });
     await exportDeck(scanTuples, modalities, request, io);
-    expect(log.filter(l => l.startsWith('post:') || l === 'onError')).toEqual([]);
+    expect(log.filter(l => l.startsWith('post:'))).toEqual([]);
   });
 
-  it('a throw from the post-answer notification cannot forge a second answer', async () => {
-    const { io, log } = makeRig({ onSaved: () => { throw new Error('toast exploded'); }, onError: () => undefined });
+  // The flow has no notification hook to run after the answer: what the user is told is worded in
+  // the webview from the answer itself, so there is no product callback here that could post again.
+  it('the posted answer is the flow\'s last act — nothing runs after it that could forge a second', async () => {
+    const { io, log } = makeRig();
     await exportDeck(scanTuples, modalities, request, io);
     expect(log.filter(l => l.startsWith('post:'))).toEqual(['post:pptxComplete:/out/comparison_01.pptx']);
-    expect(log).toContain('onSaved');
-    expect(log).not.toContain('onError');
-  });
-
-  it('the notification hook fires after the answer, with the saved path', async () => {
-    const paths: string[] = [];
-    const { io, log } = makeRig({ onSaved: p => { paths.push(p); } });
-    await exportDeck(scanTuples, modalities, request, io);
-    expect(log.indexOf('onSaved')).toBeGreaterThan(log.indexOf('post:pptxComplete:/out/comparison_01.pptx'));
-    expect(paths).toEqual(['/out/comparison_01.pptx']);
+    expect(log.at(-1)).toBe('post:pptxComplete:/out/comparison_01.pptx');
   });
 });

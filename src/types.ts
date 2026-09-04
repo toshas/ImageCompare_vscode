@@ -1,4 +1,9 @@
 import * as vscode from 'vscode';
+// The UI contract lives with the UI that owns it; hosts see it through here and never redeclare it (docs/standalone.md: affordances-rendered-by-the-webview).
+import type { HostCapabilities, MenuActionId, MenuContext } from './webview/contextMenuModel';
+import type { NoticeEvent } from './webview/noticeChannel';
+export type { HostCapabilities, MenuActionId, MenuContext } from './webview/contextMenuModel';
+export type { NoticeEvent } from './webview/noticeChannel';
 
 // Image file extensions we support
 export const IMAGE_EXTENSIONS = [
@@ -93,18 +98,19 @@ export type WebViewMessage =
   | { type: 'deleteTuple'; tupleIndex: TupleIndex }
   | { type: 'exportPptx'; tupleIndices: TupleIndex[]; winnerModalityIndices: (OriginalModalityIndex | null)[]; modalityOrder: OriginalModalityIndex[] }
   | { type: 'saveSessionAs' } // Ctrl/Cmd+S in the webview; the title-bar button routes through the command instead
+  // A context-menu item the host must serve; the local ones never reach the wire (docs/standalone.md: affordances-rendered-by-the-webview).
+  | { type: 'menuAction'; action: MenuActionId; ctx: MenuContext }
+  | { type: 'revealPath'; path: string } // a notice's reveal action, whose target is a literal path rather than a slot
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView
 export type ExtensionMessage =
-  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version: string }
+  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version: string; capabilities: HostCapabilities }
   | { type: 'thumbnail'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string } // binary like `image`, and blob-URL'd in the webview (docs/loading-architecture.md: image-payload-normalized)
   | { type: 'thumbnailError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
   | { type: 'image'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string; width: number; height: number } // binary, not base64: string payloads cost ×1.33 and GC pauses
   | { type: 'imageError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
   | { type: 'thumbnailProgress'; current: number; total: number }
-  | { type: 'copyImage' } // context-menu Copy Image: the webview owns the only image-capable clipboard
-  | { type: 'toggleModalityHidden'; modalityIndex: OriginalModalityIndex } // context-menu Hide/Show Modality; state lives in the webview
   | { type: 'fileDeleted'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex }
   | { type: 'fileRestored'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; imageInfo?: ImageInfo }
   | { type: 'tupleDeleted'; tupleIndex: TupleIndex }
@@ -118,7 +124,9 @@ export type ExtensionMessage =
   | { type: 'cropComplete'; tupleIndex: TupleIndex; count: number; paths: string[] }
   | { type: 'cropError'; tupleIndex: TupleIndex; error: string }
   | { type: 'pptxComplete'; path: string }
-  | { type: 'pptxError'; error: string };
+  | { type: 'pptxError'; error: string }
+  // What a host action came to; the wording and any offered action are the webview's (docs/standalone.md: affordances-rendered-by-the-webview).
+  | { type: 'notice'; event: NoticeEvent };
 
 // Configuration passed to webview
 export interface WebViewConfig {

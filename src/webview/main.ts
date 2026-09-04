@@ -9,6 +9,16 @@ import { shiftIndexAfterRemoval } from '../watcherLogic';
 import { ThumbUrlCache, BLANK_THUMB } from './thumbUrlCache';
 import { ColumnReportGate, LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
 import { emptyNotice } from './emptyNotice';
+import {
+  HostCapabilities,
+  MenuActionId,
+  MenuContext,
+  NO_HOST_CAPABILITIES,
+  buildContextMenu,
+  contextMenuHelpText,
+} from './contextMenuModel';
+import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextMenu';
+import { NoticeEvent, buildNotice } from './noticeChannel';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -97,6 +107,8 @@ const progressFillEl = document.getElementById('progress-fill')!;
 const helpModalEl = document.getElementById('help-modal')!;
 const helpVersionEl = document.getElementById('help-version')!;
 const helpBtn = document.getElementById('help-btn')!;
+const helpContextMenuItemsEl = document.getElementById('help-contextmenu-items')!;
+const helpRowSaveSessionEl = document.getElementById('help-row-savesession')!;
 const closeHelpBtn = document.getElementById('close-help-btn')!;
 const reorderLeftBtn = document.getElementById('reorder-left')!;
 const reorderRightBtn = document.getElementById('reorder-right')!;
@@ -181,6 +193,9 @@ function setPptxBusy(busy: boolean): void {
 // Session-file labels are user-authored: show them in full, never truncated.
 let labelsExplicit = false;
 
+// What this host can serve. Capability, never identity: no branch here asks whether it is VS Code (docs/standalone.md: affordances-rendered-by-the-webview).
+let capabilities: HostCapabilities = NO_HOST_CAPABILITIES;
+
 // Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see docs/testing.md.
 if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
   (window as unknown as { __ic_test: unknown }).__ic_test = {
@@ -202,6 +217,7 @@ if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?:
       votingEnabled,
       pptxBusy,
       thumbUrlsLive: thumbnailUrls.liveCount,
+      capabilities: { ...capabilities },
     }),
   };
 }
@@ -423,13 +439,8 @@ window.addEventListener('message', (event) => {
     case 'thumbnailProgress':
       handleProgress(message);
       break;
-    case 'copyImage':
-      copyCurrentImage();
-      break;
-    case 'toggleModalityHidden':
-      if (hiddenModalities.has(message.modalityIndex)) hiddenModalities.delete(message.modalityIndex);
-      else hiddenModalities.add(message.modalityIndex);
-      updateModalitySelector();
+    case 'notice':
+      showNotice(message.event);
       break;
     case 'fileDeleted':
       console.log('[IC] fileDeleted', message.tupleIndex, message.modalityIndex);
@@ -472,10 +483,11 @@ window.addEventListener('message', (event) => {
       break;
     case 'pptxComplete':
       setPptxBusy(false);
+      showNotice({ kind: 'pptxSaved', path: message.path });
       break;
     case 'pptxError':
       setPptxBusy(false);
-      showCopyToast(`PPTX export failed: ${message.error}`);
+      showNotice({ kind: 'pptxFailed', error: message.error });
       break;
     case '_debug':
       console.log('[IC-EXT]', message.msg);
@@ -509,9 +521,11 @@ function handleWinnersReset(message: { winners: Record<number, OriginalModalityI
   updateModalitySelector();
 }
 
-function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version?: string }) {
+function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version?: string; capabilities?: HostCapabilities }) {
   // Absent/empty version renders nothing: the :empty CSS rule hides the footer entirely.
   helpVersionEl.textContent = message.version ? `ImageCompare v${message.version}` : '';
+  capabilities = message.capabilities ?? NO_HOST_CAPABILITIES;
+  applyCapabilitiesToHelp();
   // Reset all state for new comparison
   tuples = message.tuples;
   modalities = message.modalities;
@@ -1423,6 +1437,8 @@ function updateCarouselThumbSize(snapToDevicePixels = true) {
 let carouselDelegatesInstalled = false;
 
 function buildCarousel() {
+  // An open menu's target is a slot, and every caller here re-indexes slots; a stale target copies or deletes the wrong file.
+  closeContextMenu();
   carouselEl.innerHTML = '';
   carouselEl.style.width = CAROUSEL_WIDTH + 'px';
   carouselRowPool = [];
@@ -1730,10 +1746,44 @@ function hidePillTooltip(): void {
 
 let copyToastTimer: number | undefined;
 function showCopyToast(text: string): void {
+  renderToast(text, 'info', undefined);
+}
+
+/** A host event, worded and capability-gated by the shared channel — never by the caller (docs/standalone.md: affordances-rendered-by-the-webview). */
+function showNotice(event: NoticeEvent): void {
+  const notice = buildNotice(event, capabilities);
+  renderToast(notice.text, notice.tone, notice.action);
+}
+
+function renderToast(text: string, tone: 'info' | 'error', action: { label: string; path: string } | undefined): void {
   copyToastEl.textContent = text;
+  copyToastEl.classList.toggle('error', tone === 'error');
+  copyToastEl.classList.toggle('has-action', !!action);
+  if (action) {
+    const btn = document.createElement('button');
+    btn.id = 'notice-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      hideToast();
+      vscode.postMessage({ type: 'revealPath', path: action.path });
+    });
+    copyToastEl.appendChild(btn);
+  }
   copyToastEl.classList.add('visible');
   if (copyToastTimer !== undefined) clearTimeout(copyToastTimer);
-  copyToastTimer = setTimeout(() => copyToastEl.classList.remove('visible'), 1400) as unknown as number;
+  // An offered action needs long enough to be clicked; a bare toast does not.
+  copyToastTimer = setTimeout(hideToast, action ? 8000 : 1400) as unknown as number;
+}
+
+/** `has-action` goes with `visible`: a faded toast that kept it stayed a transparent click-eater over the viewer. */
+function hideToast(): void {
+  copyToastEl.classList.remove('visible', 'has-action');
+}
+
+/** The help modal states what THIS host offers, from the same model that builds the menu, so it cannot promise a missing item. */
+function applyCapabilitiesToHelp(): void {
+  helpContextMenuItemsEl.textContent = contextMenuHelpText(capabilities);
+  (helpRowSaveSessionEl as HTMLElement).hidden = !capabilities.saveSessionAs;
 }
 
 // Truncates auto-derived directory names, which would otherwise blow out the status bar.
@@ -1745,6 +1795,7 @@ function pillLabel(name: string): string {
 function buildModalitySelector() {
   // The hovered pill is about to be destroyed, and a removed element never gets mouseleave.
   hidePillTooltip();
+  closeContextMenu();
   modalitySelectorEl.innerHTML = '';
 
   // modalities/modalityColors/modalityPaths are already in display order after any reordering.
@@ -1784,6 +1835,45 @@ modalitySelectorEl.addEventListener('mouseout', (e) => {
   hidePillTooltip();
 });
 
+/** Which surface was right-clicked, in wire terms; null where the comparison offers nothing and the host's own menu still applies. */
+function contextTargetFor(target: HTMLElement | null): MenuContext | null {
+  const pill = target?.closest?.('.modality-btn') as HTMLElement | null;
+  if (pill) {
+    const original = modalityOrder[parseInt(pill.dataset.displayIndex || '0', 10)];
+    return { section: 'pill', tupleIndex: currentTupleIndex, modalityIndex: original, hidden: hiddenModalities.has(original) };
+  }
+  if (target?.closest?.('#viewer')) {
+    return { section: 'image', tupleIndex: currentTupleIndex, modalityIndex: modalityOrder[currentModalityIndex] };
+  }
+  return null;
+}
+
+document.addEventListener('contextmenu', (e) => {
+  const target = contextTargetFor(e.target as HTMLElement | null);
+  if (!target) return;
+  // Suppresses the host's own menu in both products: VS Code's webview skips a contextmenu it finds already default-prevented, and so does the browser.
+  e.preventDefault();
+  openContextMenu(buildContextMenu(target, capabilities), e.clientX, e.clientY, id => runMenuAction(id, target));
+});
+
+/** Local items never reach the wire; the rest are the host's to serve. */
+function runMenuAction(action: MenuActionId, target: MenuContext): void {
+  switch (action) {
+    case 'copyImage':
+      copyCurrentImage();
+      break;
+    case 'toggleHidden': {
+      const original = asOriginal(target.modalityIndex);
+      if (hiddenModalities.has(original)) hiddenModalities.delete(original);
+      else hiddenModalities.add(original);
+      updateModalitySelector();
+      break;
+    }
+    default:
+      vscode.postMessage({ type: 'menuAction', action, ctx: target });
+  }
+}
+
 function updateModalitySelector() {
   // Calculate win counts per modality (by display index)
   const winCounts: number[] = new Array(modalities.length).fill(0);
@@ -1798,14 +1888,8 @@ function updateModalitySelector() {
   const buttons = modalitySelectorEl.querySelectorAll('.modality-btn');
   buttons.forEach((btn) => {
     const displayIdx = parseInt((btn as HTMLElement).dataset.displayIndex || '0', 10);
-    // Re-stamped on every update because [ ] reordering changes which original modality this position shows.
+    // Re-read on every update because [ ] reordering changes which original modality this position shows.
     const originalIdx = modalityOrder[displayIdx];
-    btn.setAttribute('data-vscode-context', JSON.stringify({
-      webviewSection: 'imageComparePill',
-      modalityIndex: originalIdx,
-      imageCompareHidden: hiddenModalities.has(originalIdx),
-      preventDefaultContextMenuItems: true
-    }));
     btn.classList.toggle('hidden-modality', hiddenModalities.has(originalIdx));
     if (displayIdx === currentModalityIndex) {
       btn.classList.add('active');
@@ -1922,14 +2006,6 @@ function render() {
 
   const currentImage = images[currentModalityIndex];
 
-  // Anchors the native webview context menu (package.json contributes.menus."webview/context").
-  viewerEl.setAttribute('data-vscode-context', JSON.stringify({
-    webviewSection: 'imageCompareImage',
-    tupleIndex: currentTupleIndex,
-    modalityIndex: modalityOrder[currentModalityIndex],
-    preventDefaultContextMenuItems: true
-  }));
-
   // Updated even when showing a preview. No centering: render() runs on image arrivals and every resize frame, and a re-center here overrides the resize anchor.
   updateModalitySelector();
   if (isMultiTupleMode) {
@@ -2034,6 +2110,8 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
 
 // Event handlers
 function handleKeyDown(e: KeyboardEvent) {
+  // Modal for keys, as the host menu it replaced was: Del behind an open menu is a permanent file delete.
+  if (isContextMenuOpen()) return;
   if (e.code === 'Escape' && helpModalEl.classList.contains('active')) {
     helpModalEl.classList.remove('active');
     e.preventDefault();
@@ -2043,7 +2121,7 @@ function handleKeyDown(e: KeyboardEvent) {
   // Native save no-ops on the readonly custom editor, so the webview owns Ctrl/Cmd+S.
   if (e.code === 'KeyS' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
     e.preventDefault();
-    vscode.postMessage({ type: 'saveSessionAs' });
+    if (capabilities.saveSessionAs) vscode.postMessage({ type: 'saveSessionAs' });
     return;
   }
 

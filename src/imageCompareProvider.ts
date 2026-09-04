@@ -33,6 +33,9 @@ import {
   WebViewMessage,
   ExtensionMessage,
   LoadedImage,
+  MenuActionId,
+  MenuContext,
+  NoticeEvent,
   OriginalModalityIndex,
   TupleIndex,
   asOriginal,
@@ -169,49 +172,38 @@ export class ImageCompareProvider {
     this.thumbnailService = new ThumbnailService(context);
   }
 
-  /** webview/context menu commands; ctx is the clicked element's merged data-vscode-context. */
-  async handleMenuCommand(
-    action: 'copyImage' | 'copyPath' | 'revealInExplorer' | 'toggleHidden',
-    ctx: { webviewSection?: string; tupleIndex?: number; modalityIndex?: number } | undefined
-  ): Promise<void> {
-    const state = [...this.panels].find(s => s.panel.active && !s.disposed);
-    if (!state || !ctx) return;
-
-    if (action === 'copyImage') {
-      const msg: ExtensionMessage = { type: 'copyImage' };
-      state.panel.webview.postMessage(msg);
-      return;
-    }
-
-    if (action === 'toggleHidden') {
-      if (typeof ctx.modalityIndex !== 'number') return;
-      const msg: ExtensionMessage = { type: 'toggleModalityHidden', modalityIndex: asOriginal(ctx.modalityIndex) };
-      state.panel.webview.postMessage(msg);
-      return;
-    }
-
+  /** Serve a context-menu item the webview could not; the menu that offered it is the webview's (docs/standalone.md: affordances-rendered-by-the-webview). */
+  private async handleMenuAction(state: PanelState, action: MenuActionId, ctx: MenuContext): Promise<void> {
     const uri = this.resolveMenuTarget(state, ctx);
     if (!uri) return;
     if (action === 'copyPath') {
       try {
         await vscode.env.clipboard.writeText(uri.fsPath);
+        this.postNotice(state, { kind: 'pathCopied' });
       } catch (e: any) {
-        vscode.window.showErrorMessage(`Could not copy the path: ${e?.message ?? e}`);
+        this.postNotice(state, { kind: 'copyPathFailed', error: String(e?.message ?? e) });
       }
       return;
     }
-    // Reveal in VS Code's Explorer tree — works over remotes, where an OS file-manager reveal cannot.
+    if (action === 'revealInExplorer') await this.revealPath(uri);
+  }
+
+  /** Reveal in VS Code's Explorer tree — works over remotes, where an OS file-manager reveal cannot. */
+  private async revealPath(uri: vscode.Uri): Promise<void> {
     await vscode.commands.executeCommand('revealInExplorer', uri);
   }
 
+  /** The webview words every notice; the host only reports what happened (docs/standalone.md: affordances-rendered-by-the-webview). */
+  private postNotice(state: PanelState, event: NoticeEvent): void {
+    const msg: ExtensionMessage = { type: 'notice', event };
+    state.panel.webview.postMessage(msg);
+  }
+
   /** The image section targets the displayed file; the pill section (or a missing file) falls back to the modality path. */
-  private resolveMenuTarget(
-    state: PanelState,
-    ctx: { webviewSection?: string; tupleIndex?: number; modalityIndex?: number }
-  ): vscode.Uri | undefined {
-    const modality = typeof ctx.modalityIndex === 'number' ? state.scanResult.modalities[ctx.modalityIndex] : undefined;
+  private resolveMenuTarget(state: PanelState, ctx: MenuContext): vscode.Uri | undefined {
+    const modality = state.scanResult.modalities[ctx.modalityIndex];
     if (modality === undefined) return undefined;
-    if (ctx.webviewSection === 'imageCompareImage' && typeof ctx.tupleIndex === 'number') {
+    if (ctx.section === 'image') {
       const tuple = state.scanResult.tuples[ctx.tupleIndex];
       const img = tuple ? this.findImageForModality(tuple, modality) : undefined;
       if (img) return img.uri;
@@ -498,6 +490,14 @@ export class ImageCompareProvider {
         await this.saveSessionAs(state);
         break;
 
+      case 'menuAction':
+        await this.handleMenuAction(state, message.action, message.ctx);
+        break;
+
+      case 'revealPath':
+        await this.revealPath(vscode.Uri.file(message.path));
+        break;
+
       case 'log':
         break;
     }
@@ -643,11 +643,7 @@ export class ImageCompareProvider {
       post: msg => { state.panel.webview.postMessage(msg); },
       // A closed panel is not a failure: every other pooled await filters this the same way.
       isCancelled: err => err instanceof TaskCancelled || state.disposed,
-      onSaved: async savedPath => {
-        const choice = await vscode.window.showInformationMessage(`PPTX exported: ${savedPath}`, 'Reveal in Explorer');
-        if (choice && saveUri) void vscode.commands.executeCommand('revealInExplorer', saveUri);
-      },
-      onError: errorMsg => { vscode.window.showErrorMessage(`PPTX export failed: ${errorMsg}`); }
+      // `pptxComplete`/`pptxError` already carry the answer; the webview words it for both products.
     });
   }
 
@@ -761,12 +757,9 @@ export class ImageCompareProvider {
         }
       }
 
-      const choice = await vscode.window.showInformationMessage(`Session saved: ${destUri.fsPath}`, 'Reveal in Explorer');
-      if (choice === 'Reveal in Explorer') {
-        await vscode.commands.executeCommand('revealInExplorer', destUri);
-      }
+      this.postNotice(state, { kind: 'sessionSaved', path: destUri.fsPath });
     } catch (e: any) {
-      vscode.window.showErrorMessage(`Could not save the session: ${e?.message ?? e}`);
+      this.postNotice(state, { kind: 'sessionSaveFailed', error: String(e?.message ?? e) });
     }
   }
 
@@ -937,6 +930,8 @@ ${lead}
       labelsExplicit: state.labelsExplicit,
       // Real installed version from the extension's own manifest via the activation context.
       version: String(this.context.extension.packageJSON.version ?? ''),
+      // This host's flags; Save Session As needs a session file to copy (docs/standalone.md: affordances-rendered-by-the-webview).
+      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: !!state.sessionFileUri },
       colorOverride: (mod, i) => this.resolveModalityColor(state, mod, i)
     });
 

@@ -15,6 +15,8 @@ export interface FixtureSpec {
   votingEnabled: boolean;
   /** Optional product version for the init message; absent mirrors specs predating the field. */
   version?: string;
+  /** What the fixture host claims it can serve; the default mirrors the extension, the most capable host. */
+  capabilities?: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean };
 }
 
 export const DEFAULT_SPEC: FixtureSpec = {
@@ -57,6 +59,7 @@ export function initMessage(spec: FixtureSpec = DEFAULT_SPEC) {
     winners: {} as Record<number, number>,
     votingEnabled: spec.votingEnabled,
     labelsExplicit: false,
+    capabilities: spec.capabilities ?? { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true },
     ...(spec.version ? { version: spec.version } : {}),
   };
 }

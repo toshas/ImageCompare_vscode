@@ -453,6 +453,70 @@ const mutations = [
     killedBy: 'republish test (the vanish check must fire exactly for the session holding the pack)'
   },
   {
+    name: 'contextMenu: capability gate ignored (a host is offered an item it cannot serve)',
+    file: 'src/webview/contextMenuModel.ts',
+    suite: 'test/unit/contextMenuModel.test.ts',
+    find: '  if (caps.revealInExplorer) {',
+    replace: '  if (true) {',
+    killedBy: 'standalone-menu test (the two menus differ only by what the host disclaims)'
+  },
+  {
+    name: 'contextMenu: pill toggle offered on the image too',
+    file: 'src/webview/contextMenuModel.ts',
+    suite: 'test/unit/contextMenuModel.test.ts',
+    find: "  if (ctx.section === 'pill') {\n    // The label is the only thing hiding changes here; the pill stays clickable (docs/session-files.md: hidden-is-presentation-only).",
+    replace: '  if (true) {\n    //',
+    killedBy: 'item-set tests (the image menu has no Hide/Show Modality)'
+  },
+  {
+    name: 'contextMenu: toggle label no longer follows the hidden state',
+    file: 'src/webview/contextMenuModel.ts',
+    suite: 'test/unit/contextMenuModel.test.ts',
+    find: "label: ctx.hidden ? 'Show Modality' : 'Hide Modality'",
+    replace: "label: 'Hide Modality'",
+    killedBy: 'toggle-label test (a hidden pill offers Show, not Hide)'
+  },
+  {
+    name: 'contextMenu: a host item marked local, so it would never reach the host',
+    file: 'src/webview/contextMenuModel.ts',
+    suite: 'test/unit/contextMenuModel.test.ts',
+    find: "{ id: 'copyPath', label: 'Copy Path', group: 1, local: false }",
+    replace: "{ id: 'copyPath', label: 'Copy Path', group: 1, local: true }",
+    killedBy: 'local-items test (only copyImage and toggleHidden are local)'
+  },
+  {
+    name: 'contextMenu: help text stops following capabilities (promises a missing item again)',
+    file: 'src/webview/contextMenuModel.ts',
+    suite: 'test/unit/contextMenuModel.test.ts',
+    find: '    ...buildContextMenu({ ...probe, section: \'pill\' }, caps),',
+    replace: '    ...buildContextMenu({ ...probe, section: \'pill\' }, { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true }),',
+    killedBy: 'help-text test (a host with no reveal must not see Reveal in Explorer)'
+  },
+  {
+    name: 'notice: reveal action offered to a host that cannot reveal',
+    file: 'src/webview/noticeChannel.ts',
+    suite: 'test/unit/noticeChannel.test.ts',
+    find: 'caps.revealInExplorer ? { label: REVEAL_LABEL, path } : undefined',
+    replace: '{ label: REVEAL_LABEL, path }',
+    killedBy: 'reveal-gate test (the standalone notice carries no action)'
+  },
+  {
+    name: 'notice: a failed export toned as a success',
+    file: 'src/webview/noticeChannel.ts',
+    suite: 'test/unit/noticeChannel.test.ts',
+    find: "return { text: `PPTX export failed: ${event.error}`, tone: 'error' };",
+    replace: "return { text: `PPTX export failed: ${event.error}`, tone: 'info' };",
+    killedBy: 'failure-tone test (every failure kind is toned error)'
+  },
+  {
+    name: 'notice: a failure toned as info',
+    file: 'src/webview/noticeChannel.ts',
+    suite: 'test/unit/noticeChannel.test.ts',
+    find: "return { text: `Could not save the session: ${event.error}`, tone: 'error' };",
+    replace: "return { text: `Could not save the session: ${event.error}`, tone: 'info' };",
+    killedBy: 'failure-tone test (a failure is toned error and offers nothing)'
+  },
+  {
     name: 'modalityVisibility: insert anchor broken (new modality always lands first)',
     file: 'src/webview/modalityVisibility.ts',
     suite: 'test/unit/modalityVisibility.test.ts',

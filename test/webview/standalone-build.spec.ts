@@ -913,3 +913,60 @@ test('standalone poll orders a same-cycle dir rename remove-then-adopt within on
   expect(state.tupleCount).toBe(2);
   expect(state.currentTupleName).toBe('scene_01');
 });
+
+// The bug this whole change exists for: in the browser, right-click hit Chrome's own menu, so
+// Copy Path never appeared and Hide Modality — whose only trigger in either product was the
+// VS Code-contributed menu — could not be reached at all, while the shared help modal advertised
+// both (docs/standalone.md: affordances-rendered-by-the-webview). Everything below runs against
+// the REAL built artifact, so it is the standalone's own menu being asserted, not the harness's.
+test.describe('standalone context menu', () => {
+  test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
+
+  test('standalone right-click opens the comparison menu, not the browser one', async ({ page }) => {
+    await bootPolledFixture(page, 'menufix');
+
+    // The page cancels the event, which is what keeps the browser's own menu from opening.
+    const prevented = await page.evaluate(() => {
+      let seen: boolean | null = null;
+      window.addEventListener('contextmenu', e => { seen = e.defaultPrevented; }, false);
+      document.querySelector('.modality-btn')!.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 }),
+      );
+      return seen;
+    });
+    expect(prevented).toBe(true);
+
+    // Exactly the panel's menu minus the one item this host cannot serve: there is no file tree
+    // to reveal into in a browser, and the standalone declares revealInExplorer: false.
+    expect(await page.locator('#context-menu .context-menu-item').allTextContents())
+      .toEqual(['Copy Path', 'Hide Modality']);
+    expect(await page.evaluate(() =>
+      (window as unknown as { __ic_test: { getState(): { capabilities: Record<string, boolean> } } })
+        .__ic_test.getState().capabilities))
+      .toEqual({ revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false });
+
+    // Hide Modality reaches the state it could never reach before.
+    await page.locator('#context-menu [data-action-id="toggleHidden"]').click();
+    await expect
+      .poll(() => page.evaluate(() =>
+        (window as unknown as { __ic_test: { getState(): { hiddenModalities: number[] } } })
+          .__ic_test.getState().hiddenModalities))
+      .toEqual([0]);
+    await expect(page.locator('.modality-btn').first()).toHaveClass(/hidden-modality/);
+
+    // Copy Path goes out to the adapter and comes back as the shared channel's notice.
+    await page.locator('.modality-btn').nth(1).click({ button: 'right' });
+    await page.locator('#context-menu [data-action-id="copyPath"]').click();
+    await expect(page.locator('#copy-toast')).toHaveText('Path copied');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('/menufix/pred');
+  });
+
+  test('standalone help modal promises only what this host offers', async ({ page }) => {
+    await bootPolledFixture(page, 'menuhelp');
+    await page.locator('#help-btn').click();
+    await expect(page.locator('#help-contextmenu-items'))
+      .toHaveText('Copy Image / Copy Path / Hide/Show Modality');
+    // No session file exists in a browser, so the row goes rather than promising a no-op.
+    await expect(page.locator('#help-row-savesession')).toBeHidden();
+  });
+});

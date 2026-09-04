@@ -246,8 +246,10 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
   one `pptxComplete` or `pptxError`. This is construction-enforced by the shared `exportDeck` flow
   (`pptxDeck.ts`): the whole name→build→save sequence runs inside its one try, any throw — including
   a missing output directory from the provider's `listExistingNames` io — becomes the single error
-  post, the complete post follows the save unconditionally, and the product notification hook runs
-  only *after* the answer is out, so a throwing toast can no longer forge a second one. Both
+  post, and the complete post follows the save unconditionally. The flow has no product
+  notification hook at all: what the user is *told* is the webview's, worded from the answer it
+  already receives (`docs/standalone.md: affordances-rendered-by-the-webview`), so no toast can run
+  in here and forge a second one. Both
   products merely inject `post` and their output mechanics; neither owns an answer path. The
   webview's PPTX button stays busy and refuses clicks until an answer arrives, so an io that
   swallows one bricks the button for the panel's lifetime. The only

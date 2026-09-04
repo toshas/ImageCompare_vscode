@@ -111,6 +111,8 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `pollNoise` | real source | The existence poll's pool line: quiet cycles print once and then go silent, a busy pool prints every cycle even unchanged, and a cycle that finds a deletion still reports it |
 | `rootReadoption` | real source | The reported repro on the real provider over a temp dir: `rm -rf` the mode-1 root, every per-file removal committed (scan empties in place), then the directory recreated — the `modalityAdded`/`tupleAdded` the webview needs are posted (and after the root's return edge, not before), every re-adopted dir is watched again, and a second sweep over the same tree adds nothing. The bed builds real `watchersByDir` records, because their absence is what keeps a released dir in `watchedDirs` and re-adopts through a route production does not have |
 | `emptyNotice` | real source | The emptied comparison's terminal notice: silent while anything is drawable, speaking at zero rows *and* at zero columns (the two shapes the two detectors produce), the folder named only when the host established it is gone, and content winning over a still-flagged missing root — the recoverability rule in pure form |
+| `contextMenuModel` | real source | The comparison's context menu: the extension's item set pinned against what the manifest used to contribute, the standalone's differing *only* by an item its `HostCapabilities` disclaim, the local/host split exact both ways, the toggle label following the hidden state, and the help text derived from the same model so it cannot promise a missing item |
+| `noticeChannel` | real source | What a finished host action says: the wordings pinned against the strings the provider used to hand `showInformationMessage`/`showErrorMessage`, the reveal action offered only to a host that can reveal (with the text unchanged either way), and a failure toned `error` with no action |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
@@ -124,6 +126,18 @@ collided-tail fallback — the pipeline cases run the real `scanForImages` over 
 `test/unit/pngTextChunk.test.ts` pins the tEXt round-trip, the `x,y,w,h,srcW,srcH` crop format, PNG
 structure survival, CRC-32 against the IEEE check value and a full-table probe, and a Sharp re-read
 of an injected PNG (the one unit test that needs a working native Sharp).
+
+Two Layer 3 specs cover the affordance surface the webview took over from the host
+(`docs/standalone.md: affordances-rendered-by-the-webview`): `test/webview/context-menu.spec.ts`
+drives the real bundle — the menu opens on the image and on a pill, `contextmenu` is
+default-prevented so no browser menu can appear behind it, Hide Modality reaches the state whose only
+trigger used to be a VS Code command, a local item never posts and a host item always does, Escape
+dismisses without also resetting the zoom, and the help modal names only what the host offers — and
+`test/webview/notice.spec.ts` drives the notice channel end to end, including the reveal action's
+`revealPath` post and a finished export announcing itself from the `pptxComplete` both hosts already
+send. The standalone half is asserted against the *real built artifact* in
+`test/webview/standalone-build.spec.ts` ("standalone context menu"), which is the only layer that can
+see the browser's own menu being suppressed in the shipped page.
 
 One webview-layer spec covers a whole product rather than one behavior:
 `test/webview/standalone-build.spec.ts` serves `dist/standalone/image_compare.html` (built once per
@@ -326,6 +340,25 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **The menu's and the notice's DOM rules, by mutation.** `test/webview/context-menu.spec.ts` and
+  `test/webview/notice.spec.ts` pin rules that live in `webview/main.ts` and
+  `webview/contextMenu.ts` — keys must not act behind an open menu (Del there is a permanent file
+  delete), the menu must close when the host re-indexes slots under its frozen target, and a faded
+  action toast must stop taking clicks. The harness runs Vitest suites only, so no mutation can
+  reach any of them. What stands in: each was verified by reverting its fix and watching the spec go
+  red. The *model* half — item sets, capability gating, wording, tone — is mutation-covered in
+  `test/unit/contextMenuModel.test.ts` and `test/unit/noticeChannel.test.ts`.
+- **VS Code's own webview context menu staying suppressed.** The comparison renders its own menu and
+  cancels the `contextmenu` event, which works because VS Code's webview preamble skips an event it
+  finds already default-prevented (`docs/standalone.md: affordances-rendered-by-the-webview`). No
+  layer can see that: Layer 1 has no DOM, Layer 3 runs plain Chromium where our handler is the only
+  one, and Layer 2 has no webview panel. Layer 3 pins everything on *our* side — the event is
+  default-prevented and our menu opens, in the harness and in the real standalone artifact — so what
+  is untested is precisely VS Code's half of the contract. It is walked by hand (Manual checks) and
+  would show up as VS Code's default menu appearing over ours in the panel. The extension's serving
+  half (`handleMenuAction`, `resolveMenuTarget`, `revealPath`, `postNotice`) is likewise uncovered,
+  for the same reason the rest of the provider is; its standalone twin is covered against the real
+  artifact.
 - **Most of `imageCompareProvider.ts`** (the largest file). The integration layer covers
   activation, command registration, real-fs scanning, results.txt I/O, and the real API's entry
   types (the dangling-symlink premise every `type & FileType.File` gate rests on), but the provider's
@@ -656,8 +689,8 @@ the fix, the docs, and the CI check.
 - **Matcher: orig+crop collision** *(open, documented)* — when originals and crops coexist, a crop
   query file can take the original's match slot. Pinned as `it.fails` in
   `test/unit/tupleMatching.test.ts` — it flips to a hard failure the moment the matcher is fixed.
-- **Copy Image kept the previously copied image** *(fixed)* — the context-menu `copyImage` message
-  lands while the workbench menu still holds focus, and Chromium rejects `navigator.clipboard.write`
+- **Copy Image kept the previously copied image** *(fixed)* — the copy ran while the menu still held
+  focus, and Chromium rejects `navigator.clipboard.write`
   from an unfocused document, so the write was dropped (a 1.4s "Copy failed" toast the only trace)
   and the clipboard retained the earlier image. Fixed in `webview/main.ts` (`writeImageToClipboard`):
   an unfocused write is deferred until the window refocuses, with the frame captured at copy time and
@@ -1165,6 +1198,11 @@ integration layer (`npm run test:integration`), and placeholder rendering plus t
 interactions run in the Playwright layer (`npm run test:webview`) — both on every PR and every
 `main` push via `.github/workflows/test.yml`. What remains manual:
 
+1. In a real panel, right-click the image and a modality pill: the comparison's own menu must be the
+   only one that appears (no VS Code menu over or instead of it), Copy Path and Reveal in Explorer
+   must act on the right file, and Hide Modality must gray the pill. Then export a PPTX: the toast
+   must name the file and its Reveal must work. This is the one half of the menu contract no layer
+   can see — see "What nothing covers".
 2. Rename detection — a quick delete+create must move the image, not drop the row.
 4. A remote filesystem (SSH, WSL) or a FUSE/network mount, where the watchers do not fire and the
    existence sweep is the only detector.

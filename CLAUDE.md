@@ -102,6 +102,9 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
 - **`webview/emptyNotice.ts`** - Pure (no vscode/DOM): what an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
+- **`webview/contextMenuModel.ts`** - Pure (no vscode/DOM): which items the comparison's context menu offers for a target, given the host's `HostCapabilities`, plus the help text derived from the same model → `docs/standalone.md`, `docs/session-files.md`
+- **`webview/contextMenu.ts`** - The menu's DOM only: positioning, dismissal, click routing — it renders what the model returns → `docs/standalone.md`
+- **`webview/noticeChannel.ts`** - Pure (no vscode/DOM): the wording of what the user is told after a host action, and whether a reveal action rides along → `docs/standalone.md`
 - **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 - **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
