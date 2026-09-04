@@ -17,6 +17,10 @@
 // so a missing static compiles clean and throws in the browser, at the user's click. The surface is
 // read by bundling and evaluating the real shim (esbuild, as the build does), never by parsing it;
 // presence only, never behaviour — behaviour is a test's job (docs/standalone.md).
+// (f) no host-declared affordance — the manifest may not contribute a `webview/context` menu, and a
+// menu item's label may exist only in the model. Same reason again: an affordance a host declares is a
+// decision outside the import graph, which is exactly what every other gate here can see and this one
+// cannot (docs/standalone.md: affordances-rendered-by-the-webview).
 // (e) host-only wire facts — a message one host is in a position to state and the other is not may be
 // posted from that host alone. Same reason as (c) and (d): the sets it needs are the ones this script
 // already derives, and nothing else in the tree can see a *silence* being broken.
@@ -48,6 +52,9 @@ const HOST_ONLY_MESSAGES = [
     why: 'a File System Access root handle cannot tell a deleted directory from an unreadable one, so a standalone sender would be guessing at the user (docs/file-watching.md: root-loss-reported-as-an-edge)',
   },
 ];
+// Gate (f): the menu's labels, and the one module allowed to contain them (docs/standalone.md: affordances-rendered-by-the-webview).
+const MENU_MODEL = 'src/webview/contextMenuModel.ts';
+const MENU_LABELS = ['Copy Image', 'Copy Path', 'Reveal in Explorer', 'Hide Modality', 'Show Modality'];
 // A posted object literal (`type: 'x',`), never the union member declaring it (`type: 'x';`) — src/types.ts is SHARED and declares them all.
 const postsMessage = (text, message) => new RegExp(`type:\\s*'${message}'\\s*,`).test(text);
 
@@ -226,6 +233,21 @@ for (const row of HOST_ONLY_MESSAGES) {
   }
 }
 
+// Gate (f): the menu is the webview's, so neither the manifest nor a host may name one of its items.
+const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+if (manifest.contributes?.menus?.['webview/context']) {
+  problems.push('HOST-AFFORDANCE: package.json contributes a `webview/context` menu — that item set is a decision the standalone can never reach; build it in ' + MENU_MODEL);
+}
+for (const f of ['package.json', ...table.map(t => t.f)]) {
+  if (f === MENU_MODEL) continue;
+  const text = readFileSync(f, 'utf8');
+  for (const label of MENU_LABELS) {
+    // Bare text, not just a quoted literal: the regression this guards is a hardcoded help row inside webviewShell's template.
+    if (!text.includes(label)) continue;
+    problems.push(`HOST-AFFORDANCE: ${f} names the menu item '${label}' — item text belongs only in ${MENU_MODEL}`);
+  }
+}
+
 const counts = {};
 for (const { cat } of table) counts[cat] = (counts[cat] ?? 0) + 1;
 console.log(Object.entries(counts).map(([k, v]) => `${k}=${v}`).join('  '));
@@ -240,9 +262,11 @@ if (problems.length) {
   console.error('A SHIM-GAP line means the standalone bundle calls something its browser shim does not have:');
   console.error('add it to the shim, or stop calling it from a module the standalone ships. tsc cannot see this —');
   console.error("the module typechecks against node's real Buffer/path/vscode and only the browser runs the shim.");
+  console.error('A HOST-AFFORDANCE line means a menu item was declared outside the webview that renders it:');
+  console.error('move the item into the shared model, and leave the host serving the action it is asked for.');
   console.error('A HOST-FACT line means the standalone side started stating something only the extension can');
   console.error('establish: either the browser really can establish it (then say so in the docs and drop the row),');
   console.error('or the message must not be sent from there at all.');
   process.exit(1);
 }
-console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral; ${bundleClosure.length} bundled modules call nothing the ${SHIMS.length} shims lack; ${HOST_ONLY_MESSAGES.length} host-only wire fact(s) sent by one host each.`);
+console.log(`OK: ${shared.size} shared src modules match the ${DOC} list; no dead src modules; ${POLICY_SEAMS.length} policy seam(s) host-neutral; ${bundleClosure.length} bundled modules call nothing the ${SHIMS.length} shims lack; ${HOST_ONLY_MESSAGES.length} host-only wire fact(s) sent by one host each; ${MENU_LABELS.length} menu label(s) declared only in the model.`);

@@ -27,6 +27,9 @@ import {
   ImageFile,
   WebViewMessage,
   ExtensionMessage,
+  MenuActionId,
+  MenuContext,
+  NoticeEvent,
   OriginalModalityIndex,
   TupleIndex,
   asOriginal,
@@ -507,6 +510,28 @@ async function handleExportPptx(
   });
 }
 
+/** Serve a context-menu item the webview could not; which items exist is the shared model's call (docs/standalone.md: affordances-rendered-by-the-webview). */
+async function handleMenuAction(s: StandaloneState, action: MenuActionId, ctx: MenuContext): Promise<void> {
+  if (action !== 'copyPath') return;
+  const modality = s.scan.modalities[ctx.modalityIndex];
+  if (modality === undefined) return;
+  const tuple = ctx.section === 'image' ? s.scan.tuples[ctx.tupleIndex] : undefined;
+  const img = tuple ? findImageForModality(tuple, modality) : undefined;
+  const target = img ? img.uri.path : `${s.basePath}/${modality}`;
+  try {
+    await navigator.clipboard.writeText(target);
+    postNotice({ kind: 'pathCopied' });
+  } catch (e) {
+    postNotice({ kind: 'copyPathFailed', error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/** The webview words every notice; the host only reports what happened (docs/standalone.md: affordances-rendered-by-the-webview). */
+function postNotice(event: NoticeEvent): void {
+  const msg: ExtensionMessage = { type: 'notice', event };
+  post(msg);
+}
+
 /** Mirror the provider's sendInitData: winners from results.txt via the shared parser, payload from the shared builder (docs/standalone.md: adapter-contains-no-logic). */
 async function sendInit(s: StandaloneState): Promise<void> {
   const votingEnabled = s.fs.writable;
@@ -528,6 +553,8 @@ async function sendInit(s: StandaloneState): Promise<void> {
     votingEnabled,
     labelsExplicit: false,
     version: __IC_VERSION__,
+    // No file tree to reveal into and no session file to copy; text clipboard is the browser's (docs/standalone.md: affordances-rendered-by-the-webview).
+    capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false },
   }));
   void generateAllThumbnails(s);
 }
@@ -575,7 +602,11 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
       s.sweepAim.noteStrip(message);
       break;
     }
+    case 'menuAction':
+      await handleMenuAction(s, message.action, message.ctx);
+      break;
     case 'saveSessionAs':
+    case 'revealPath':
     case 'log':
       break;
   }

@@ -167,20 +167,6 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('imageCompare.saveSessionAs', () => provider!.saveSessionAsActive())
   );
 
-  // webview/context menu items (package.json contributes.menus); ctx is the element's data-vscode-context.
-  const menuProvider = provider;
-  for (const [cmd, action] of [
-    ['imageCompare.copyImage', 'copyImage'],
-    ['imageCompare.copyPath', 'copyPath'],
-    ['imageCompare.revealInExplorer', 'revealInExplorer'],
-    ['imageCompare.hideModality', 'toggleHidden'],
-    ['imageCompare.showModality', 'toggleHidden']
-  ] as const) {
-    context.subscriptions.push(
-      vscode.commands.registerCommand(cmd, (ctx) => menuProvider.handleMenuCommand(action, ctx))
-    );
-  }
-
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
       SESSION_VIEW_TYPE,

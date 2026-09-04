@@ -261,10 +261,6 @@ export interface ExportDeckIo {
   post(message: ExtensionMessage): void;
   /** True for a disposal-cancelled throw: the whole export silences instead of answering (no answer owed to a gone panel). */
   isCancelled?(err: unknown): boolean;
-  /** Product notification after the answer is posted; a throw here can no longer forge a second answer. */
-  onSaved?(path: string): void | Promise<void>;
-  /** Product notification alongside the pptxError answer. */
-  onError?(message: string): void;
 }
 
 /** The whole export flow — name, build, save, then exactly one pptxComplete XOR pptxError — for both products (docs/crop-and-pptx.md: export-always-answers). */
@@ -286,15 +282,9 @@ export async function exportDeck(
     if (io.isCancelled?.(err)) return;
     const errorMsg = err instanceof Error ? err.message : String(err);
     io.post({ type: 'pptxError', error: errorMsg });
-    io.onError?.(errorMsg);
     return;
   }
   io.post({ type: 'pptxComplete', path: savedPath });
-  try {
-    await io.onSaved?.(savedPath);
-  } catch {
-    // A notification failure is not an export failure, and the answer is already out.
-  }
 }
 
 /** Export filename: comparison_NN.pptx, NN = max existing + 1 — the one naming rule for both products (docs/standalone.md: adapter-contains-no-logic). */

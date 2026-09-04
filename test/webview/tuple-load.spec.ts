@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { HARNESS_URL } from './harness';
 import { FixtureSpec, initMessage, imageMessages, thumbnailMessages } from '../fixtures/messages';
+import { hideModalityViaMenu } from './helpers';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -123,7 +124,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
 
   test('hidden modalities are never speculated on', async ({ page }) => {
     await loadPartial(page);
-    await page.evaluate(() => (window as any).__ic_send({ type: 'toggleModalityHidden', modalityIndex: 1 }));
+    await hideModalityViaMenu(page, 1);
     const start = await outboundLength(page);
     await pressAndCapture(page, ['ArrowDown']);
     await page.waitForTimeout(PAST_DWELL_MS);
@@ -165,7 +166,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(first.hiddenModalities).toEqual([]);
 
     // Move the strip under the extension's feet: hide a pill, reorder, land on a different column.
-    await page.evaluate(() => (window as any).__ic_send({ type: 'toggleModalityHidden', modalityIndex: 4 }));
+    await hideModalityViaMenu(page, 4);
     await pressAndCapture(page, ['Digit3']);
     await pressAndCapture(page, ['BracketLeft']);
     // Leave and come back: tuple 0 is fully cached, so returning re-posts the report.

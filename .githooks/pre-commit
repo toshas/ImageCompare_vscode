@@ -1,3 +1,31 @@
 #!/bin/sh
-# Blocks a commit that would carry a personal/host identifier. Install: npm run hooks:install
+# Two guards, both of which must hold before a commit exists. Install: npm run hooks:install
+#
+# This file is the ONLY pre-commit git runs: `hooks:install` sets core.hooksPath to .githooks,
+# which makes .git/hooks/ unreachable entirely. An earlier identity guard lived there and was
+# silently dead from the day that config landed, which is why it is inlined below rather than
+# left where a reader would assume it still runs.
+#
+# Guard 1 — the repo must commit under an identity of its OWN. The failure it exists for is a
+# commit going out under the global identity this machine inherits from another account; setting
+# user.email repo-locally is what prevents that, so its absence is the thing to catch. Deliberately
+# identity-agnostic: it asserts that a local identity is set, never which one. The address used to
+# be hardcoded here, which put a personal email in a tracked file for no benefit — the check does
+# not need to know it, and a repo that names its author in a hook cannot be shared or forked.
+#
+# Guard 2 — no personal/host identifier in any non-ignored file (scripts/check-no-personal-refs.mjs).
+
+if ! git config --local --get user.email >/dev/null 2>&1; then
+  echo "pre-commit: this repo has no identity of its own." >&2
+  echo "  Without a repo-local user.email, the commit inherits your global identity," >&2
+  echo "  which is how a commit once went out under the wrong account." >&2
+  echo "" >&2
+  echo "  Fix (repo-local, does not touch your global identity):" >&2
+  echo "    git config --local user.email \"<the address this repo commits under>\"" >&2
+  echo "    git config --local user.name  \"<the name this repo commits under>\"" >&2
+  echo "" >&2
+  echo "  For the matching SSH key when pushing, run in your shell: git_iam_toshas" >&2
+  exit 1
+fi
+
 exec node "$(git rev-parse --show-toplevel)/scripts/check-no-personal-refs.mjs"

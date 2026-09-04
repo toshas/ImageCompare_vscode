@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { loadInited, getState, focusViewer } from './helpers';
+import { loadInited, getState, focusViewer, pickMenuAction } from './helpers';
 import { makeSolidPng } from '../fixtures/synthetic';
 
 // Real async-clipboard round-trip: grant read/write so navigator.clipboard works headless.
@@ -53,19 +53,24 @@ async function waitToast(page: Page): Promise<string> {
   return (await page.locator('#copy-toast').textContent()) ?? '';
 }
 
-/** Trigger 'copyImage' with the document focused and wait until the write settled. */
+/** Right-click the image and pick Copy Image — the only path either product offers. */
+async function copyViaMenu(page: Page): Promise<void> {
+  await page.locator('#canvas').click({ button: 'right' });
+  await pickMenuAction(page, 'copyImage');
+}
+
+/** Copy with the document focused and wait until the write settled. */
 async function copyFocused(page: Page): Promise<string> {
   await resetToast(page);
-  await page.evaluate(
-    (m) => (window as unknown as { __ic_send: (m: unknown) => void }).__ic_send(m),
-    { type: 'copyImage' },
-  );
+  await copyViaMenu(page);
   return waitToast(page);
 }
 
 // Playwright keeps every page permanently "focused", so the real failure
-// condition — the context-menu 'copyImage' message arriving while the webview
-// document is unfocused (the workbench menu holds focus) — is emulated in-page:
+// condition — a copy running while the webview document is unfocused — is emulated in-page.
+// The condition is rarer now the menu lives in the document (it was the workbench menu holding
+// focus that caused it), but the deferral is still the only thing standing between an unfocused
+// write and a silently stale clipboard, so it stays pinned:
 // document.hasFocus() reports false and clipboard.write rejects with
 // NotAllowedError, which is exactly Chromium's behavior for an unfocused
 // document. The wrapper delegates to the REAL clipboard.write whenever
@@ -100,15 +105,15 @@ async function installFocusEmulation(page: Page): Promise<void> {
   });
 }
 
-/** Trigger 'copyImage' while "unfocused", then let focus return — the VS Code context-menu sequence. */
+/** Copy while "unfocused", then let focus return — the context-menu sequence. */
 async function copyUnfocusedThenRefocus(page: Page): Promise<string> {
   await resetToast(page);
-  await page.evaluate((m) => {
-    const w = window as unknown as { __fakeUnfocused: boolean; __toBlobDone: number; __ic_send: (m: unknown) => void };
+  await page.evaluate(() => {
+    const w = window as unknown as { __fakeUnfocused: boolean; __toBlobDone: number };
     w.__fakeUnfocused = true;
     w.__toBlobDone = 0;
-    w.__ic_send(m);
-  }, { type: 'copyImage' });
+  });
+  await copyViaMenu(page);
   // The copy pipeline has reached its clipboard write (or deferral) once toBlob's callback finished.
   await page.waitForFunction(() => (window as unknown as { __toBlobDone: number }).__toBlobDone > 0);
   // The menu closes and the webview document regains focus.

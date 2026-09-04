@@ -67,7 +67,11 @@ Three ingredients, composed by `scripts/build-standalone.mjs`:
 The extension itself keeps thin vscode wrappers around the same pure modules; provider behavior is
 unchanged by the extractions.
 
-One user-visible state is deliberately *not* identical, and the difference is a fact neither host may
+User-visible differences between the products are deliberate and few, and each is a capability the
+browser genuinely lacks rather than a feature nobody ported. Three come from `HostCapabilities`
+(`affordances-rendered-by-the-webview`): the standalone menu has no **Reveal in Explorer**, its
+notices carry no reveal action, and its help modal has no **Ctrl/Cmd+S** row, because there is no
+file tree to reveal into and no session file to copy. The fourth is a fact neither host may
 invent: an emptied comparison reaches the same terminal notice here, through the same bundle
 (`docs/loading-architecture.md: empty-comparison-is-terminal`), but only the extension can also say
 *why* — a File System Access root handle cannot distinguish a deleted directory from an unreadable
@@ -214,6 +218,29 @@ generated-only: it is never edited by hand, and the README it receives says so a
   exists to end. Pool scheduling is IO policy, not a decision path: the adapter instantiates the
   shared `workPool` and picks the provider's priority class per request kind, but the scheduler
   itself (admission, fairness, cancellation) is the imported one.
+- **`affordances-rendered-by-the-webview`** — every affordance a user can reach from inside a
+  comparison — which items a context menu offers, what they are called, when one is enabled, and the
+  wording of what the user is told afterwards — is decided and rendered by the webview bundle both
+  products ship. A host contributes capability **flags** (`HostCapabilities` on `init`) and the
+  **implementation** of an action it was asked to serve, never an item, a label or an enablement
+  rule. No shared code asks *which* product it is running in; it asks what this host can do.
+  The rule exists because the context menu was, until this landed, contributed in `package.json`
+  (`contributes.menus["webview/context"]`) and dispatched through five extension commands. That put
+  a *decision* — the item set and its `when` clauses — outside the import graph, where
+  `check-sidedness.mjs` structurally cannot see it, so neither gate (c) nor the shared-module list
+  could notice. The standalone therefore had no menu at all: right-click fell through to the
+  browser's own, and Hide/Show Modality — whose only trigger in either product was that menu — was
+  unreachable for the life of the build, while the *shared* help modal advertised it. Rendering the
+  menu in the webview makes it shared **by construction** rather than by a list somebody maintains.
+  Gate: `scripts/check-sidedness.mjs` gate (f) fails the build if the manifest contributes a
+  `webview/context` menu again, or if a menu item's label text appears anywhere in `src/`,
+  `standalone/` or the manifest but the model — bare text, not just a quoted literal, because the
+  regression it guards is a hardcoded help row inside `webviewShell.ts`'s markup template. Prose
+  outside those trees (`README.md`, `docs/`) is not scanned and may name the items freely.
+  Structure alone is not the proof: `test/unit/contextMenuModel.test.ts` pins both hosts' real
+  capability records and requires the two menus to differ *only* by an item the host truthfully
+  cannot serve, and `test/webview/standalone-build.spec.ts` opens the menu in the real standalone
+  artifact.
 - **`host-supplies-data-not-policy`** — a host may hand a shared runner **data** (where the user is,
   what the webview reported) and **primitives** (a timer, a pool, a post), never a **decision**. The
   distinction is not pedantry: `runThumbnailSweep` takes its aim as an injected callback, and for two

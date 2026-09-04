@@ -358,6 +358,53 @@ body {
   pointer-events: none;
 }
 #copy-toast.visible { opacity: 1; }
+/* The comparison's own context menu: one implementation, so the standalone offers exactly what the panel does (docs/standalone.md: affordances-rendered-by-the-webview). */
+#context-menu {
+  position: fixed;
+  z-index: 202;
+  display: none;
+  min-width: 150px;
+  padding: 4px 0;
+  border-radius: 5px;
+  background: var(--vscode-menu-background, #252526);
+  border: 1px solid var(--vscode-menu-border, #454545);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+#context-menu.visible { display: block; }
+.context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 22px 5px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--vscode-menu-foreground, #ccc);
+}
+.context-menu-item:hover {
+  background: var(--vscode-menu-selectionBackground, #04395e);
+  color: var(--vscode-menu-selectionForeground, #fff);
+}
+.context-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--vscode-menu-separatorBackground, #454545);
+}
+#copy-toast.has-action { pointer-events: auto; }
+#copy-toast.error { color: var(--vscode-errorForeground, #f66); }
+#notice-action {
+  margin-left: 10px;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  color: var(--vscode-textLink-foreground, #4daafc);
+}
 .modality-btn.active {
   opacity: 1;
   box-shadow: 0 0 0 2px var(--vscode-focusBorder, #fff);
@@ -685,6 +732,7 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
   </div>
   <div id="pill-tooltip"></div>
   <div id="copy-toast"></div>
+  <div id="context-menu"></div>
 
   <div id="help-modal">
     <div class="modal-content">
@@ -700,9 +748,9 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Shift+Scroll</td><td>On the film strip: scroll the film strip sideways</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
         <tr><td>Click</td><td>Film-strip tile: go to it; its corner circle: toggle winner</td></tr>
-        <tr><td>Right-click</td><td>Copy path / reveal / copy image; hide or show a modality (on its pill)</td></tr>
+        <tr id="help-row-contextmenu"><td>Right-click</td><td>On the image or a pill: <span id="help-contextmenu-items"></span></td></tr>
         <tr><td>Ctrl/Cmd+C</td><td>Copy current image (when no text is selected)</td></tr>
-        <tr><td>Ctrl/Cmd+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
+        <tr id="help-row-savesession"><td>Ctrl/Cmd+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
         <tr><td>2\u00d7-click</td><td>On a crop edge handle, square the crop toward that edge (in crop mode)</td></tr>
         <tr><td>Del / Backspace</td><td>Delete current tuple files (permanent!)</td></tr>

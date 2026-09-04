@@ -817,6 +817,142 @@
               "match": "no version in init renders no footer"
             }
           ]
+        },
+        {
+          "id": "menu-image-items",
+          "name": "Right-click image: menu items",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "right-clicking the image offers the image items"
+            }
+          ]
+        },
+        {
+          "id": "menu-pill-items",
+          "name": "Right-click pill: menu items + Hide/Show",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "right-clicking a pill offers the pill items"
+            }
+          ]
+        },
+        {
+          "id": "menu-capability-gated",
+          "name": "Menu hides what the host cannot serve",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "the same menu minus exactly the items it cannot serve"
+            },
+            {
+              "suite": "webview",
+              "match": "a host that cannot reveal is never offered the item"
+            }
+          ]
+        },
+        {
+          "id": "menu-local-vs-host",
+          "name": "Local items never reach the wire",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "keeps the two local items reachable"
+            },
+            {
+              "suite": "webview",
+              "match": "a host action the webview cannot perform goes to the host"
+            }
+          ]
+        },
+        {
+          "id": "menu-dismissal",
+          "name": "Menu dismissal (Escape, click away)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "Escape dismisses the menu"
+            },
+            {
+              "suite": "webview",
+              "match": "a click elsewhere dismisses the menu"
+            },
+            {
+              "suite": "webview",
+              "match": "keys do not act behind an open menu"
+            },
+            {
+              "suite": "webview",
+              "match": "the menu closes when the host re-indexes"
+            }
+          ]
+        },
+        {
+          "id": "help-capability-honest",
+          "name": "Help modal names only offered items",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "derives help text that names only what this host offers"
+            },
+            {
+              "suite": "webview",
+              "match": "the help modal names only the items this host offers"
+            }
+          ]
+        },
+        {
+          "id": "notice-channel",
+          "name": "Action notices, worded by the webview",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "keeps the wording the vscode notifications used"
+            },
+            {
+              "suite": "webview",
+              "match": "a host event is worded by the webview"
+            }
+          ]
+        },
+        {
+          "id": "notice-reveal-gated",
+          "name": "Reveal action only where the host can",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "offers the reveal action only to a host that can reveal"
+            },
+            {
+              "suite": "webview",
+              "match": "a host that cannot reveal gets the same words and no action"
+            }
+          ]
+        },
+        {
+          "id": "notice-releases-clicks",
+          "name": "Faded action notice stops taking clicks",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a faded action notice stops taking clicks"
+            }
+          ]
+        },
+        {
+          "id": "notice-failure-tone",
+          "name": "Failures toned as failures, one channel",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "never offers an action on a failure"
+            },
+            {
+              "suite": "webview",
+              "match": "a failed export is toned as a failure"
+            }
+          ]
         }
       ]
     },
@@ -2407,6 +2543,26 @@
             {
               "suite": "webview",
               "match": "standalone landing falls back to the read-only picker without FSA"
+            }
+          ]
+        },
+        {
+          "id": "standalone-context-menu",
+          "name": "Standalone right-click opens the app menu",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "standalone right-click opens the comparison menu"
+            }
+          ]
+        },
+        {
+          "id": "standalone-help-honest",
+          "name": "Standalone help promises only what it offers",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "standalone help modal promises only what this host offers"
             }
           ]
         }

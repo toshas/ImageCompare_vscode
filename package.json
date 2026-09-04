@@ -37,26 +37,6 @@
         "title": "Open in ImageCompare"
       },
       {
-        "command": "imageCompare.copyImage",
-        "title": "Copy Image"
-      },
-      {
-        "command": "imageCompare.copyPath",
-        "title": "Copy Path"
-      },
-      {
-        "command": "imageCompare.revealInExplorer",
-        "title": "Reveal in Explorer"
-      },
-      {
-        "command": "imageCompare.hideModality",
-        "title": "Hide Modality"
-      },
-      {
-        "command": "imageCompare.showModality",
-        "title": "Show Modality"
-      },
-      {
         "command": "imageCompare.saveSessionAs",
         "title": "Save Session As…",
         "icon": "$(save-as)"
@@ -94,54 +74,7 @@
           "group": "navigation@10"
         }
       ],
-      "webview/context": [
-        {
-          "command": "imageCompare.copyImage",
-          "when": "webviewSection == 'imageCompareImage'",
-          "group": "1_imagecompare@1"
-        },
-        {
-          "command": "imageCompare.copyPath",
-          "when": "webviewSection == 'imageCompareImage' || webviewSection == 'imageComparePill'",
-          "group": "1_imagecompare@2"
-        },
-        {
-          "command": "imageCompare.revealInExplorer",
-          "when": "webviewSection == 'imageCompareImage' || webviewSection == 'imageComparePill'",
-          "group": "1_imagecompare@3"
-        },
-        {
-          "command": "imageCompare.hideModality",
-          "when": "webviewSection == 'imageComparePill' && !imageCompareHidden",
-          "group": "2_imagecompare@1"
-        },
-        {
-          "command": "imageCompare.showModality",
-          "when": "webviewSection == 'imageComparePill' && imageCompareHidden",
-          "group": "2_imagecompare@1"
-        }
-      ],
       "commandPalette": [
-        {
-          "command": "imageCompare.copyImage",
-          "when": "false"
-        },
-        {
-          "command": "imageCompare.copyPath",
-          "when": "false"
-        },
-        {
-          "command": "imageCompare.revealInExplorer",
-          "when": "false"
-        },
-        {
-          "command": "imageCompare.hideModality",
-          "when": "false"
-        },
-        {
-          "command": "imageCompare.showModality",
-          "when": "false"
-        },
         {
           "command": "imageCompare.saveSessionAs",
           "when": "activeCustomEditorId == 'imageCompare.sessionFile'"

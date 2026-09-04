@@ -15,6 +15,7 @@ const baseArgs = {
   votingEnabled: true,
   labelsExplicit: false,
   version: '1.2.3',
+  capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true },
 };
 
 describe('init payload assembly (initPayload.ts, real code)', () => {

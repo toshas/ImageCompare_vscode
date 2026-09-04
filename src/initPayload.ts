@@ -1,6 +1,7 @@
 // Pure init-message assembly (no vscode): both the provider and the standalone adapter build their `init` payload here (docs/standalone.md: adapter-contains-no-logic).
 import {
   ExtensionMessage,
+  HostCapabilities,
   TupleInfo,
   WebViewConfig,
   OriginalModalityIndex,
@@ -41,6 +42,8 @@ export interface InitPayloadArgs {
   labelsExplicit: boolean;
   /** Product version shown in the help modal; provider passes its manifest version, standalone its build constant. */
   version: string;
+  /** What this host can serve — the webview's whole affordance surface keys off it (docs/standalone.md: affordances-rendered-by-the-webview). */
+  capabilities: HostCapabilities;
   /** Per-column color override (e.g. session-file colors); a falsy return falls back to the positional palette. */
   colorOverride?: (modality: string, index: number) => string | undefined;
 }
@@ -62,5 +65,6 @@ export function buildInitPayload(args: InitPayloadArgs): ExtensionMessage {
     votingEnabled: args.votingEnabled,
     labelsExplicit: args.labelsExplicit,
     version: args.version,
+    capabilities: args.capabilities,
   };
 }

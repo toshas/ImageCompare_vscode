@@ -75,14 +75,18 @@ that way; that is why `applyLabels()` is structurally typed over `{ toString() }
   palette cycle in `resolveModalityColor()`.
 
 A modality pill shows that resolved path on hover; a plain click only selects the modality. Copying
-and revealing go through the native webview context menu — `data-vscode-context` attributes on the
-pill and viewer, `contributes.menus."webview/context"` entries in `package.json`, and commands the
-extension resolves back to a URI via `resolveMenuTarget`. Path writes use `vscode.env.clipboard` in
-the extension, since a webview is not reliably granted `navigator.clipboard` for text; the image
-write is the exception — no extension API accepts image bytes, so Copy Image round-trips to the
-webview's `navigator.clipboard`. The tooltip is a webview element, not a native `title=`: pill text
-is rewritten on every vote to restore win counts, and a native tooltip dismissed by that rewrite
-does not return until the pointer leaves and re-enters — which is what made it look intermittent.
+and revealing go through the comparison's own context menu, which the webview builds and renders
+(`webview/contextMenuModel.ts` decides the items, `webview/contextMenu.ts` draws them) — so the
+standalone offers the same menu minus whatever its `HostCapabilities` disclaim
+(`docs/standalone.md: affordances-rendered-by-the-webview`). Copy Image and Hide/Show Modality are
+performed in the webview; Copy Path and Reveal in Explorer post `menuAction`, which each host
+resolves back to a target its own way (the provider through `resolveMenuTarget`, the adapter inline
+over its scan). Path writes use `vscode.env.clipboard` in the
+extension, since a webview is not reliably granted `navigator.clipboard` for text, and
+`navigator.clipboard.writeText` in the standalone, which has no such host. The tooltip is a webview
+element, not a native `title=`: pill text is rewritten on every vote to restore win counts, and a
+native tooltip dismissed by that rewrite does not return until the pointer leaves and re-enters —
+which is what made it look intermittent.
 
 Both `labels` and `colors` are keyed **by the URI of the listed path**. That means they only take
 effect in mode 2, where the listed directories *are* the modalities. In mode 1 the listed path is
@@ -228,8 +232,8 @@ Writing zero winners deletes the file rather than leaving an empty stub.
 
 A pill can be **hidden** from its context menu (Hide/Show Modality): grayed out, still clickable and
 digit-jumpable, but skipped by arrow-key cycling and as a Space-flip target. The state is a webview
-`Set` keyed by original modality index; the menu label flips via the `imageCompareHidden` context
-value the pill stamps.
+`Set` keyed by original modality index, and the menu label flips because `buildContextMenu` is
+handed that state as `MenuContext.hidden`.
 
 ## Invariants
 
@@ -238,7 +242,8 @@ value the pill stamps.
   (`pointer-events: none` via the `tiny-tiles` class): at that size a tile click is a coin-flip
   between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
   unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
-- **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label,
+- **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label
+  (`buildContextMenu` reads it as `MenuContext.hidden`),
   keyboard cycling, and the *order and scope of speculation* — nothing else. The carousel keeps
   showing the column, so nothing the user can still reach may be dropped for it: speculative work
   skips hidden columns (sibling loads and prefetch waves,

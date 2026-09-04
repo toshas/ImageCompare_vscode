@@ -28,6 +28,7 @@ export interface IcState {
   votingEnabled: boolean;
   pptxBusy: boolean;
   thumbUrlsLive: number;
+  capabilities: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean };
 }
 
 /** Load the harness and complete the init handshake with synthetic fixtures. */
@@ -67,4 +68,24 @@ export async function lastOutbound(page: Page, type: string): Promise<any> {
 /** Focus the viewer so keyboard shortcuts reach the window handlers. */
 export async function focusViewer(page: Page): Promise<void> {
   await page.locator('#viewer').click({ position: { x: 10, y: 10 } });
+}
+
+/** Open the comparison's own context menu on a target and return its item labels, in order. */
+export async function openMenuOn(page: Page, target: string): Promise<string[]> {
+  await page.locator(target).first().click({ button: 'right' });
+  await expect(page.locator('#context-menu')).toHaveClass(/visible/);
+  return page.locator('#context-menu .context-menu-item').allTextContents();
+}
+
+/** Pick a menu item by its action id (the model's id, not its label). */
+export async function pickMenuAction(page: Page, actionId: string): Promise<void> {
+  await page.locator(`#context-menu [data-action-id="${actionId}"]`).click();
+  await expect(page.locator('#context-menu')).not.toHaveClass(/visible/);
+}
+
+/** Hide the pill at `displayIndex` the way a user does: right-click it, pick Hide Modality. */
+export async function hideModalityViaMenu(page: Page, displayIndex: number): Promise<void> {
+  await page.locator('.modality-btn').nth(displayIndex).click({ button: 'right' });
+  await expect(page.locator('#context-menu')).toHaveClass(/visible/);
+  await pickMenuAction(page, 'toggleHidden');
 }
