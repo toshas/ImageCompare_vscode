@@ -453,6 +453,46 @@ const mutations = [
     killedBy: 'republish test (the vanish check must fire exactly for the session holding the pack)'
   },
   {
+    name: 'axisScroll: centring drops the snap (an arrow step lands the grid mid-item)',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: 'const snapped = snapTo > 0 ? Math.round(centred / snapTo) * snapTo : centred;',
+    replace: 'const snapped = centred;',
+    killedBy: 'snap test (consecutive items differ by exactly one pitch)'
+  },
+  {
+    name: 'axisScroll: centring becomes top-alignment (the selection sits at the edge, not the middle)',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: 'const centred = start - (viewport - size) / 2;',
+    replace: 'const centred = start;',
+    killedBy: 'centring test (item 5 of pitch 20 in a 200px viewport lands at 10)'
+  },
+  {
+    name: 'axisScroll: clamp lets an axis scroll past its content',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: 'return Math.max(0, Math.min(snapped, Math.max(0, content - viewport)));',
+    replace: 'return Math.max(0, snapped);',
+    killedBy: 'clamp test (the last item can only reach content - viewport)'
+  },
+  {
+    name: 'axisScroll: Alt scales the zoom step instead of compounding it',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: 'return alt ? Math.pow(step, ALT_SPEED) : step;',
+    replace: 'return alt ? 1 + (step - 1) * ALT_SPEED : step;',
+    killedBy: 'compounding test (Alt is ALT_SPEED notches, not a scaled step)'
+  },
+  {
+    name: 'axisScroll: Alt stops accelerating a linear scroll',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: 'return delta * (alt ? ALT_SPEED : 1);',
+    replace: 'return delta;',
+    killedBy: 'linear-speed test (an Alt notch travels ALT_SPEED times as far)'
+  },
+  {
     name: 'contextMenu: capability gate ignored (a host is offered an item it cannot serve)',
     file: 'src/webview/contextMenuModel.ts',
     suite: 'test/unit/contextMenuModel.test.ts',

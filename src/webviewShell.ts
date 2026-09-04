@@ -271,14 +271,23 @@ body {
 }
 #info.hidden { display: none; }
 
+/* One scrollable row, never wrapping: #info is flex-shrink:0, so a wrapped pill wall grew the bar and ate the viewer at high modality counts. position:relative makes a pill's offsetLeft the scroll coordinate (docs/loading-architecture.md: selection-centres-on-navigation). */
 #modality-selector {
+  position: relative;
   display: flex;
-  gap: 2px 4px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
   align-items: center;
-  align-content: center;
   min-width: 0;
+  /* Capped so #status keeps a readable share: the strip's natural width is unbounded and #status collapses to 0 before it. Fewer pills visible than the old wrap showed, deliberately — the wrap paid for them in viewer height. */
+  max-width: 60%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
+#modality-selector::-webkit-scrollbar { height: 6px; }
+#modality-selector::-webkit-scrollbar-track { background: transparent; }
+#modality-selector::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-activeBackground, #444); border-radius: 3px; }
 
 #status {
   color: var(--vscode-descriptionForeground, #888);
@@ -538,6 +547,7 @@ body {
   padding: 1px 6px;
   cursor: pointer;
 }
+/* This gap and padding ARE the column axis: main.ts mirrors them as CAROUSEL_TILE_GAP/CAROUSEL_ROW_PAD to centre a column (docs/loading-architecture.md: selection-centres-on-navigation). Change one, change both. */
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
 
@@ -746,6 +756,8 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Enter</td><td>Toggle winner / confirm crop (in crop mode)</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out; scroll tuples on the film strip</td></tr>
         <tr><td>Shift+Scroll</td><td>On the film strip: scroll the film strip sideways</td></tr>
+        <tr><td>Scroll (pills)</td><td>On the modality row: scroll it sideways when it overflows</td></tr>
+        <tr><td>Alt+Scroll</td><td>Anywhere above: 5\u00d7 faster</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
         <tr><td>Click</td><td>Film-strip tile: go to it; its corner circle: toggle winner</td></tr>
         <tr id="help-row-contextmenu"><td>Right-click</td><td>On the image or a pill: <span id="help-contextmenu-items"></span></td></tr>

@@ -1110,6 +1110,28 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`selection-centres-on-navigation`** — every scrollable axis in the viewer obeys one rule, in
+  `webview/axisScroll.ts`: *deliberate navigation centres the selection; a wheel never does.* The
+  three axes are the carousel's rows, the carousel's columns, and the modality pill row. Centring is
+  `centreOffset` — centre the item, optionally snap to the item pitch, clamp to the scrollable range
+  — and the snap is what makes an arrow step move the grid exactly one item or not at all. Pills omit
+  the snap because their widths differ; the two carousel axes pass it.
+  The rule is split in two directions and both halves matter. **Navigation centres**: an arrow, a
+  digit jump, a Space flip, a `[`/`]` reorder or a pill click re-centres its axis, which is why
+  `←`/`→` now moves the carousel horizontally at all — it did not, so at 136 modalities the selected
+  column simply sat off-screen while the row axis tracked correctly. **Render does not**: `render()`
+  runs on every image arrival and every resize frame, so centring there would fight the user's own
+  scroll and override the resize anchor — that is why `updateCarouselSelection` takes
+  `centerOnCurrent` and `render()` passes `false`. A new centring call site belongs on a navigation
+  path. The one paint-path exception is the carousel's `ResizeObserver`, which re-centres the row
+  axis when `clientHeight` *changes* — the visible-row window is derived from it, and it is 0 until
+  the viewer unhides. It is guarded to height only for exactly this reason: a width drag must not
+  re-centre, because the resize anchor owns that. Any other paint-path centring is a bug.
+  `ALT_SPEED` lives in the same module because it has the same one-meaning-everywhere property, and
+  the two kinds of axis need different arithmetic to honour it: scrolling is linear so Alt multiplies
+  the delta, zoom is multiplicative so Alt *compounds* the step (`step ** ALT_SPEED`). Scaling the
+  zoom step by 5 instead would make Alt mean a different amount of movement on the image than on the
+  strips, which is the bug the shared module exists to prevent.
 - **`empty-comparison-is-terminal`** — a comparison with no rows *or* no columns left renders a
   terminal notice: the spinner off, **every** surface that can carry the last frame cleared — the
   canvas hidden *and* the floating panel's minimap (plus its viewport rect), which is a second copy

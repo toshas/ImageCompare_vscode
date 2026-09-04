@@ -89,7 +89,8 @@ Tip: tab titles show the full filename; add this setting to display `session` in
 | `1-9` | Jump to modality N |
 | `Enter` | Toggle winner for current modality |
 | `[` `]` | Reorder modalities |
-| `Scroll` | Zoom in/out (over the tuple carousel: scroll the list) |
+| `Scroll` | Zoom in/out (over the film strip: scroll the list; over the modality row: scroll it sideways when it overflows) |
+| `Alt+Scroll` | The same, 5× faster — zoom, film strip, or modality row |
 | `Drag` | Pan image |
 | Right-click | Menu: **Copy Path** / **Reveal in Explorer** (on the image or a modality pill); **Copy Image** (on the image only); **Hide/Show Modality** (on a pill only) |
 | `Ctrl+C` | Copy the current image to the clipboard (as PNG), when no text is selected |
@@ -97,6 +98,10 @@ Tip: tab titles show the full filename; add this setting to display `session` in
 | `C` | Toggle crop mode |
 | `Del` / `Backspace` | Delete current tuple files (permanent — see warning below) |
 | `Esc` | Reset zoom / cancel crop / close the help overlay |
+
+The modality row is a single scrollable strip: scroll it with the wheel when it overflows, and any
+navigation — an arrow key, a digit jump, a reorder — scrolls it back to the selected pill. The film
+strip's columns follow the selection the same way.
 
 Hovering a modality pill shows its full path; clicking one selects that modality. Right-click a
 pill to copy its path, reveal it in the Explorer file tree, or **hide the modality**: a hidden pill
