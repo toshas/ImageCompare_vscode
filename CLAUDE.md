@@ -2,7 +2,16 @@
 
 ## Git Commit Rules
 
-- Never add Co-Authored-By lines to commits.
+- Never add Co-Authored-By lines to commits. **Gated**, not advisory: `.githooks/commit-msg`
+  rejects a `Co-Authored-By`/`Claude-Session`/`Generated-By` trailer. It has to be `commit-msg` —
+  `pre-commit` runs before the message exists and cannot see one. The gate exists because the rule
+  was prose-only and an agent following a harness default that injects `Co-Authored-By: Claude …`
+  had to be told twice; prose does not gate.
+- **Hooks live in `.githooks/`, and only there.** `npm run hooks:install` points `core.hooksPath`
+  at it, which makes `.git/hooks/` unreachable *entirely* — a guard left there is dead and reads
+  like it is live. That is not hypothetical: the identity guard sat in `.git/hooks/pre-commit`
+  and had not run since the hooksPath config landed. `.githooks/pre-commit` now carries it,
+  ahead of `check-no-personal-refs.mjs`.
 
 ## Documentation Rules
 
@@ -268,7 +277,8 @@ says so itself and exits 2.
 
 CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
 checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but
-runs only in the pre-commit hook — it needs the gitignored `.words-to-check.txt`.) The `gates` job in `test.yml` runs all three
+runs only in `.githooks/pre-commit` — it needs the gitignored `.words-to-check.txt`; that hook also
+pins the commit identity, and `.githooks/commit-msg` rejects attribution trailers.) The `gates` job in `test.yml` runs all three
 `tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every PR and on
 pushes to `main` or `test/**` — its push trigger is branch-limited, so a push to any other branch
 runs nothing until a PR is open; the publish-path `test` job still has **no `tsc --noEmit`

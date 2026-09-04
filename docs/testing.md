@@ -1168,8 +1168,8 @@ to embed a username.
 This rule is enforced from `scripts/`, which `check-invariants.mjs` deliberately does not accept as a
 citation site, so it is stated here as a rule rather than registered as an invariant key.
 
-Its companion `scripts/check-no-personal-refs.mjs` (pre-commit only — it needs the gitignored
-`.words-to-check.txt`) checks *content* instead of placement: the listed words, the runtime user and
+Its companion `scripts/check-no-personal-refs.mjs` (`.githooks/pre-commit` only — it needs the
+gitignored `.words-to-check.txt`) checks *content* instead of placement: the listed words, the runtime user and
 group names, and this machine's home directory and checkout root as literal **prefixes**. Prefixes,
 never a bare `/home/` or `^/` rule: invented absolute paths are the assertion in dozens of unit tests
 (`/base/logs` memo keys, `C:\data\exp1\GT` on a Linux runner, `/home/u/data/results`), a general rule

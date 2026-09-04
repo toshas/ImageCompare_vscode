@@ -1,0 +1,20 @@
+#!/bin/sh
+# Rejects an attribution trailer in the commit message (CLAUDE.md: "Never add Co-Authored-By lines").
+# Install: npm run hooks:install
+#
+# This must be commit-msg, not pre-commit: pre-commit runs before the message exists, so it cannot
+# see a trailer at all. $1 is the path to the prepared message.
+#
+# The rule was prose-only until an agent, following a harness default that injects
+# `Co-Authored-By: Claude ...` into every commit, had to be told twice not to. Prose does not gate;
+# this does. Lines are matched at column 0 so quoting a trailer inside an indented block still works.
+
+if grep -qiE '^(Co-Authored-By|Claude-Session|Generated-By):' "$1"; then
+  echo "commit-msg: this repo takes no attribution trailers." >&2
+  echo "" >&2
+  grep -inE '^(Co-Authored-By|Claude-Session|Generated-By):' "$1" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "  CLAUDE.md, Git Commit Rules: never add Co-Authored-By lines to commits." >&2
+  echo "  Remove the line(s) above and commit again." >&2
+  exit 1
+fi
