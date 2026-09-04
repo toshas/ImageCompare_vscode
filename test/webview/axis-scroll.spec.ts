@@ -47,6 +47,17 @@ const hScroll = (page: Page) =>
     return el ? { left: el.scrollLeft, overflow: el.scrollWidth - el.clientWidth } : null;
   });
 
+/** Wait until the strip's scrollLeft stops changing — navigation animates, so a single read can land mid-slide. */
+async function settled(page: Page): Promise<void> {
+  let last = -1;
+  await expect.poll(async () => {
+    const now = (await pillScroll(page)).left;
+    const stable = now === last;
+    last = now;
+    return stable;
+  }, { timeout: 4000 }).toBe(true);
+}
+
 /** The pill strip's visible window, and where the active pill sits inside the strip. */
 const activePillGeometry = (page: Page) =>
   page.evaluate(() => {
@@ -94,6 +105,7 @@ test.describe('axis scrolling', () => {
 
     await page.keyboard.press('ArrowRight');
     await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(1);
+    await settled(page);
 
     const g = await activePillGeometry(page);
     expect(g.pillStart).toBeGreaterThanOrEqual(g.viewStart);
@@ -130,6 +142,7 @@ test.describe('axis scrolling', () => {
     await page.keyboard.press('Digit5');
     await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(4);
     await expect.poll(async () => (await pillScroll(page)).left).toBeLessThan(parkedRight);
+    await settled(page);
     let g = await activePillGeometry(page);
     expect(g.pillStart).toBeGreaterThanOrEqual(g.viewStart);
     expect(g.pillEnd).toBeLessThanOrEqual(g.viewEnd);
@@ -138,9 +151,112 @@ test.describe('axis scrolling', () => {
     await page.locator('.modality-btn').nth(9).click();
     await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(9);
     await expect.poll(async () => (await pillScroll(page)).left).toBeGreaterThan(0);
+    await settled(page);
     g = await activePillGeometry(page);
     expect(g.pillStart).toBeGreaterThanOrEqual(g.viewStart);
     expect(g.pillEnd).toBeLessThanOrEqual(g.viewEnd);
+  });
+
+  // Reported: the active pill's outline was cropped top and bottom, only its left/right survived.
+  // The ring is a 2px OUTER box-shadow, so a strip whose height equalled the pill's clipped it.
+  test('the active pill\'s focus ring is not clipped by the strip', async ({ page }) => {
+    await loadInited(page, WIDE);
+    const g = await page.evaluate(() => {
+      const strip = document.getElementById('modality-selector')!;
+      const pill = strip.querySelector('.modality-btn.active') as HTMLElement;
+      const ring = parseFloat(getComputedStyle(pill).boxShadow.match(/([\d.]+)px\s*$/)?.[1] ?? '0');
+      return { ring, above: pill.offsetTop, below: strip.clientHeight - (pill.offsetTop + pill.offsetHeight) };
+    });
+    expect(g.ring).toBeGreaterThan(0);
+    expect(g.above).toBeGreaterThanOrEqual(g.ring);
+    expect(g.below).toBeGreaterThanOrEqual(g.ring);
+  });
+
+  // Reported: the horizontal scrollbar painted over the pills while swiping. Chromium's is an
+  // OVERLAY here, so the only ways out are reserving height or not having one.
+  test('no scrollbar paints over the pill row', async ({ page }) => {
+    await loadInited(page, WIDE);
+    const bar = await page.evaluate(() => {
+      const strip = document.getElementById('modality-selector')!;
+      return { layoutSpace: strip.offsetHeight - strip.clientHeight, width: getComputedStyle(strip).scrollbarWidth };
+    });
+    expect(bar.width).toBe('none');
+    expect(bar.layoutSpace).toBe(0);
+    // Still scrollable — hiding the bar must not have hidden the overflow.
+    expect((await pillScroll(page)).overflow).toBeGreaterThan(0);
+  });
+
+  // Reported: switching modality flickered. The label was rewritten on every render, replacing the
+  // pill's text node mid-transition; only the class attributes should change on a plain switch.
+  test('switching modality mutates classes only, never the labels', async ({ page }) => {
+    await loadInited(page, WIDE);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__mut = { attr: 0, text: 0 };
+      new MutationObserver((rs) => {
+        for (const r of rs) {
+          if (r.type === 'attributes') w.__mut.attr++;
+          else w.__mut.text++;
+        }
+      }).observe(document.getElementById('modality-selector')!, {
+        subtree: true, childList: true, characterData: true, attributes: true,
+      });
+    });
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(1);
+    await page.waitForTimeout(300);
+
+    const mut = await page.evaluate(() => (window as any).__mut);
+    expect(mut.text).toBe(0);
+    expect(mut.attr).toBeGreaterThan(0);
+  });
+
+  // Navigation slides; the wheel stays instant so the strip never feels laggy under the pointer.
+  // A smooth scroll emits many scroll events, an assignment exactly one — that is the discriminator.
+  test('navigation slides the pill row, a wheel jumps it', async ({ page }) => {
+    await loadInited(page, WIDE);
+
+    // A wheel lands entirely inside its own event: read straight after dispatch, the strip is already there.
+    const wheel = await page.evaluate(() => {
+      const strip = document.getElementById('modality-selector')!;
+      strip.scrollLeft = 0;
+      const before = strip.scrollLeft;
+      strip.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+      return { before, immediately: strip.scrollLeft };
+    });
+    expect(wheel.immediately).toBe(wheel.before + 120);
+
+    // Navigation does not: it is still short of the target one turn after the keypress, then arrives.
+    await page.evaluate(() => { document.getElementById('modality-selector')!.scrollLeft = 99999; });
+    const parked = (await pillScroll(page)).left;
+    await page.keyboard.press('ArrowRight');
+    const midSlide = await page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft);
+    expect(midSlide).toBe(parked);
+
+    await settled(page);
+    expect((await pillScroll(page)).left).toBeLessThan(parked);
+  });
+
+  // Reported: the row axis felt jaggy where the native horizontal one is smooth. Its wheel deltas are
+  // summed and applied once per frame, so a burst must still travel their exact sum.
+  test('a burst of wheel events travels their exact sum, in one apply', async ({ page }) => {
+    await loadInited(page, TALL);
+    await page.locator('#carousel').hover();
+    // The wall's transform is written once per apply, so counting those counts the applies. Summing
+    // correctly is not enough on its own — applying each event separately reaches the same offset,
+    // having done the rebind work eight times and painted only the last.
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__applies = 0;
+      new MutationObserver((rs) => { w.__applies += rs.length; })
+        .observe(document.getElementById('carousel-wall')!, { attributes: true, attributeFilter: ['style'] });
+      const el = document.getElementById('carousel')!;
+      for (let i = 0; i < 8; i++) {
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 10, bubbles: true, cancelable: true }));
+      }
+    });
+    await expect.poll(() => wallOffset(page)).toBe(80);
+    expect(await page.evaluate(() => (window as any).__applies)).toBe(1);
   });
 
   test('Alt makes a carousel wheel notch travel further, in the same direction', async ({ page }) => {

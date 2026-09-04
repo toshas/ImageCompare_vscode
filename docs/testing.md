@@ -341,6 +341,14 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **The pill strip's and the carousel's rendering rules, by mutation.** `test/webview/axis-scroll.spec.ts`
+  also pins what a user *sees*: the active pill's 2px outer ring clearing the strip's box, no overlay
+  scrollbar painting across the pills, a modality switch mutating class attributes and never the
+  labels (the label rewrite on every render was the flicker), navigation sliding while a wheel lands
+  inside its own event, and a wheel burst reaching the same offset in **one** apply rather than eight.
+  None is Vitest-reachable — they are CSS geometry, a MutationObserver count and a rAF boundary. Each
+  was watched failing against the pre-fix bundle; the apply-count one is the reason the burst test
+  asserts a count at all, since summing correctly happens either way.
 - **The three scroll axes' wiring, by mutation.** `test/webview/axis-scroll.spec.ts` pins which
   events centre the selection and which must not — the wiring lives in `webview/main.ts`, so no
   Vitest mutation can reach it. The *rule* is mutation-covered in `test/unit/axisScroll.test.ts`;

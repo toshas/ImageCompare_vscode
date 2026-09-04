@@ -1538,7 +1538,8 @@ let carouselWallEl: HTMLElement | null = null;
 let carouselThumbEl: HTMLElement | null = null;
 let carouselHScrollEl: HTMLElement | null = null;
 let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
-const CAROUSEL_OVERSCAN = 3;
+// Rows bound beyond the viewport, each way. Sized for a fast flick, not a slow drag: an Alt notch moves 5x, and a window that outruns its buffer shows blank rows until the next bind — the jaggedness this buffers against (docs/loading-architecture.md: wheel-coalesced-to-one-frame).
+const CAROUSEL_OVERSCAN = 10;
 let carouselRowPool: HTMLElement[] = [];
 let carouselRowBound: number[] = []; // pool slot -> bound tupleIndex (-1 = hidden)
 let carouselRowTopAt: number[] = []; // pool slot -> applied top px, to skip redundant writes
@@ -1587,10 +1588,13 @@ function ensureVisibleCarouselRows() {
   if (!carouselWallEl) return;
   const rowH = carouselRowHeight();
   if (rowH <= 0) return;
-  carouselWallEl.style.height = carouselContentHeight() + 'px';
+  // Written only on change: re-setting these every wheel event forced a layout per event, for a box that only moves with the tuple count or tile size (docs/loading-architecture.md: wheel-coalesced-to-one-frame).
+  const wallH = carouselContentHeight() + 'px';
+  if (carouselWallEl.style.height !== wallH) carouselWallEl.style.height = wallH;
   // Wider than the pane only when the 12px tile floor bit: rows overflow into the horizontal scroller.
   const neededW = carouselFitWidth(CAROUSEL_THUMB_SIZE);
-  carouselWallEl.style.width = neededW > CAROUSEL_WIDTH ? neededW + 'px' : '';
+  const wallW = neededW > CAROUSEL_WIDTH ? neededW + 'px' : '';
+  if (carouselWallEl.style.width !== wallW) carouselWallEl.style.width = wallW;
   const viewH = carouselEl.clientHeight;
   const first = Math.max(0, Math.floor(carouselOffset / rowH) - CAROUSEL_OVERSCAN);
   const last = Math.min(tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
@@ -1728,8 +1732,9 @@ function scrollCarouselToCurrentColumn() {
 function scrollPillsToCurrentModality() {
   const pill = modalitySelectorEl.querySelector(`.modality-btn[data-display-index="${currentModalityIndex}"]`) as HTMLElement | null;
   if (!pill) return;
-  modalitySelectorEl.scrollLeft = centreOffset(
-    pill.offsetLeft, pill.offsetWidth, modalitySelectorEl.clientWidth, modalitySelectorEl.scrollWidth);
+  const left = centreOffset(pill.offsetLeft, pill.offsetWidth, modalitySelectorEl.clientWidth, modalitySelectorEl.scrollWidth);
+  // Navigation slides; the wheel path assigns scrollLeft directly and stays instant under the pointer.
+  modalitySelectorEl.scrollTo({ left, behavior: 'smooth' });
 }
 
 /** Every deliberate modality change re-centres both horizontal axes; a wheel calls none of this (docs/loading-architecture.md: selection-centres-on-navigation). */
@@ -1937,13 +1942,10 @@ function updateModalitySelector() {
       btn.classList.add('inactive');
     }
 
-    // Update button text with win count if voting enabled and has wins
+    // Written only when it changed: replacing the text node on every render repainted the pill mid-transition, which is what read as flicker (docs/loading-architecture.md: selection-centres-on-navigation).
     const truncName = pillLabel(modalities[displayIdx]);
-    if (votingEnabled && winCounts[displayIdx] > 0) {
-      btn.textContent = `${truncName} (${winCounts[displayIdx]})`;
-    } else {
-      btn.textContent = truncName;
-    }
+    const label = votingEnabled && winCounts[displayIdx] > 0 ? `${truncName} (${winCounts[displayIdx]})` : truncName;
+    if (btn.textContent !== label) btn.textContent = label;
   });
 
   if (currentModalityIndex <= 0) {
@@ -2411,7 +2413,25 @@ function handleCarouselWheel(e: WheelEvent) {
     carouselHScrollEl.scrollLeft += scrollStep(e.deltaX !== 0 ? e.deltaX : e.deltaY, e.altKey);
     return;
   }
-  applyCarouselOffset(carouselOffset + scrollStep(e.deltaY, e.altKey));
+  queueCarouselWheel(scrollStep(e.deltaY, e.altKey));
+}
+
+let pendingWheelDelta = 0;
+let wheelRaf = 0;
+/**
+ * Wheel deltas are summed and applied once per frame. The row axis is a virtualized wall, so each
+ * apply rebinds rows and repaints tiles; several wheel events landing in one frame each did that
+ * work and only the last was ever painted (docs/loading-architecture.md: wheel-coalesced-to-one-frame).
+ */
+function queueCarouselWheel(delta: number): void {
+  pendingWheelDelta += delta;
+  if (wheelRaf !== 0) return;
+  wheelRaf = requestAnimationFrame(() => {
+    wheelRaf = 0;
+    const delta = pendingWheelDelta;
+    pendingWheelDelta = 0;
+    applyCarouselOffset(carouselOffset + delta);
+  });
 }
 
 /** Wheel over the pill strip scrolls it, but only while it actually overflows — otherwise it would swallow a scroll meant for something else. */

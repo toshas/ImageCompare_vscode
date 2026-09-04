@@ -1110,6 +1110,19 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`wheel-coalesced-to-one-frame`** — the carousel's row axis is a virtualized wall: an offset
+  change rebinds rows and repaints every tile in them, and `bindCarouselRow` touches *every modality*
+  of each bound row (columns are not virtualized —
+  `dev_backlog/carousel-column-virtualization.md`). So the work per apply scales with the modality
+  count, and a wheel can deliver several events per frame. Applying each one did that work N times
+  and painted only the last. Wheel deltas are therefore summed and applied once per
+  `requestAnimationFrame`; nothing else is coalesced, because navigation and drags must settle
+  synchronously for the next read to be true. The other half is the buffer: `CAROUSEL_OVERSCAN` rows
+  are bound beyond the viewport each way, and a window that outruns its buffer shows blank rows until
+  the next bind. It is sized for a fast flick rather than a slow drag — an Alt notch moves
+  `ALT_SPEED` times as far (`selection-centres-on-navigation`), so the buffer and that multiplier
+  must move together. The horizontal axis needs none of this: it is a native `overflow-x` scroller
+  the compositor drives, which is exactly why it felt smooth while the row axis did not.
 - **`selection-centres-on-navigation`** — every scrollable axis in the viewer obeys one rule, in
   `webview/axisScroll.ts`: *deliberate navigation centres the selection; a wheel never does.* The
   three axes are the carousel's rows, the carousel's columns, and the modality pill row. Centring is

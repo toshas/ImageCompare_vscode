@@ -724,6 +724,16 @@
               "match": "Alt makes a carousel wheel notch travel further"
             }
           ]
+        },
+        {
+          "id": "carousel-wheel-coalesced",
+          "name": "Wheel burst applied once per frame",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "travels their exact sum, in one apply"
+            }
+          ]
         }
       ]
     },
@@ -1037,6 +1047,46 @@
             {
               "suite": "webview",
               "match": "a digit jump and a pill click centre the same way"
+            }
+          ]
+        },
+        {
+          "id": "pills-ring-not-clipped",
+          "name": "Active pill ring fully visible",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "the active pill's focus ring is not clipped"
+            }
+          ]
+        },
+        {
+          "id": "pills-no-scrollbar-overlay",
+          "name": "No scrollbar paints over the pills",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "no scrollbar paints over the pill row"
+            }
+          ]
+        },
+        {
+          "id": "pills-no-label-churn",
+          "name": "Switching modality does not rewrite labels",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "mutates classes only, never the labels"
+            }
+          ]
+        },
+        {
+          "id": "pills-smooth-navigation",
+          "name": "Navigation slides, wheel jumps",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "navigation slides the pill row, a wheel jumps it"
             }
           ]
         }
