@@ -464,8 +464,8 @@ const mutations = [
     name: 'columnWindow: pool loses its overscan (a column pops in at the edge of a scroll)',
     file: 'src/webview/columnWindow.ts',
     suite: 'test/unit/columnWindow.test.ts',
-    find: 'const forNarrowest = Math.ceil(Math.max(0, viewportWidth) / MIN_COLUMN_PITCH) + 2 * COLUMN_OVERSCAN + 2;',
-    replace: 'const forNarrowest = Math.ceil(Math.max(0, viewportWidth) / MIN_COLUMN_PITCH) + 2;',
+    find: 'const forNarrowest = Math.ceil(Math.max(0, viewportWidth) / MIN_TILE_PITCH) + 2 * COLUMN_OVERSCAN + 2;',
+    replace: 'const forNarrowest = Math.ceil(Math.max(0, viewportWidth) / MIN_TILE_PITCH) + 2;',
     killedBy: 'pool test (the slot count includes the overscan either side)'
   },
   {

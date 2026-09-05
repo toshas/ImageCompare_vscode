@@ -50,9 +50,9 @@ test.describe('column virtualization', () => {
 
     expect(small.perRow).toBe(big.perRow);
     expect(big.perRow).toBeLessThan(136);
-    // Bounded by the strip it is drawn into: at the narrowest a tile may be (12px + 2px gap), plus
+    // Bounded by the strip it is drawn into: at the narrowest a tile may be (24px + 2px gap), plus
     // the overscan either side and a spare. Derived from the geometry, not from the module.
-    const bound = Math.ceil(big.viewport / 14) + 2 * 2 + 2;
+    const bound = Math.ceil(big.viewport / 26) + 2 * 2 + 2;
     expect(big.perRow).toBeLessThanOrEqual(bound);
   });
 

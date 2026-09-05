@@ -8,10 +8,10 @@ only one of its three directions still open — so it survives here rather than 
 ## The waste
 
 `imageCompare.thumbnailSize` defaults to 100, and thumbnails are decoded at **2x** it — 200 px on
-the longest side. On a wide grid the tile they are painted into is at its **12 px** floor
+the longest side. On a wide grid the tile they are painted into is at its **24 px** floor
 (`updateCarouselThumbSize`: available width divided by the modality count, `Math.max(12, …)`).
 
-That is a 200x200 bitmap drawn into 12x12: **278x more decoded pixels than any of them can show**.
+That is a 200x200 bitmap drawn into 24x24: **69x more decoded pixels than any of them can show**.
 The cost is not the wire — a thumbnail measures ~3.2 KB — it is decode time and resident bitmap.
 Column virtualization cut *how many* tiles decode at once; it did nothing about how big each one is.
 
@@ -19,7 +19,7 @@ Column virtualization cut *how many* tiles decode at once; it did nothing about 
 
 Before virtualization this was one of two compounding terms and the smaller one. Now it is the
 remaining term on the same path: `images-fill-progressively` keeps a gesture cheap, but the fill it schedules still pays ~2.9 ms per
-tile because a blob URL is a resource load; a 12x12 tile that is a canvas blit would not.
+tile because a blob URL is a resource load; a 24x24 tile that is a canvas blit would not.
 
 ## The decision this needs
 

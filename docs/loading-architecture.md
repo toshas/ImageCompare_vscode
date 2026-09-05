@@ -424,7 +424,7 @@ webview's `carouselEl.clientHeight / carouselRowHeight()`, the same arithmetic t
 already does to decide which rows to materialise — and both hosts pass it through as the aim's
 `radius`. It has to be reported rather than assumed because a "screenful" here spans an order of
 magnitude: tile size is the carousel width divided by the modality count, so a 3-modality session
-shows ~7 rows and a 30-modality one, at the 12px tile floor, ~64. A host that reports nothing gets
+shows ~7 rows and a 30-modality one, at the tile floor, ~34. A host that reports nothing gets
 `SWEEP_CROSS_RADIUS` (12), deliberately on the small side — an under-estimate costs only reach along
 the column, an over-estimate costs the rectangle (the table below). Zero and negative reports are
 floored at one row: a collapsed carousel still gets a cross.
@@ -1140,9 +1140,13 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
   The two axes **compound**, which is why this mattered more than the tile count alone suggests: more
   modalities means narrower tiles, narrower tiles means shorter rows, and shorter rows means *more
-  rows* in the pool — the 12 px floor that keeps columns reachable is the same constant that
-  maximises the row count, so the axes reinforce rather than trade off. Virtualizing one axis breaks
-  the product.
+  rows* in the pool — the tile floor that keeps columns reachable is the same constant that maximises
+  the row count, so the axes reinforce rather than trade off. Virtualizing one axis breaks the
+  product; **raising the floor attacks both at once**, which is why `MIN_TILE_PITCH` is one constant
+  and not two. Doubling it from 14 to 26 (a 12 px tile to 24 px) cut the field grid from 2451 tiles
+  to 910 and took the worst frame of a medium scroll from 104.7 ms to 20.1 ms. The cost is columns
+  on screen: the same strip now shows 9 of them at the floor rather than 16, so a wide grid is
+  scrolled horizontally more.
 
   The tile count is bounded by the strip's width, so doubling the modalities costs nothing — which is
   the property `test/webview/column-virtualization.spec.ts` pins, rather than any of these numbers.
@@ -1178,7 +1182,8 @@ Opening a panel is asynchronous, and step order is load-bearing:
   the user's own trace showed thousands of `ThrottlingURLLoader::Start` events. Image size barely
   moves it (16x16 is only 2.4x cheaper than 200x150), so this is not a decode problem and
   `decoding="async"` does not rescue it. At ~2.9 ms per tile, a screenful of this grid — around
-  2150 tiles at the 12 px floor — is several seconds of main-thread work *however* it is scheduled.
+  910 tiles at the 24 px floor, and 2451 before it was raised — is seconds of main-thread work
+  *however* it is scheduled.
   The filler cannot beat that; what it buys is that the cost is spread over frames instead of
   landing in one, which is the difference between a wall that fills in and a viewer that freezes.
   Filling *during* the gesture is not an oversight: it costs 8x the frame time, for tiles the user

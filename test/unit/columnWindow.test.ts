@@ -1,28 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import {
   COLUMN_OVERSCAN,
-  MIN_COLUMN_PITCH,
+  MIN_TILE_PITCH,
   columnLeft,
   columnPoolSize,
   columnWindow,
 } from '../../src/webview/columnWindow';
 
 // The field grid this exists for: 265 tuples x 136 modality columns. At a 220px carousel the tiles
-// hit their 12px floor, so the row is 12 + 136*12 + 135*2 = 1914px inside a 220px scroller.
+// hit their 24px floor, so the row is 12 + 136*24 + 135*2 = 3546px inside a 220px scroller.
 const CAROUSEL_W = 220;
 const COLS = 136;
-const PITCH = 14; // floored 12px tile + 2px gap
+const PITCH = 26; // floored 24px tile + 2px gap
 const PAD = 6;
 
 describe('column window (columnWindow.ts, real code)', () => {
   describe('pool size', () => {
     it('is bounded by the viewport, not the modality count — the whole point of the change', () => {
       const pool = columnPoolSize(CAROUSEL_W, COLS);
-      // ceil(220/14) = 16 visible at the narrowest, + 2*2 overscan + 2 spare.
-      expect(pool).toBe(22);
+      // ceil(220/26) = 9 visible at the narrowest, + 2*2 overscan + 2 spare.
+      expect(pool).toBe(15);
       expect(pool).toBeLessThan(COLS);
       // Ten times the columns costs the same pool.
-      expect(columnPoolSize(CAROUSEL_W, COLS * 10)).toBe(22);
+      expect(columnPoolSize(CAROUSEL_W, COLS * 10)).toBe(15);
     });
 
     it('never exceeds the columns that exist', () => {
@@ -36,10 +36,10 @@ describe('column window (columnWindow.ts, real code)', () => {
     it('is sized from the narrowest tile, so resizing tiles never remaps the ring', () => {
       // The signature is the proof: no pitch is passed, so a tile resize cannot move the pool.
       expect(columnPoolSize.length).toBe(2);
-      // 220px of strip at the 14px floor holds 16 columns; the ring adds 2 either side and 1 spare
-      // each end, which is the 22 the other tests pin. It does not move when the tiles do.
-      expect(columnPoolSize(CAROUSEL_W, COLS)).toBe(22);
-      expect(MIN_COLUMN_PITCH).toBe(14);
+      // 220px of strip at the 26px floor holds 9 columns; the ring adds 2 either side and 1 spare
+      // each end, which is the 15 the other tests pin. It does not move when the tiles do.
+      expect(columnPoolSize(CAROUSEL_W, COLS)).toBe(15);
+      expect(MIN_TILE_PITCH).toBe(26);
       expect(COLUMN_OVERSCAN).toBe(2);
     });
 
@@ -50,8 +50,8 @@ describe('column window (columnWindow.ts, real code)', () => {
 
   describe('visible range', () => {
     it('covers the viewport plus the overscan at the left edge', () => {
-      // scrollLeft 0: first tile starts at pad, so column 0 is first; last = floor((220-6)/14)+2 = 17.
-      expect(columnWindow(0, CAROUSEL_W, PITCH, PAD, COLS)).toEqual({ first: 0, last: 17 });
+      // scrollLeft 0: first tile starts at pad, so column 0 is first; last = floor((220-6)/26)+2 = 10.
+      expect(columnWindow(0, CAROUSEL_W, PITCH, PAD, COLS)).toEqual({ first: 0, last: 10 });
     });
 
     // Away from the clamps: at scrollLeft 0 the overscan is already off the left edge, so `first`
@@ -66,7 +66,7 @@ describe('column window (columnWindow.ts, real code)', () => {
     it('holds the left clamp until the overscan clears the edge, rather than going negative', () => {
       expect(columnWindow(0, CAROUSEL_W, PITCH, PAD, COLS).first).toBe(0);
       expect(columnWindow(PITCH, CAROUSEL_W, PITCH, PAD, COLS).first).toBe(0);
-      // floor((4*14 - 6)/14) - 2 = 3 - 2 = 1; one pitch later, 2. Hand-computed, pad included.
+      // floor((4*26 - 6)/26) - 2 = 3 - 2 = 1; one pitch later, 2. Hand-computed, pad included.
       expect(columnWindow(4 * PITCH, CAROUSEL_W, PITCH, PAD, COLS).first).toBe(1);
       expect(columnWindow(5 * PITCH, CAROUSEL_W, PITCH, PAD, COLS).first).toBe(2);
     });
@@ -97,7 +97,7 @@ describe('column window (columnWindow.ts, real code)', () => {
 
   it('places a column where the row s padding and pitch say it goes', () => {
     expect(columnLeft(0, PITCH, PAD)).toBe(6);
-    expect(columnLeft(1, PITCH, PAD)).toBe(20);
-    expect(columnLeft(135, PITCH, PAD)).toBe(6 + 135 * 14);
+    expect(columnLeft(1, PITCH, PAD)).toBe(32);
+    expect(columnLeft(135, PITCH, PAD)).toBe(6 + 135 * 26);
   });
 });

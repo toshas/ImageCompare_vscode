@@ -20,7 +20,7 @@ import {
 import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextMenu';
 import { NoticeEvent, buildNotice } from './noticeChannel';
 import { centreOffset, scrollStep, wheelPixels, zoomFactor } from './axisScroll';
-import { ColumnWindow, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
+import { ColumnWindow, MIN_TILE_PITCH, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -1407,6 +1407,8 @@ const SCROLLBAR_GUTTER = 10;
 const CAROUSEL_ROW_PAD = 6;
 // The tile gap, on both axes: rows are this much apart vertically, columns this much apart horizontally. Since columns are laid out by arithmetic it lives only here, and .carousel-row's height derives from it.
 const CAROUSEL_TILE_GAP = 2;
+// The tile-size floor, derived from the one pitch both pools are sized by so the three can never drift apart.
+const MIN_TILE_PX = MIN_TILE_PITCH - CAROUSEL_TILE_GAP;
 
 /** Carousel width that fits every modality column at perTile px (6px row padding each side, scrollbar gutter, 2px gaps). */
 function carouselFitWidth(perTile: number): number {
@@ -1419,11 +1421,11 @@ function updateCarouselThumbSize(snapToDevicePixels = true) {
   // Fractional, not floored: integer steps made every tile snap visibly during a resize drag.
   CAROUSEL_THUMB_SIZE = availableWidth / numModalities;
   // Tiles scale down to fit the width — a floor here reintroduces clipped columns.
-  CAROUSEL_THUMB_SIZE = Math.max(12, CAROUSEL_THUMB_SIZE);
+  CAROUSEL_THUMB_SIZE = Math.max(MIN_TILE_PX, CAROUSEL_THUMB_SIZE);
   // At rest, land on the device-pixel grid: fractional row heights make edges shimmer while the wall scrolls.
   if (snapToDevicePixels) {
     const dpr = window.devicePixelRatio || 1;
-    CAROUSEL_THUMB_SIZE = Math.max(12, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
+    CAROUSEL_THUMB_SIZE = Math.max(MIN_TILE_PX, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
   }
   carouselEl.style.setProperty('--thumb-size', CAROUSEL_THUMB_SIZE + 'px');
   // The pitch just moved, so every materialized column sits at the wrong left until it is rewritten — and the strip may have widened, which the ring must absorb before anything binds against it.
@@ -1586,7 +1588,7 @@ function ensureVisibleCarouselRows() {
   // Written only on change: re-setting these every wheel event forced a layout per event, for a box that only moves with the tuple count or tile size (docs/loading-architecture.md: wheel-coalesced-to-one-frame).
   const wallH = carouselContentHeight() + 'px';
   if (carouselWallEl.style.height !== wallH) carouselWallEl.style.height = wallH;
-  // Wider than the pane only when the 12px tile floor bit: rows overflow into the horizontal scroller.
+  // Wider than the pane only when the tile floor bit: rows overflow into the horizontal scroller.
   const neededW = carouselFitWidth(CAROUSEL_THUMB_SIZE);
   const wallW = neededW > CAROUSEL_WIDTH ? neededW + 'px' : '';
   if (carouselWallEl.style.width !== wallW) carouselWallEl.style.width = wallW;
@@ -1594,8 +1596,8 @@ function ensureVisibleCarouselRows() {
   const viewH = carouselEl.clientHeight;
   const first = Math.max(0, Math.floor(carouselOffset / rowH) - CAROUSEL_OVERSCAN);
   const last = Math.min(tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
-  // Sized for the smallest possible row (12px tile + 2), not the current one: a pool-size change remaps the whole ring (slot = j % pool) and rebinds every row — a visible hitch mid-resize (docs/loading-architecture.md: columns-virtualize-like-rows).
-  const needed = Math.min(tuples.length, Math.max(last - first + 1, Math.ceil(viewH / 14) + 2 * CAROUSEL_OVERSCAN + 2));
+  // Sized for the smallest possible row (MIN_TILE_PITCH), not the current one: a pool-size change remaps the whole ring (slot = j % pool) and rebinds every row — a visible hitch mid-resize (docs/loading-architecture.md: columns-virtualize-like-rows).
+  const needed = Math.min(tuples.length, Math.max(last - first + 1, Math.ceil(viewH / MIN_TILE_PITCH) + 2 * CAROUSEL_OVERSCAN + 2));
   while (carouselRowPool.length < needed) {
     const el = createCarouselRowShell();
     carouselRowPool.push(el);
