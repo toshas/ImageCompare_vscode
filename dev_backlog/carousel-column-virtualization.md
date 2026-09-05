@@ -15,6 +15,38 @@ What follows is a real defect found *while looking*, and it is a plausible **con
 pressure in the same renderer — but it has never been shown to be the proximate cause of anything.
 Fix it on its merits.
 
+## It is now the measured cause of something else: scroll jank
+
+**Updated 2026-09-05.** This item was written from inference. It is no longer inference — two
+DevTools traces of the real grid, taken while scrolling vertically, say the vertical axis is slow
+*because of this*, and name the mechanism.
+
+The renderer's main thread was 64% busy over a 10.8 s scroll. What occupied it, against 886 ms of
+script at 0.05 ms per call (script is not the problem and never was):
+
+| main-thread cost | total | count | per occurrence |
+|---|---|---|---|
+| `Commit` | 1841 ms | 409 | 4.50 ms |
+| `Layerize` | 1369 ms | 380 | 3.60 ms |
+| `HitTest` | 1248 ms | 1097 | 1.14 ms |
+
+The decisive number is the comparison against a 400 x 25 grid driven through the same burst in the
+Playwright harness, whose pool holds ~1825 tiles. `Layerize` (3.08 ms) and `HitTest` (1.26 ms) cost
+the **same per occurrence** in both — so the per-element work is identical and the element count is
+the whole difference. Only `Commit` diverges, at **0.37 ms against 4.50 ms, a factor of 12**, and
+`Commit` scales with the layer/property tree the main thread hands the compositor. That tree is the
+wall, and the wall holds `pool x modalities` tiles because columns are not virtualized.
+
+Three constant-factor fixes landed before that was understood, each real and each measured
+(`docs/loading-architecture.md`: `carousel-dom-never-searched`, `flyby-rows-defer-decodes`,
+`rows-contain-their-own-paint`). Together they removed the per-arrival DOM search, the per-tile
+decode churn during a flyby, and ~21% of paint. **They did not make the scroll feel fixed**, and
+they cannot: they shave constants off a term set by how many tiles exist. This item *is* that term.
+
+So the acceptance below should gain one line: a before/after trace on a real wide grid, comparing
+`Commit`, `Layerize` and `Paint` — the same measurement that produced this section, so the next
+person can tell whether it worked instead of asking the user how it feels.
+
 ## The defect
 
 `ensureVisibleCarouselRows` virtualizes **rows** from a pool. `bindCarouselRow` then materializes
