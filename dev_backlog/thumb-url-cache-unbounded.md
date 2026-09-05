@@ -1,7 +1,7 @@
 # Backlog: ThumbUrlCache is unbounded
 
 **Status: not started.** Found 2026-08-25 alongside
-[`carousel-column-virtualization.md`](carousel-column-virtualization.md), diagnosing a window crash
+the column-virtualization work (executed; `docs/loading-architecture.md: columns-virtualize-like-rows`), diagnosing a window crash
 on a 265 x 136 grid (36,040 images).
 
 ## NOT the crash cause

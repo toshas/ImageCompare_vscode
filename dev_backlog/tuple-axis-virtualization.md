@@ -1,7 +1,7 @@
 # Backlog: virtualize the tuple axis everywhere except the DOM
 
 **Status: not started.** Raised 2026-08-26. Sibling of
-[`carousel-column-virtualization.md`](carousel-column-virtualization.md), which covers the *modality*
+the column-virtualization work (executed; `docs/loading-architecture.md: columns-virtualize-like-rows`), which covered the *modality*
 axis; this one covers the *tuple* axis.
 
 ## Start here, because it is counter-intuitive

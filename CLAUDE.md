@@ -119,6 +119,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`webview/emptyNotice.ts`** - Pure (no vscode/DOM): what an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
 - **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
 - **`webview/axisScroll.ts`** - Pure (no vscode/DOM): the one rule every scrollable axis obeys — centre the selection (optionally snapped to the item pitch), clamp to the content — plus what a wheel notch is worth with Alt held, linear and multiplicative → `docs/loading-architecture.md`
+- **`webview/columnWindow.ts`** - Pure (no vscode/DOM): which modality columns a row materializes for the horizontal viewport, the ring size that holds them, and where each one sits — the column axis's half of the carousel's virtualization → `docs/loading-architecture.md`
 - **`webview/contextMenuModel.ts`** - Pure (no vscode/DOM): which items the comparison's context menu offers for a target, given the host's `HostCapabilities`, plus the help text derived from the same model → `docs/standalone.md`, `docs/session-files.md`
 - **`webview/contextMenu.ts`** - The menu's DOM only: positioning, dismissal, click routing — it renders what the model returns → `docs/standalone.md`
 - **`webview/noticeChannel.ts`** - Pure (no vscode/DOM): the wording of what the user is told after a host action, and whether a reveal action rides along → `docs/standalone.md`

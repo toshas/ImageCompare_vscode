@@ -544,13 +544,13 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  display: flex;
-  gap: 2px;
   padding: 1px 6px;
+  /* Explicit, because absolutely-positioned tiles no longer size their row (docs/loading-architecture.md: columns-virtualize-like-rows). */
+  height: calc(var(--thumb-size, 50px) + 2px);
   cursor: pointer;
   contain: content;
 }
-/* This gap and padding ARE the column axis: main.ts mirrors them as CAROUSEL_TILE_GAP/CAROUSEL_ROW_PAD to centre a column (docs/loading-architecture.md: selection-centres-on-navigation). Change one, change both. */
+/* The row's padding is the column axis's origin: main.ts mirrors it as CAROUSEL_ROW_PAD to place a tile and to centre a column (docs/loading-architecture.md: columns-virtualize-like-rows, selection-centres-on-navigation). The gap between columns is no longer CSS — tiles are positioned by arithmetic, so it lives in CAROUSEL_TILE_GAP alone. */
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
 
@@ -560,7 +560,6 @@ body {
   border-radius: 3px;
   border: 2px solid transparent;
   opacity: 0.6;
-  flex-shrink: 0;
 }
 .carousel-thumb:hover { opacity: 1; }
 .carousel-thumb.active { opacity: 1; }
@@ -587,12 +586,12 @@ body {
 }
 
 /* Winner voting indicators */
-/* Sized by one CSS variable so a resize drag writes one style, not one per tile. */
+/* Sized by one CSS variable so a resize drag writes one style, not one per tile. Absolute because a row materializes a moving subset of columns, which flex cannot place (docs/loading-architecture.md: columns-virtualize-like-rows). */
 .carousel-thumb-container {
-  position: relative;
+  position: absolute;
+  top: 1px;
   width: var(--thumb-size, 50px);
   height: var(--thumb-size, 50px);
-  flex-shrink: 0;
 }
 .carousel-thumb-container .carousel-thumb {
   width: 100%;

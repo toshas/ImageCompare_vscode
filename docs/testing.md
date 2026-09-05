@@ -113,6 +113,7 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `emptyNotice` | real source | The emptied comparison's terminal notice: silent while anything is drawable, speaking at zero rows *and* at zero columns (the two shapes the two detectors produce), the folder named only when the host established it is gone, and content winning over a still-flagged missing root — the recoverability rule in pure form |
 | `contextMenuModel` | real source | The comparison's context menu: the extension's item set pinned against what the manifest used to contribute, the standalone's differing *only* by an item its `HostCapabilities` disclaim, the local/host split exact both ways, the toggle label following the hidden state, and the help text derived from the same model so it cannot promise a missing item |
 | `noticeChannel` | real source | What a finished host action says: the wordings pinned against the strings the provider used to hand `showInformationMessage`/`showErrorMessage`, the reveal action offered only to a host that can reveal (with the text unchanged either way), and a failure toned `error` with no action |
+| `columnWindow` | real source | The column axis's virtualization arithmetic: a pool bounded by the viewport rather than the modality count (and capped by the columns that exist), sized from the narrowest possible tile so a resize never remaps the ring, the visible range with its overscan and both clamps, and where a column sits given the row's padding — all against hand-computed geometry for the 265 x 136 field grid |
 | `axisScroll` | real source | The one rule every scrollable axis obeys: centring computed from hand-derived geometry, clamping at both ends and on a short axis, the pitch snap that makes consecutive items differ by exactly one pitch, and Alt — multiplying a linear scroll but *compounding* the zoom step (`1.03**5`, not `1 + 0.03*5`), which is the arithmetic that keeps "faster" meaning the same on every axis |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
@@ -341,6 +342,13 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **The carousel's DOM shape, by mutation.** `test/webview/column-virtualization.spec.ts` asserts
+  tile counts and layout — that doubling the modalities adds no DOM, that the materialized columns
+  are contiguous and correctly placed, and that scrolling releases the near end as it binds the far
+  one. None of that is Vitest-reachable; the arithmetic under it is, in
+  `test/unit/columnWindow.test.ts`. Three of the four were watched failing against the pre-change
+  bundle, where tiles-per-row *was* the modality count. The fourth is labelled in the file as what it
+  is: a regression guard for click targeting, which passed before too.
 - **The carousel's decode cost, by mutation.** `rows flown past take the blank tile` counts *blob*
   src assignments during a wheel burst — 30 pre-fix, 0 after. Nothing in Vitest can see a decode
   being scheduled, and the offsets and the settled tiles are identical either way, so the count is

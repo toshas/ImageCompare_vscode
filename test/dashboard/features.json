@@ -754,6 +754,34 @@
               "match": "rows flown past take the blank tile"
             }
           ]
+        },
+        {
+          "id": "carousel-column-virtualized",
+          "name": "Columns virtualized: DOM bounded by the viewport",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "is bounded by the viewport, not the modality count"
+            },
+            {
+              "suite": "webview",
+              "match": "doubling the modalities does not grow the DOM"
+            }
+          ]
+        },
+        {
+          "id": "carousel-column-window",
+          "name": "Materialized columns follow the horizontal scroll",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "advances by one column per pitch scrolled"
+            },
+            {
+              "suite": "webview",
+              "match": "scrolling the strip materializes later columns"
+            }
+          ]
         }
       ]
     },

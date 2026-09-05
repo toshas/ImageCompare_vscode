@@ -20,6 +20,7 @@ import {
 import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextMenu';
 import { NoticeEvent, buildNotice } from './noticeChannel';
 import { centreOffset, scrollStep, zoomFactor } from './axisScroll';
+import { ColumnWindow, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -1404,7 +1405,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
 const SCROLLBAR_GUTTER = 10;
 // .carousel-row's horizontal padding: where the first tile starts, and so the origin of the column axis.
 const CAROUSEL_ROW_PAD = 6;
-// .carousel-row's `gap`, which is also the vertical space between rows — keep both in step with the CSS.
+// The tile gap, on both axes: rows are this much apart vertically, columns this much apart horizontally. Since columns are laid out by arithmetic it lives only here, and .carousel-row's height derives from it.
 const CAROUSEL_TILE_GAP = 2;
 
 /** Carousel width that fits every modality column at perTile px (6px row padding each side, scrollbar gutter, 2px gaps). */
@@ -1425,6 +1426,9 @@ function updateCarouselThumbSize(snapToDevicePixels = true) {
     CAROUSEL_THUMB_SIZE = Math.max(12, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
   }
   carouselEl.style.setProperty('--thumb-size', CAROUSEL_THUMB_SIZE + 'px');
+  // The pitch just moved, so every materialized column sits at the wrong left until it is rewritten — and the strip may have widened, which the ring must absorb before anything binds against it.
+  ensureColumnCapacity();
+  rebindCarouselColumns();
   // Tiles too small for a separable vote target: the circle stops taking clicks (docs/session-files.md: tiny-tiles-never-vote).
   carouselEl.classList.toggle('tiny-tiles', !isVoteClickable(CAROUSEL_THUMB_SIZE));
 }
@@ -1455,6 +1459,8 @@ function buildCarousel() {
   viewerEl.classList.add('has-carousel');
   viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
 
+  carouselColPool = columnPoolSize(CAROUSEL_WIDTH, modalityOrder.length);
+
   // Virtual shell: an arithmetically sized wall plus the custom scrollbar; rows materialize in ensureVisibleCarouselRows.
   carouselWallEl = document.createElement('div');
   carouselWallEl.id = 'carousel-wall';
@@ -1463,6 +1469,8 @@ function buildCarousel() {
   carouselHScrollEl = document.createElement('div');
   carouselHScrollEl.id = 'carousel-hscroll';
   carouselHScrollEl.appendChild(carouselWallEl);
+  // The column window moves with this scroller, exactly as the row window moves with the wall's offset.
+  carouselHScrollEl.addEventListener('scroll', queueColumnRebind, { passive: true });
   carouselEl.appendChild(carouselHScrollEl);
   carouselEl.appendChild(carouselThumbEl);
   setupCarouselThumbDrag(carouselThumbEl);
@@ -1480,9 +1488,7 @@ function buildCarousel() {
 function updateCarouselSelection(centerOnCurrent = true) {
   if (!isMultiTupleMode) return;
   // Rebinding the pool repaints selection state everywhere it can be visible (~35 rows).
-  for (let s = 0; s < carouselRowPool.length; s++) {
-    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s]);
-  }
+  rebindCarouselColumns();
   if (centerOnCurrent) scrollCarouselToCurrentTuple();
 }
 
@@ -1517,9 +1523,7 @@ function toggleWinner(tupleIndex: TupleIndex, displayModalityIndex: DisplayModal
 
 function updateCarouselWinners() {
   if (!isMultiTupleMode || !votingEnabled) return;
-  for (let s = 0; s < carouselRowPool.length; s++) {
-    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s]);
-  }
+  rebindCarouselColumns();
 }
 
 // Virtual carousel: only visible rows (plus overscan) exist in the DOM, recycled ring-buffer style — scroll, stepping and resize touch ~35 rows, never the whole session (docs/loading-architecture.md).
@@ -1586,10 +1590,11 @@ function ensureVisibleCarouselRows() {
   const neededW = carouselFitWidth(CAROUSEL_THUMB_SIZE);
   const wallW = neededW > CAROUSEL_WIDTH ? neededW + 'px' : '';
   if (carouselWallEl.style.width !== wallW) carouselWallEl.style.width = wallW;
+  ensureColumnCapacity();
   const viewH = carouselEl.clientHeight;
   const first = Math.max(0, Math.floor(carouselOffset / rowH) - CAROUSEL_OVERSCAN);
   const last = Math.min(tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
-  // Sized for the smallest possible row (12px tile + 2), not the current one: a pool-size change remaps the whole ring (slot = j % pool) and rebinds every row — a visible hitch mid-resize.
+  // Sized for the smallest possible row (12px tile + 2), not the current one: a pool-size change remaps the whole ring (slot = j % pool) and rebinds every row — a visible hitch mid-resize (docs/loading-architecture.md: columns-virtualize-like-rows).
   const needed = Math.min(tuples.length, Math.max(last - first + 1, Math.ceil(viewH / 14) + 2 * CAROUSEL_OVERSCAN + 2));
   while (carouselRowPool.length < needed) {
     const el = createCarouselRowShell();
@@ -1607,38 +1612,66 @@ function ensureVisibleCarouselRows() {
       carouselRowBound[s] = -1;
     }
   }
+  const colWin = currentColumnWindow();
   for (let j = first; j <= last; j++) {
     const s = j % pool;
     const el = carouselRowPool[s];
     const top = j * rowH;
     if (carouselRowTopAt[s] !== top) {
+      // Position written only on change, the same guard the column ring uses (docs/loading-architecture.md: columns-virtualize-like-rows).
       el.style.top = top + 'px';
       carouselRowTopAt[s] = top;
     }
     if (carouselRowBound[s] !== j) {
       el.style.display = '';
-      bindCarouselRow(el, j);
+      bindCarouselRow(el, j, colWin);
       carouselRowBound[s] = j;
     }
   }
 }
 
-/** A pooled row's tiles and vote circles, captured once at creation (docs/loading-architecture.md: carousel-dom-never-searched). */
-interface RowParts { imgs: HTMLImageElement[]; circles: (HTMLElement | null)[] }
+/** A pooled row's column ring: one entry per SLOT, not per modality (docs/loading-architecture.md: columns-virtualize-like-rows). */
+interface RowParts {
+  containers: HTMLElement[];
+  imgs: HTMLImageElement[];
+  circles: (HTMLElement | null)[];
+  /** slot -> display index it currently shows, -1 when unbound. */
+  colBound: number[];
+  /** slot -> applied left px, to skip redundant writes and to catch a pitch change. */
+  colLeftAt: number[];
+}
 const rowParts = new WeakMap<HTMLElement, RowParts>();
+
+/** Slots every row's column ring holds, sized from the narrowest tile so a resize never remaps it (docs/loading-architecture.md: columns-virtualize-like-rows). */
+let carouselColPool = 0;
+
+/**
+ * Grow the column ring to fit a widened strip, discarding the row pool because a bigger ring remaps
+ * every slot. Must run before anything binds against the new width: the rows it drops are rebuilt by
+ * the caller's own fill, and a rebind against a stale ring collides columns onto one slot.
+ */
+function ensureColumnCapacity(): void {
+  const want = columnPoolSize(CAROUSEL_WIDTH, modalityOrder.length);
+  if (want <= carouselColPool) return;
+  carouselColPool = want;
+  for (const row of carouselRowPool) row.remove();
+  carouselRowPool = [];
+  carouselRowBound = [];
+  carouselRowTopAt = [];
+}
 
 function createCarouselRowShell(): HTMLElement {
   const row = document.createElement('div');
   row.className = 'carousel-row';
-  const parts: RowParts = { imgs: [], circles: [] };
+  const parts: RowParts = { containers: [], imgs: [], circles: [], colBound: [], colLeftAt: [] };
   // Born hidden: with the pool oversized for the smallest row height, some shells stay unbound — visible unbound shells would stack at top 0.
   row.style.display = 'none';
-  for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
+  for (let slot = 0; slot < carouselColPool; slot++) {
     const container = document.createElement('div');
     container.className = 'carousel-thumb-container';
+    container.style.display = 'none';
     const img = document.createElement('img');
     img.className = 'carousel-thumb placeholder';
-    img.dataset.displayIndex = String(displayIdx);
     // An undecodable thumb src must show the designed ✕ placeholder, never the browser's broken-image glyph (docs/loading-architecture.md: decode-retry-once).
     img.onerror = () => handleThumbDecodeFailure(img);
     img.onload = () => {
@@ -1646,6 +1679,7 @@ function createCarouselRowShell(): HTMLElement {
       if (img.src !== PLACEHOLDER_THUMB) thumbRetried.delete(`${img.dataset.tuple}-${img.dataset.modality}`);
     };
     container.appendChild(img);
+    parts.containers.push(container);
     parts.imgs.push(img);
     let circle: HTMLElement | null = null;
     if (votingEnabled) {
@@ -1654,10 +1688,23 @@ function createCarouselRowShell(): HTMLElement {
       container.appendChild(circle);
     }
     parts.circles.push(circle);
+    parts.colBound.push(-1);
+    parts.colLeftAt.push(-1);
     row.appendChild(container);
   }
   rowParts.set(row, parts);
   return row;
+}
+
+/** The column range on screen right now, in display indices. */
+function currentColumnWindow(): { first: number; last: number } {
+  return columnWindow(
+    carouselHScrollEl?.scrollLeft ?? 0,
+    carouselHScrollEl?.clientWidth || CAROUSEL_WIDTH,
+    carouselColumnPitch(),
+    CAROUSEL_ROW_PAD,
+    modalityOrder.length
+  );
 }
 
 /**
@@ -1668,11 +1715,15 @@ function createCarouselRowShell(): HTMLElement {
 function carouselTileFor(tupleIndex: number, originalModalityIndex: number): HTMLImageElement | null {
   const pool = carouselRowPool.length;
   if (pool === 0) return null;
-  const slot = tupleIndex % pool;
-  if (carouselRowBound[slot] !== tupleIndex) return null;
+  const rowSlot = tupleIndex % pool;
+  if (carouselRowBound[rowSlot] !== tupleIndex) return null;
   const displayIdx = modalityOrder.indexOf(asOriginal(originalModalityIndex));
   if (displayIdx < 0) return null;
-  return rowParts.get(carouselRowPool[slot])?.imgs[displayIdx] ?? null;
+  const parts = rowParts.get(carouselRowPool[rowSlot]);
+  if (!parts || parts.containers.length === 0) return null;
+  // Through the column ring, so a column that is not on screen has no tile (docs/loading-architecture.md: columns-virtualize-like-rows).
+  const colSlot = displayIdx % parts.containers.length;
+  return parts.colBound[colSlot] === displayIdx ? parts.imgs[colSlot] : null;
 }
 
 /** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
@@ -1683,37 +1734,93 @@ let carouselSettleTimer: number | undefined;
 /** Rebind every bound row now that the wall has stopped, so the rows the user actually landed on get their images. */
 function fillFlybyRows(): void {
   carouselFlying = false;
-  for (let s = 0; s < carouselRowPool.length; s++) {
-    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s]);
+  rebindCarouselColumns();
+}
+
+function bindCarouselRow(el: HTMLElement, tupleIdx: number, win: ColumnWindow = currentColumnWindow()) {
+  el.dataset.tupleIndex = String(tupleIdx);
+  el.classList.toggle('current', tupleIdx === currentTupleIndex);
+  const parts = rowParts.get(el);
+  if (!parts) return;
+  const pool = parts.containers.length;
+  if (pool === 0) return;
+  const first = win.first;
+  // Never wider than the ring: a strip widened since this row was built would otherwise map two columns onto one slot.
+  const last = Math.min(win.last, first + pool - 1);
+  // Slots whose column has left the window: hidden, and marked free so the ring rebinds them.
+  for (let slot = 0; slot < pool; slot++) {
+    const held = parts.colBound[slot];
+    if (held >= 0 && (held < first || held > last)) {
+      parts.containers[slot].style.display = 'none';
+      parts.colBound[slot] = -1;
+    }
+  }
+  const winnerIdx = winners.get(asTuple(tupleIdx));
+  const pitch = carouselColumnPitch();
+  for (let displayIdx = first; displayIdx <= last; displayIdx++) {
+    // The ring mapping itself (docs/loading-architecture.md: columns-virtualize-like-rows).
+    const slot = displayIdx % pool;
+    bindCarouselTile(parts, slot, displayIdx, tupleIdx, winnerIdx, pitch);
   }
 }
 
-function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
-  el.dataset.tupleIndex = String(tupleIdx);
-  el.classList.toggle('current', tupleIdx === currentTupleIndex);
-  const winnerIdx = winners.get(asTuple(tupleIdx));
-  const parts = rowParts.get(el);
-  if (!parts) return;
-  parts.imgs.forEach((img, displayIdx) => {
-    const originalIdx = modalityOrder[displayIdx];
-    img.dataset.tuple = String(tupleIdx);
-    img.dataset.modality = String(originalIdx);
-    const url = carouselFlying ? undefined : thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
-    if (url) {
-      if (img.getAttribute('src') !== url) img.src = url;
-      img.classList.remove('placeholder');
-      img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
-    } else {
-      // Removing the src of a recycled tile leaves the browser's broken-image glyph (docs/loading-architecture.md: empty-tile-never-broken).
-      if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
-      img.classList.add('placeholder');
-      img.classList.remove('missing');
-    }
-    img.classList.toggle('active', tupleIdx === currentTupleIndex);
-    img.classList.toggle('selected', tupleIdx === currentTupleIndex && displayIdx === currentModalityIndex);
-    const circle = parts.circles[displayIdx];
-    if (circle) circle.classList.toggle('winner', winnerIdx === displayIdx);
+/** One tile: its place on the column axis, then the state every recycled tile must repaint from (docs/loading-architecture.md: columns-virtualize-like-rows). */
+function bindCarouselTile(
+  parts: RowParts,
+  slot: number,
+  displayIdx: number,
+  tupleIdx: number,
+  winnerIdx: DisplayModalityIndex | undefined,
+  pitch: number
+): void {
+  const container = parts.containers[slot];
+  const img = parts.imgs[slot];
+  const originalIdx = modalityOrder[displayIdx];
+  if (parts.colBound[slot] !== displayIdx) {
+    container.style.display = '';
+    img.dataset.displayIndex = String(displayIdx);
+    parts.colBound[slot] = displayIdx;
+  }
+  const left = columnLeft(displayIdx, pitch, CAROUSEL_ROW_PAD);
+  if (parts.colLeftAt[slot] !== left) {
+    container.style.left = `${left}px`;
+    parts.colLeftAt[slot] = left;
+  }
+  img.dataset.tuple = String(tupleIdx);
+  img.dataset.modality = String(originalIdx);
+  const url = carouselFlying ? undefined : thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
+  if (url) {
+    if (img.getAttribute('src') !== url) img.src = url;
+    img.classList.remove('placeholder');
+    img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
+  } else {
+    // Removing the src of a recycled tile leaves the browser's broken-image glyph (docs/loading-architecture.md: empty-tile-never-broken).
+    if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
+    img.classList.add('placeholder');
+    img.classList.remove('missing');
+  }
+  img.classList.toggle('active', tupleIdx === currentTupleIndex);
+  img.classList.toggle('selected', tupleIdx === currentTupleIndex && displayIdx === currentModalityIndex);
+  const circle = parts.circles[slot];
+  if (circle) circle.classList.toggle('winner', winnerIdx === displayIdx);
+}
+
+let columnRebindRaf = 0;
+/** One rebind per frame however many scroll events land in it — the row axis's rule, other axis (docs/loading-architecture.md: wheel-coalesced-to-one-frame). */
+function queueColumnRebind(): void {
+  if (columnRebindRaf !== 0) return;
+  columnRebindRaf = requestAnimationFrame(() => {
+    columnRebindRaf = 0;
+    rebindCarouselColumns();
   });
+}
+
+/** Rebind every bound row's columns: the window moved, so each row's ring holds the wrong ones. */
+function rebindCarouselColumns(): void {
+  const win = currentColumnWindow();
+  for (let s = 0; s < carouselRowPool.length; s++) {
+    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s], win);
+  }
 }
 
 function handleCarouselClick(e: MouseEvent) {
@@ -1729,7 +1836,7 @@ function handleCarouselClick(e: MouseEvent) {
   }
   const img = target.closest('.carousel-thumb') as HTMLElement | null;
   if (img) {
-    // Every thumb is stamped at creation and buildCarousel() resets the pool on a column-count change, so this is total; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: picked-column-reports-itself).
+    // Every materialized thumb is stamped at bind and buildCarousel() resets the pool on a column-count change, so this is total for what is on screen; a silent 0 here is the column-0 aim bug (docs/loading-architecture.md: picked-column-reports-itself).
     const clicked = parseInt(img.dataset.displayIndex ?? '', 10);
     if (Number.isInteger(clicked)) goToTupleAndModality(tupleIdx, asDisplay(clicked));
     return;
@@ -1753,8 +1860,8 @@ function scrollCarouselToCurrentColumn() {
   if (!isMultiTupleMode || !carouselHScrollEl) return;
   const pitch = carouselColumnPitch();
   if (pitch <= 0) return;
-  // Tiles start after the row's 6px left padding, so the span is offset by it; the snap is the same pitch as the rows'.
-  const start = CAROUSEL_ROW_PAD + currentModalityIndex * pitch;
+  // The same pitch and origin the column ring lays tiles out with; the two drifting apart is a silent mis-scroll (docs/loading-architecture.md: columns-virtualize-like-rows).
+  const start = columnLeft(currentModalityIndex, pitch, CAROUSEL_ROW_PAD);
   carouselHScrollEl.scrollLeft = centreOffset(
     start, CAROUSEL_THUMB_SIZE, carouselHScrollEl.clientWidth, carouselHScrollEl.scrollWidth, pitch);
 }
