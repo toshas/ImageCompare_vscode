@@ -4,6 +4,54 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-06
+
+### Added
+- **A folder of images opens as a comparison of those images.** Right-clicking a folder that holds
+  images and no image subfolders used to be an error telling you to go and select the files
+  yourself; it now opens on exactly those files — the same comparison that selection would have
+  produced. `_cropNN` outputs are left out, so a folder you have cropped in before reopens on the
+  originals, unless leaving them out would leave nothing to compare
+- **A folder holding one image subfolder opens** as a comparison of that single column, instead of
+  refusing with *"must contain 2+ subdirectories"*. Neither refusal survived contact with what the
+  viewer can display: a comparison runs at one column and empties only at zero
+- **`Alt` accelerates every scroll axis, 5x** — the film strip, the modality row, the tuple axis and
+  zoom. Zoom compounds its step rather than multiplying it, so "faster" means the same thing
+  everywhere
+- **The modality row is one scrollable strip.** It no longer wraps into a wall that eats the viewer
+  on a wide comparison; the wheel scrolls it, and any navigation scrolls it back to the selection
+- **A context menu on the image and on the modality pills**, offering Copy Image, Copy Path, Reveal
+  in Explorer and Hide/Show Modality. The standalone browser build offers the same menu minus what
+  it cannot serve, because the webview builds it from what the host declares rather than from which
+  product it is
+
+### Changed
+- **`Del` deletes one image, not the row, when the comparison is a list of files.** In a folder of
+  images or a hand-picked selection, every column is a file you chose, so `Del` takes that file. The
+  Delete button's tooltip and the help overlay say which unit is about to go
+- **The film strip only builds the tiles you can see.** Both axes are now virtualized — the columns
+  the way the rows already were. On a 265 x 136 grid that is the difference between 7 752 tiles in
+  the DOM and a screenful, which is what made scrolling it stutter
+- **Navigating scrolls the film strip horizontally too**, not only vertically, and a keyboard move
+  jumps the strip to the selection while a wheel leaves it where you put it
+- **Tiles keep their images through a gesture** and fill in as it settles, instead of blanking the
+  wall the moment you start scrolling
+- **The minimum tile is 24 px**, up from 12 px, so a dense grid stays legible and its winner circles
+  stay clickable
+
+### Fixed
+- **PowerPoint export no longer fails on a comparison of files.** It threw *"Cannot determine output
+  directory"* for every file-list comparison; the deck now lands in the first image's own folder,
+  which for a folder you opened is the folder you opened
+- **Cropping a comparison whose images share one folder writes one crop per image** instead of
+  writing them all to a single filename, concurrently, and keeping whichever landed last. Each crop
+  is named after the image it came from
+- **The right-click menu and the path tooltip reach the standalone build**, which had neither. Both
+  products now render the same affordances from one shared model
+- **A wheel notch on the film strip travels a row, not three pixels** — the browser reports some
+  wheel events in lines, and they were being read as pixels, which is what made a gentle swipe feel
+  like it did nothing
+
 ## [0.4.1] - 2026-08-30
 
 ### Added
