@@ -229,10 +229,31 @@ test.describe('axis scrolling', () => {
 
   // Navigation slides; the wheel stays instant so the strip never feels laggy under the pointer.
   // A smooth scroll emits many scroll events, an assignment exactly one — that is the discriminator.
+  // What is ours to guarantee is the REQUEST, not the animation. On the Windows runner a smooth
+  // scroll lands INSTANTLY — the strip is already at the target inside the task that dispatched the
+  // key — while on Linux it is still parked there. Why they differ is not established: forcing
+  // `reducedMotion: 'reduce'` locally does not reproduce it, so the obvious explanation is not the
+  // explanation. It does not matter, and that is the point: two earlier versions of this test
+  // asserted the animation (reading scrollLeft after the keypress, then inside the dispatching
+  // task) and both failed on Windows for that reason rather than because anything was broken.
+  // Spying on the call is true whichever way a platform chooses to honour it.
   test('navigation slides the pill row, a wheel jumps it', async ({ page }) => {
     await loadInited(page, WIDE);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__scrollToBehaviors = [];
+      const strip = document.getElementById('modality-selector')!;
+      const real = strip.scrollTo.bind(strip);
+      // Both overloads, so the spy keeps scrollTo's real shape.
+      strip.scrollTo = ((opts?: ScrollToOptions | number, y?: number) => {
+        if (typeof opts === 'number') return real(opts, y as number);
+        w.__scrollToBehaviors.push(opts?.behavior ?? 'auto');
+        return real(opts);
+      }) as typeof strip.scrollTo;
+    });
+    const behaviors = () => page.evaluate(() => (window as any).__scrollToBehaviors as string[]);
 
-    // A wheel lands entirely inside its own event: read straight after dispatch, the strip is already there.
+    // A wheel assigns scrollLeft directly: it lands inside its own event and asks for no animation.
     const wheel = await page.evaluate(() => {
       const strip = document.getElementById('modality-selector')!;
       strip.scrollLeft = 0;
@@ -241,23 +262,18 @@ test.describe('axis scrolling', () => {
       return { before, immediately: strip.scrollLeft };
     });
     expect(wheel.immediately).toBe(wheel.before + 120);
+    expect(await behaviors()).toEqual([]);
 
-    // Navigation does not: a smooth scroll is scheduled, never applied inside the dispatching task,
-    // so the strip has not moved when the same synchronous block reads it. Timing-free — an earlier
-    // version read after `keyboard.press` and raced the animation, which a fast runner won.
-    const nav = await page.evaluate(() => {
-      const strip = document.getElementById('modality-selector')!;
-      strip.scrollLeft = 999999;
-      const parked = strip.scrollLeft;
-      document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true, cancelable: true }));
-      return { parked, immediately: strip.scrollLeft };
-    });
-    expect(nav.parked).toBeGreaterThan(0);
-    expect(nav.immediately).toBe(nav.parked);
+    // Navigation goes through scrollTo, asking for 'smooth'.
+    await page.evaluate(() => { document.getElementById('modality-selector')!.scrollLeft = 999999; });
+    const parked = (await pillScroll(page)).left;
+    expect(parked).toBeGreaterThan(0);
+    await page.keyboard.press('ArrowRight');
+    expect(await behaviors()).toEqual(['smooth']);
 
-    // And it does arrive.
+    // And it arrives, however the platform chose to get there.
     await settled(page);
-    expect((await pillScroll(page)).left).toBeLessThan(nav.parked);
+    expect((await pillScroll(page)).left).toBeLessThan(parked);
   });
 
   // Reported: the row axis felt jaggy where the native horizontal one is smooth. Its wheel deltas are
