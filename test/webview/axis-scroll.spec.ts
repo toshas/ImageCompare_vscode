@@ -175,7 +175,7 @@ test.describe('axis scrolling', () => {
     // scrollLeft 0, the last pill's past the end, so the strip must pad horizontally too.
     const ends = await page.evaluate(() => {
       const strip = document.getElementById('modality-selector')!;
-      const pills = [...strip.querySelectorAll('.modality-btn')] as HTMLElement[];
+      const pills = Array.from(strip.querySelectorAll('.modality-btn')) as HTMLElement[];
       const last = pills[pills.length - 1];
       strip.scrollLeft = 0;
       const left = pills[0].offsetLeft - strip.scrollLeft;
@@ -242,15 +242,22 @@ test.describe('axis scrolling', () => {
     });
     expect(wheel.immediately).toBe(wheel.before + 120);
 
-    // Navigation does not: it is still short of the target one turn after the keypress, then arrives.
-    await page.evaluate(() => { document.getElementById('modality-selector')!.scrollLeft = 99999; });
-    const parked = (await pillScroll(page)).left;
-    await page.keyboard.press('ArrowRight');
-    const midSlide = await page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft);
-    expect(midSlide).toBe(parked);
+    // Navigation does not: a smooth scroll is scheduled, never applied inside the dispatching task,
+    // so the strip has not moved when the same synchronous block reads it. Timing-free — an earlier
+    // version read after `keyboard.press` and raced the animation, which a fast runner won.
+    const nav = await page.evaluate(() => {
+      const strip = document.getElementById('modality-selector')!;
+      strip.scrollLeft = 999999;
+      const parked = strip.scrollLeft;
+      document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', bubbles: true, cancelable: true }));
+      return { parked, immediately: strip.scrollLeft };
+    });
+    expect(nav.parked).toBeGreaterThan(0);
+    expect(nav.immediately).toBe(nav.parked);
 
+    // And it does arrive.
     await settled(page);
-    expect((await pillScroll(page)).left).toBeLessThan(parked);
+    expect((await pillScroll(page)).left).toBeLessThan(nav.parked);
   });
 
   // Reported: the row axis felt jaggy where the native horizontal one is smooth. Its wheel deltas are
