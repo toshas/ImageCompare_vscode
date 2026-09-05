@@ -1186,8 +1186,16 @@ Opening a panel is asynchronous, and step order is load-bearing:
   *however* it is scheduled.
   The filler cannot beat that; what it buys is that the cost is spread over frames instead of
   landing in one, which is the difference between a wall that fills in and a viewer that freezes.
-  Filling *during* the gesture is not an oversight: it costs 8x the frame time, for tiles the user
-  has already scrolled past. Two things would actually move the ceiling and neither is scheduling —
+  **Which frames give up their images is a speed decision, not a blanket one.** Once
+  `columns-virtualize-like-rows` and the raised tile floor cut a screenful from 2451 tiles to 910, a
+  *slow* scroll became affordable — it stays fully painted at 34.5 ms a frame, where the same thing
+  cost 215 ms before. So only a frame moving more than `CAROUSEL_FLYBY_ROWS` rows gives up its
+  images; below that the wall stays populated and you can see the gesture working. A flick still
+  blanks, at 16.7 ms a frame, for tiles that are gone before they could be read.
+  Two rules keep that honest. A tile already showing its own image is **kept**, flying or not —
+  keeping costs no assignment, and blanking it throws away content the user is looking at, which is
+  what made a gesture appear to wipe the wall. And a rebound row is blanked *explicitly* rather than
+  left alone, so it can never show the previous tuple's image. Two things would actually move the ceiling and neither is scheduling —
   fewer tiles on screen, or a tile that is a canvas blit rather than a URL load
   (`dev_backlog/tile-appropriate-thumbnails.md`).
   The blank branch is what makes the defer safe: a rebound row cannot show the *previous* tuple's

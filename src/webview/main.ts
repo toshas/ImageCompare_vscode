@@ -1537,6 +1537,8 @@ let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
 const CAROUSEL_OVERSCAN = 3;
 // How long after the last wheel notch the wall starts filling in. Short enough to read as part of the gesture.
 const CAROUSEL_SETTLE_MS = 90;
+// Rows per frame above which a frame stops binding images: below it the turnover is affordable and the wall stays filled, above it the tiles are gone before they are seen (docs/loading-architecture.md: images-fill-progressively).
+const CAROUSEL_FLYBY_ROWS = 1.5;
 let carouselRowPool: HTMLElement[] = [];
 let carouselRowBound: number[] = []; // pool slot -> bound tupleIndex (-1 = hidden)
 let carouselRowTopAt: number[] = []; // pool slot -> applied top px, to skip redundant writes
@@ -1826,15 +1828,19 @@ function bindCarouselTile(
   img.dataset.tuple = String(tupleIdx);
   img.dataset.modality = String(originalIdx);
   const url = thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
-  if (url && !carouselFlying && img.getAttribute('src') === url) {
+  // A tile already showing its own image keeps it, gesture or not: keeping costs no assignment, and blanking it threw away content the user was looking at (docs/loading-architecture.md: images-fill-progressively).
+  if (url && img.getAttribute('src') === url) {
     img.classList.remove('placeholder');
     img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
-  } else if (url) {
-    // Blank now, real image from the filler: assigning it here would cost this frame every tile that turned over (docs/loading-architecture.md: images-fill-progressively).
+  } else if (url && carouselFlying) {
+    // Only a frame outrunning the eye gives up its images; the settle's filler catches these up (docs/loading-architecture.md: images-fill-progressively).
     if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
     img.classList.add('placeholder');
     img.classList.remove('missing');
-    if (!carouselFlying) scheduleCarouselFill();
+  } else if (url) {
+    img.src = url;
+    img.classList.remove('placeholder');
+    img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
   } else {
     // Removing the src of a recycled tile leaves the browser's broken-image glyph (docs/loading-architecture.md: empty-tile-never-broken).
     if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
@@ -2608,13 +2614,14 @@ let wheelRaf = 0;
 function queueCarouselWheel(delta: number): void {
   pendingWheelDelta += delta;
   if (wheelRaf !== 0) return;
-  carouselFlying = true;
   if (carouselSettleTimer !== undefined) clearTimeout(carouselSettleTimer);
   carouselSettleTimer = setTimeout(() => { carouselFlying = false; scheduleCarouselFill(); }, CAROUSEL_SETTLE_MS) as unknown as number;
   wheelRaf = requestAnimationFrame(() => {
     wheelRaf = 0;
     const delta = pendingWheelDelta;
     pendingWheelDelta = 0;
+    // Only a frame that outruns the eye gives up its images; a slow scroll keeps the wall filled.
+    carouselFlying = Math.abs(delta) > CAROUSEL_FLYBY_ROWS * carouselRowHeight();
     applyCarouselOffset(carouselOffset + delta);
   });
 }

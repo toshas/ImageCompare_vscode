@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { loadInited, getState } from './helpers';
-import { DEFAULT_SPEC } from '../fixtures/messages';
+import { DEFAULT_SPEC, initMessage } from '../fixtures/messages';
+import { HARNESS_URL } from './harness';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -369,8 +370,9 @@ test.describe('axis scrolling', () => {
         get() { return desc.get!.call(this); },
         set(v: string) { if (v.startsWith('blob:')) blobSets++; desc.set!.call(this, v); },
       });
+      // Well past CAROUSEL_FLYBY_ROWS on any row height: a flick, not a scroll.
       for (let i = 0; i < 12; i++) {
-        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 600, bubbles: true, cancelable: true }));
         await new Promise(requestAnimationFrame);
       }
       return { blobSetsDuringGesture: blobSets };
@@ -384,6 +386,80 @@ test.describe('axis scrolling', () => {
       .poll(() => page.$$eval('.carousel-row .carousel-thumb', (imgs) =>
         imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length), { timeout: 5000 })
       .toBeGreaterThan(0);
+  });
+
+  // Reported: the wall blanked the moment a gesture started, so you could not tell whether it had
+  // registered. Two causes. A tile already showing its own image was being blanked (keeping it costs
+  // no assignment), and the defer applied at every speed even though, since the tile floor doubled,
+  // a slow scroll's turnover is affordable: it stays filled at 34.5 ms/frame where it used to cost
+  // 215 ms. Only a frame that outruns the eye gives up its images now.
+  //
+  // This needs a grid wide enough that the filler CANNOT paper over a missing gate — on a 2-modality
+  // grid it refills faster than a slow scroll recycles, and the assertion passes either way. That is
+  // why the spec loads its own 24-column grid here instead of reusing TALL.
+  //
+  // What this test does NOT discriminate: the keep-an-already-correct-tile half of the fix. With the
+  // speed gate in place a slow scroll never sets the flying flag, so the branch that used to blank a
+  // correct tile is unreachable from here, and during a flick a blank is what we want anyway. It was
+  // verified by reverting the gate instead, where the wall visibly emptied. Declared rather than
+  // covered (test/CLAUDE.md rule 3).
+  test('a slow scroll keeps its images, a flick gives them up', async ({ page }) => {
+    const MODS = 24;
+    await page.goto(HARNESS_URL);
+    await page.waitForFunction(() => (window as any).__ic_outbound.some((m: any) => m?.type === 'ready'));
+    await page.evaluate((m) => (window as any).__ic_send(m), initMessage({
+      ...DEFAULT_SPEC,
+      tupleNames: Array.from({ length: 120 }, (_, i) => `s_${i}`),
+      modalities: Array.from({ length: MODS }, (_, i) => `M${i}`),
+    }) as any);
+    await page.waitForFunction(() => (window as any).__ic_test.getState().tupleCount === 120);
+    // One round trip: a message per tile would be thousands.
+    await page.evaluate((mods) => {
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      for (let t = 0; t < 120; t++) for (let m = 0; m < mods; m++)
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'thumbnail', tupleIndex: t, modalityIndex: m, bytes: png, mime: 'image/png' } }));
+    }, MODS);
+
+    const filled = () => page.$$eval('.carousel-row .carousel-thumb', (imgs) =>
+      imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length);
+    // Wait for the filler to plateau rather than for a fraction of the tile count: the pool holds
+    // rows that are not bound, and their tiles are in the DOM but will never be filled.
+    let last = -1;
+    await expect.poll(async () => {
+      const now = await filled();
+      const settled = now === last && now > 0;
+      last = now;
+      return settled;
+    }, { timeout: 20000 }).toBe(true);
+    const before = await filled();
+    expect(before).toBeGreaterThan(100);
+
+    // Under the flyby threshold: the wall must stay as painted as it started.
+    const slowLowest = await page.evaluate(async () => {
+      const el = document.getElementById('carousel')!;
+      let lowest = Infinity;
+      for (let i = 0; i < 25; i++) {
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 26, bubbles: true, cancelable: true }));
+        await new Promise(requestAnimationFrame);
+        lowest = Math.min(lowest, Array.from(document.querySelectorAll('.carousel-row .carousel-thumb'))
+          .filter((im) => (im as HTMLImageElement).src.startsWith('blob:')).length);
+      }
+      return lowest;
+    });
+    expect(slowLowest).toBeGreaterThanOrEqual(before * 0.9);
+
+    // A flick moves far more rows per frame than can be seen, so it gives them up and fills after.
+    const fast = await page.evaluate(async () => {
+      const el = document.getElementById('carousel')!;
+      for (let i = 0; i < 8; i++) {
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 600, bubbles: true, cancelable: true }));
+        await new Promise(requestAnimationFrame);
+      }
+      const all = Array.from(document.querySelectorAll('.carousel-row .carousel-thumb'));
+      return { filled: all.filter((im) => (im as HTMLImageElement).src.startsWith('blob:')).length, total: all.length };
+    });
+    expect(fast.filled).toBeLessThan(fast.total * 0.2);
+    await expect.poll(filled, { timeout: 15000 }).toBeGreaterThan(0);
   });
 
   // A LINE-mode wheel sends "3" meaning three lines; read as pixels that is a 3px scroll, which is
