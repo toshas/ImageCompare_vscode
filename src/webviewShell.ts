@@ -281,8 +281,8 @@ body {
   min-width: 0;
   /* Capped so #status keeps a readable share: the strip's natural width is unbounded and #status collapses to 0 before it. Fewer pills visible than the old wrap showed, deliberately — the wrap paid for them in viewer height. */
   max-width: 60%;
-  /* The active pill's ring is a 2px OUTER box-shadow and :hover scales 5%, both outside the pill's box — with overflow-y:hidden and a content-height strip they were cropped top and bottom. */
-  padding: 4px 0;
+  /* The active pill's ring is a 2px OUTER box-shadow and :hover scales 5%, both outside the pill's box, so the strip pads on EVERY side — vertically the overflow crops them, and horizontally the first and last pill's ring falls outside the scroll range at either end. */
+  padding: 4px 4px;
   overflow-x: auto;
   overflow-y: hidden;
   /* No scrollbar: Chromium's is an OVERLAY here, so on a 22px strip it painted across a quarter of the pills, and reserving space for it cost the whole info bar 12px of permanent height. The strip's affordance is the active pill, which every navigation scrolls into view. */

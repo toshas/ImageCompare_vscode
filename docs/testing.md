@@ -341,6 +341,12 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **The carousel's decode cost, by mutation.** `rows flown past take the blank tile` counts *blob*
+  src assignments during a wheel burst — 30 pre-fix, 0 after. Nothing in Vitest can see a decode
+  being scheduled, and the offsets and the settled tiles are identical either way, so the count is
+  the only evidence. It also stands in for the stale-tile property: a rebind takes the blank branch
+  or a blob url, so zero blob assignments proves every rebound row went blank rather than keeping
+  the previous tuple's image.
 - **The carousel's cost rules, by mutation.** Two of the axis-scroll spec's tests assert *how much
   work* happens rather than what it produces: a wheel burst applying once per frame, and a thumbnail
   burst searching the carousel DOM zero times. Both count operations through a patched

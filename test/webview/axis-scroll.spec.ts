@@ -170,6 +170,22 @@ test.describe('axis scrolling', () => {
     expect(g.ring).toBeGreaterThan(0);
     expect(g.above).toBeGreaterThanOrEqual(g.ring);
     expect(g.below).toBeGreaterThanOrEqual(g.ring);
+
+    // And at both ends of the scroll range: the first pill's ring falls outside the content box at
+    // scrollLeft 0, the last pill's past the end, so the strip must pad horizontally too.
+    const ends = await page.evaluate(() => {
+      const strip = document.getElementById('modality-selector')!;
+      const pills = [...strip.querySelectorAll('.modality-btn')] as HTMLElement[];
+      const last = pills[pills.length - 1];
+      strip.scrollLeft = 0;
+      const left = pills[0].offsetLeft - strip.scrollLeft;
+      strip.scrollLeft = 999999;
+      const right = (strip.scrollLeft + strip.clientWidth) - (last.offsetLeft + last.offsetWidth);
+      strip.scrollLeft = 0;
+      return { left, right };
+    });
+    expect(ends.left).toBeGreaterThanOrEqual(g.ring);
+    expect(ends.right).toBeGreaterThanOrEqual(g.ring);
   });
 
   // Reported: the horizontal scrollbar painted over the pills while swiping. Chromium's is an
@@ -306,6 +322,42 @@ test.describe('axis scrolling', () => {
 
     expect(await page.evaluate(() => (window as any).__q)).toBe(0);
     // The thumbnails still landed: tiles on the bound rows are painting from blob urls.
+    await expect
+      .poll(() => page.$$eval('.carousel-row .carousel-thumb', (imgs) =>
+        imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length))
+      .toBeGreaterThan(0);
+  });
+
+  // Reported: vertical scrolling stayed laggy on a wide grid. Every row rebind swapped one distinct
+  // blob url per modality, and each is a decode — measured 4175 src assignments across a 40-notch
+  // burst, worst frame 86ms. Rows flown past take the shared blank tile instead and are filled when
+  // the wall settles: 1775 assignments, all of one data url, worst frame 24ms.
+  test('rows flown past take the blank tile, and are filled once the wall settles', async ({ page }) => {
+    await loadInited(page, TALL);
+    await page.locator('#carousel').hover();
+
+    const flyby = await page.evaluate(async () => {
+      const el = document.getElementById('carousel')!;
+      let distinct = 0;
+      const proto = Object.getPrototypeOf(document.createElement('img'));
+      const desc = Object.getOwnPropertyDescriptor(proto, 'src')!;
+      Object.defineProperty(proto, 'src', {
+        get() { return desc.get!.call(this); },
+        set(v: string) { if (v.startsWith('blob:')) distinct++; desc.set!.call(this, v); },
+      });
+      for (let i = 0; i < 12; i++) {
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+        await new Promise(requestAnimationFrame);
+      }
+      return { blobSetsDuringFlyby: distinct };
+    });
+    // Zero is also what rules out a STALE tile, without having to ask which rows were rebound: a
+    // rebind takes the blank branch or a blob url, so no blob assignment means every rebound row went
+    // blank. (Rows still in the window that were never rebound keep their own images, correctly —
+    // asserting "no visible blob" would fail on those and would be asserting the wrong thing.)
+    expect(flyby.blobSetsDuringFlyby).toBe(0);
+
+    // And once it settles, the rows the user landed on get their real thumbnails.
     await expect
       .poll(() => page.$$eval('.carousel-row .carousel-thumb', (imgs) =>
         imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length))

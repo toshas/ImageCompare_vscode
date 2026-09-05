@@ -744,6 +744,16 @@
               "match": "searches the carousel DOM zero times"
             }
           ]
+        },
+        {
+          "id": "carousel-flyby-defers",
+          "name": "Flown-past rows defer thumbnail decodes",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "rows flown past take the blank tile"
+            }
+          ]
         }
       ]
     },
@@ -1062,7 +1072,7 @@
         },
         {
           "id": "pills-ring-not-clipped",
-          "name": "Active pill ring fully visible",
+          "name": "Active pill ring fully visible, all four sides",
           "tests": [
             {
               "suite": "webview",

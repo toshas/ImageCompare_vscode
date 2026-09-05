@@ -1110,6 +1110,19 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`flyby-rows-defer-decodes`** — a row bound while the wall is still moving takes the shared blank
+  tile, not its own thumbnails; the rows the user actually lands on are filled once the wheel stops
+  (`CAROUSEL_SETTLE_MS`). The cost this removes is not JavaScript: each tile's thumbnail is a
+  *distinct* blob url, so assigning it schedules a decode, and a rebind assigns one per modality.
+  Measured on a 400x25 grid over a 40-notch burst: 4175 src assignments and an 86 ms worst frame,
+  against 1775 and 24 ms with the defer — and the remaining 1775 are all the one blank data url,
+  which decodes once. The blank branch is also what makes this safe: a rebound row cannot show the
+  *previous* tuple's image, because the bind assigns the blank explicitly rather than skipping the
+  assignment. Only the wheel path defers; a drag, a navigation or a resize is a landing, so
+  `scrollCarouselToCurrentTuple` clears the flag before it binds and never flashes a blank.
+  This is a constant-factor fix layered on `carousel-dom-never-searched`, and neither removes the
+  underlying term: binds still cost one tile per modality because columns are not virtualized
+  (`dev_backlog/carousel-column-virtualization.md`), which is the only fix that changes the shape.
 - **`carousel-dom-never-searched`** — nothing on a per-tile or per-arrival path may search the
   carousel's DOM. The carousel holds `pool x modalities` tiles — thousands at a wide grid — so an
   attribute-selector search costs a subtree scan, and the two places that did it ran *per item*:

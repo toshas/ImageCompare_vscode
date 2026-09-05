@@ -1530,6 +1530,8 @@ let carouselHScrollEl: HTMLElement | null = null;
 let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
 // Rows bound beyond the viewport, each way. Sized for a fast flick, not a slow drag: an Alt notch moves 5x, and a window that outruns its buffer shows blank rows until the next bind — the jaggedness this buffers against (docs/loading-architecture.md: wheel-coalesced-to-one-frame).
 const CAROUSEL_OVERSCAN = 10;
+// How long after the last wheel notch the flown-past rows get their real thumbnails. Short enough to read as instant, long enough that a continuous scroll never pays for rows it passes.
+const CAROUSEL_SETTLE_MS = 90;
 let carouselRowPool: HTMLElement[] = [];
 let carouselRowBound: number[] = []; // pool slot -> bound tupleIndex (-1 = hidden)
 let carouselRowTopAt: number[] = []; // pool slot -> applied top px, to skip redundant writes
@@ -1675,6 +1677,18 @@ function carouselTileFor(tupleIndex: number, originalModalityIndex: number): HTM
 }
 
 /** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
+/** True while a wheel is still moving the wall: rows bound during a flyby take the blank tile, not their own (docs/loading-architecture.md: flyby-rows-defer-decodes). */
+let carouselFlying = false;
+let carouselSettleTimer: number | undefined;
+
+/** Rebind every bound row now that the wall has stopped, so the rows the user actually landed on get their images. */
+function fillFlybyRows(): void {
+  carouselFlying = false;
+  for (let s = 0; s < carouselRowPool.length; s++) {
+    if (carouselRowBound[s] >= 0) bindCarouselRow(carouselRowPool[s], carouselRowBound[s]);
+  }
+}
+
 function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
   el.dataset.tupleIndex = String(tupleIdx);
   el.classList.toggle('current', tupleIdx === currentTupleIndex);
@@ -1685,7 +1699,7 @@ function bindCarouselRow(el: HTMLElement, tupleIdx: number) {
     const originalIdx = modalityOrder[displayIdx];
     img.dataset.tuple = String(tupleIdx);
     img.dataset.modality = String(originalIdx);
-    const url = thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
+    const url = carouselFlying ? undefined : thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
     if (url) {
       if (img.getAttribute('src') !== url) img.src = url;
       img.classList.remove('placeholder');
@@ -1728,6 +1742,9 @@ function scrollCarouselToCurrentTuple() {
   if (!isMultiTupleMode || !carouselWallEl) return;
   const rowH = carouselRowHeight();
   if (rowH <= 0) return;
+  // Navigation is a landing, not a flyby: clear the defer first so the rows it binds take their images directly.
+  if (carouselSettleTimer !== undefined) clearTimeout(carouselSettleTimer);
+  carouselFlying = false;
   // Virtual rows make the row top pure arithmetic; snapped to whole rows so a step moves the grid exactly one row or not at all (docs/loading-architecture.md: selection-centres-on-navigation).
   applyCarouselOffset(centreOffset(currentTupleIndex * rowH, rowH, carouselEl.clientHeight, carouselContentHeight(), rowH));
 }
@@ -2441,6 +2458,9 @@ let wheelRaf = 0;
 function queueCarouselWheel(delta: number): void {
   pendingWheelDelta += delta;
   if (wheelRaf !== 0) return;
+  carouselFlying = true;
+  if (carouselSettleTimer !== undefined) clearTimeout(carouselSettleTimer);
+  carouselSettleTimer = setTimeout(fillFlybyRows, CAROUSEL_SETTLE_MS) as unknown as number;
   wheelRaf = requestAnimationFrame(() => {
     wheelRaf = 0;
     const delta = pendingWheelDelta;
