@@ -125,8 +125,21 @@
         },
         {
           "id": "kbd-delete",
-          "name": "Del delete tuple (NOTE: not actually bound — button only)",
-          "tests": []
+          "name": "Del / Backspace deletes what the host says: the tuple, or the one image",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a tuple-unit host gets deleteTuple"
+            },
+            {
+              "suite": "webview",
+              "match": "an image-unit host gets deleteImage"
+            },
+            {
+              "suite": "webview",
+              "match": "a reordered strip still names the original column"
+            }
+          ]
         }
       ]
     },
@@ -382,7 +395,7 @@
         },
         {
           "id": "crop-output-plan",
-          "name": "Crop output naming (_cropNN max across modality dirs) + rect scale/clamp + shared flow order",
+          "name": "Crop output naming (_cropNN shared across modality dirs; per image where they share one) + rect scale/clamp + shared flow order",
           "tests": [
             {
               "suite": "unit",
@@ -407,6 +420,46 @@
             {
               "suite": "unit",
               "match": "reports cropComplete when renderCrop returns plain Uint8Array bytes"
+            }
+          ]
+        },
+        {
+          "id": "crop-name-per-image",
+          "name": "A file list names each crop after its own image, so columns sharing a directory never write one path twice",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "names each crop after the image it is cut from"
+            },
+            {
+              "suite": "unit",
+              "match": "separates two images whose stems collide across extensions"
+            },
+            {
+              "suite": "unit",
+              "match": "numbers against the image's own listing"
+            },
+            {
+              "suite": "unit",
+              "match": "names each crop after its own image in a file list"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the one shared name where the columns are directories"
+            }
+          ]
+        },
+        {
+          "id": "crop-file-list-does-not-grow",
+          "name": "A file list’s crops land on disk only — both hosts, since one used to grow a row per crop",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "lands a file list's crops on disk without adding them"
+            },
+            {
+              "suite": "unit",
+              "match": "still lands every arrival, then cropComplete, then thumbnails"
             }
           ]
         },
@@ -1168,6 +1221,42 @@
           ]
         },
         {
+          "id": "scan-folder-of-images",
+          "name": "Mode 3 from a folder: loose images open as the file list they are, _cropNN excluded",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a directory of loose images opens as the file list it is"
+            },
+            {
+              "suite": "unit",
+              "match": "excludes this app own _cropNN writes"
+            },
+            {
+              "suite": "unit",
+              "match": "shows the crops anyway when excluding them would leave nothing"
+            }
+          ]
+        },
+        {
+          "id": "scan-one-subdir",
+          "name": "Mode 1 at one column: a single image subdir opens, and structure wins over loose images",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "opens a single image subdir as mode 1 with that one column"
+            },
+            {
+              "suite": "unit",
+              "match": "prefers the structure: one imageful subdir wins"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps mode 2 at two columns"
+            }
+          ]
+        },
+        {
           "id": "scan-partial",
           "name": "Partial tuples (missing modality)",
           "tests": [
@@ -1586,6 +1675,42 @@
             {
               "suite": "unit",
               "match": "version gate — missing and current pass, future is rejected"
+            }
+          ]
+        },
+        {
+          "id": "mode-behaviour-is-a-table",
+          "name": "The selection shape’s behaviour is one table both hosts read, not a mode number tested at each site",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "the mode table (modePolicy.ts, real code)"
+            },
+            {
+              "suite": "unit",
+              "match": "carries whichever delete unit the host declares"
+            },
+            {
+              "suite": "webview",
+              "match": "the help row and the button hint follow the declared unit"
+            },
+            {
+              "suite": "webview",
+              "match": "a tuple-unit host keeps the row wording"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone opens a folder of loose images"
+            }
+          ]
+        },
+        {
+          "id": "exports-land-beside-the-images",
+          "name": "A PPTX export lands in the comparison’s own root: base dir, modality parent, or the first image’s directory",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "export output directory (exportTarget.ts, real code)"
             }
           ]
         }

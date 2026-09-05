@@ -10,7 +10,8 @@ import { pngReadText, parseCropMeta, CROP_RECT_KEYWORD } from '../src/pngText';
 import { performCrop } from '../src/cropFlow';
 import { applyArrival, planArrival } from '../src/arrivalPlan';
 import { adoptableImages, applyModalityInsert, newModalityDirCandidates } from '../src/adoptionPlan';
-import { commitSlotRemoval, deleteTupleFlow, removeModalityStep, removeTupleStep } from '../src/removalPlan';
+import { commitSlotRemoval, deleteSlotFlow, deleteTupleFlow, removeModalityStep, removeTupleStep } from '../src/removalPlan';
+import { MODES } from '../src/modePolicy';
 import { diffSnapshots, pairRenames, PollEntry, SnapshotEntry } from '../src/pollPlan';
 import { DeckIo, DECK_IMAGE_MAX_DIM, DECK_JPEG_QUALITY, exportDeck } from '../src/pptxDeck';
 import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE, ThumbnailBytes } from '../src/thumbnailPlan';
@@ -287,6 +288,8 @@ function resultsPath(s: StandaloneState): string {
 /** Persist winners exactly like the provider — empty-deletes, naming and serialization are the shared persist flow; only the write/delete IO lives here (docs/standalone.md: results-format-shared). */
 async function saveResults(s: StandaloneState): Promise<void> {
   if (!s.fs.writable) return;
+  // No ranking, nothing to persist — and an empty winners map DELETES the file, which in a file list would take a `results.txt` the comparison never owned (docs/session-files.md: mode-behaviour-is-a-table).
+  if (!MODES[s.scan.mode].voting) return;
   await persistResults(s.scan.tuples, s.scan.modalities, s.winners, {
     writeText: text => s.fs.writeFile(resultsPath(s), new TextEncoder().encode(text)),
     deleteFile: () => s.fs.delete(resultsPath(s)),
@@ -342,6 +345,18 @@ async function handleDeleteTuple(s: StandaloneState, tupleIndex: TupleIndex): Pr
     deleteFile: img => s.fs.delete(img.uri.path),
     removeTuple: idx => removeTupleAt(s, idx),
     removeModality: idx => removeModalityAt(s, idx),
+  });
+}
+
+/** Delete one slot's file through the shared flow — the disk delete, the live-index re-derivation and the commit order are the flow's (docs/file-watching.md: delete-message-order). */
+async function handleDeleteImage(s: StandaloneState, tupleIndex: TupleIndex, modalityIndex: OriginalModalityIndex): Promise<void> {
+  if (!s.fs.writable) return;
+  await deleteSlotFlow<ImageFile>(s.scan, s.winners, tupleIndex, modalityIndex, {
+    deleteFile: img => s.fs.delete(img.uri.path),
+    post,
+    removeTuple: idx => removeTupleAt(s, idx),
+    removeModality: idx => removeModalityAt(s, idx),
+    saveResults: () => { void saveResults(s); },
   });
 }
 
@@ -517,7 +532,7 @@ async function handleMenuAction(s: StandaloneState, action: MenuActionId, ctx: M
   if (modality === undefined) return;
   const tuple = ctx.section === 'image' ? s.scan.tuples[ctx.tupleIndex] : undefined;
   const img = tuple ? findImageForModality(tuple, modality) : undefined;
-  const target = img ? img.uri.path : `${s.basePath}/${modality}`;
+  const target = img ? img.uri.path : modalityPath(s, modality);
   try {
     await navigator.clipboard.writeText(target);
     postNotice({ kind: 'pathCopied' });
@@ -534,7 +549,8 @@ function postNotice(event: NoticeEvent): void {
 
 /** Mirror the provider's sendInitData: winners from results.txt via the shared parser, payload from the shared builder (docs/standalone.md: adapter-contains-no-logic). */
 async function sendInit(s: StandaloneState): Promise<void> {
-  const votingEnabled = s.fs.writable;
+  // Whether the shape can be ranked at all is the mode table's (docs/session-files.md: mode-behaviour-is-a-table); whether this root can be written is this host's own.
+  const votingEnabled = MODES[s.scan.mode].voting && s.fs.writable;
   if (votingEnabled) {
     try {
       const text = new TextDecoder().decode(await s.fs.readFile(resultsPath(s)));
@@ -547,7 +563,7 @@ async function sendInit(s: StandaloneState): Promise<void> {
   post(buildInitPayload({
     tuples: s.scan.tuples,
     modalities: s.scan.modalities,
-    modalityPaths: s.scan.modalities.map(m => `${s.basePath}/${m}`),
+    modalityPaths: s.scan.modalities.map(m => modalityPath(s, m)),
     winners: s.winners,
     config: { thumbnailSize: THUMBNAIL_SIZE, prefetchCount: PREFETCH_COUNT, keepZoomOnTupleChange: false },
     votingEnabled,
@@ -555,6 +571,8 @@ async function sendInit(s: StandaloneState): Promise<void> {
     version: __IC_VERSION__,
     // No file tree to reveal into and no session file to copy; text clipboard is the browser's (docs/standalone.md: affordances-rendered-by-the-webview).
     capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false },
+    // What Del removes here, stated rather than inferred by the webview (docs/session-files.md: mode-behaviour-is-a-table).
+    deleteUnit: MODES[s.scan.mode].deleteUnit,
   }));
   void generateAllThumbnails(s);
 }
@@ -589,6 +607,9 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
       break;
     case 'deleteTuple':
       await handleDeleteTuple(s, message.tupleIndex);
+      break;
+    case 'deleteImage':
+      await handleDeleteImage(s, message.tupleIndex, message.modalityIndex);
       break;
     case 'exportPptx':
       await handleExportPptx(s, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
@@ -732,6 +753,16 @@ async function pollResults(s: StandaloneState): Promise<void> {
   post({ type: 'winnersReset', winners });
 }
 
+/** A column's real path, for the pill tooltip and the menu action that resolves one: its directory under the root, or — in a file list, which has no such directory — the first file carrying it (docs/session-files.md: modality-path-always-real). */
+function modalityPath(s: StandaloneState, modality: string): string {
+  if (!MODES[s.scan.mode].columnIsFile) return `${s.basePath}/${modality}`;
+  for (const tuple of s.scan.tuples) {
+    const img = findImageForModality(tuple, modality);
+    if (img) return img.uri.path;
+  }
+  return `${s.basePath}/${modality}`;
+}
+
 /** The state-known names of one modality — the first cycle's baseline, so the boot listing is never re-reported. */
 function knownEntries(s: StandaloneState, modality: string): SnapshotEntry[] {
   const entries: SnapshotEntry[] = [];
@@ -744,8 +775,8 @@ function knownEntries(s: StandaloneState, modality: string): SnapshotEntry[] {
 
 /** Adopt modality dirs that appeared under the root: qualification and column mutations are the shared planner's, arrivals the shared arrival path's (docs/file-watching.md: new-modality-dir-adopted). */
 async function adoptNewModalityDirs(s: StandaloneState): Promise<void> {
-  // Mode 1 is the only shape whose subdirectories are columns by definition (docs/file-watching.md, "Events by mode").
-  if (s.scan.mode !== 1) return;
+  // Only where the root's subdirectories ARE the columns is a new one a new column (docs/file-watching.md, "Events by mode") (docs/session-files.md: mode-behaviour-is-a-table).
+  if (!MODES[s.scan.mode].rootSubdirsAreColumns) return;
   let rootEntries: Array<[string, FileType]>;
   try {
     rootEntries = await s.fs.readDirectory(s.basePath);
@@ -870,6 +901,8 @@ function stopPolling(s: StandaloneState): void {
 function startPolling(s: StandaloneState, root: OpenedRoot): void {
   // Read-only roots are static File lists — there is nothing to re-list, so they never poll.
   if (!s.fs.writable) return;
+  // The cycle lists `<root>/<column>`, which only this shape has; elsewhere every cycle would re-read a `results.txt` the comparison does not own (docs/file-watching.md, "Events by mode") (docs/session-files.md: mode-behaviour-is-a-table).
+  if (!MODES[s.scan.mode].rootSubdirsAreColumns) return;
   s.pollTimer = setInterval(() => schedulePollCycle(s), seam.pollIntervalMs);
   const Observer = (window as unknown as {
     FileSystemObserver?: new (cb: () => void) => { observe(h: FileSystemDirectoryHandle, opts?: { recursive?: boolean }): unknown; disconnect(): void };
@@ -899,7 +932,8 @@ async function openRoot(root: OpenedRoot): Promise<void> {
   const scan = await scanForImages([Uri.file(root.rootPath)]);
   const s: StandaloneState = {
     fs: root.fs,
-    basePath: scan.roots[0].path,
+    // The opened directory, never `roots[0]` — a file-list scan's roots are the files (docs/session-files.md: mode-is-explicit).
+    basePath: Uri.file(root.rootPath).path,
     scan,
     winners: new Map(),
     currentTupleIndex: 0,

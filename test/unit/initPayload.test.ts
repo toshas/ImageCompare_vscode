@@ -16,6 +16,7 @@ const baseArgs = {
   labelsExplicit: false,
   version: '1.2.3',
   capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true },
+  deleteUnit: 'tuple' as const,
 };
 
 describe('init payload assembly (initPayload.ts, real code)', () => {
@@ -38,6 +39,8 @@ describe('init payload assembly (initPayload.ts, real code)', () => {
     expect(msg.modalities).toEqual(['gt', 'pred']);
     expect(msg.modalityPaths).toEqual(['/data/gt', '/data/pred']);
     expect(msg.votingEnabled).toBe(true);
+    // What Del removes is the host's to state; the webview must never work it out from the mode.
+    expect(msg.deleteUnit).toBe('tuple');
     expect(msg.labelsExplicit).toBe(false);
     expect(msg.config).toEqual({ thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false });
   });
@@ -67,6 +70,16 @@ describe('init payload assembly (initPayload.ts, real code)', () => {
     const msg = buildInitPayload({ ...baseArgs, version: '7.8.9-rc1' });
     if (msg.type !== 'init') throw new Error('expected init');
     expect(msg.version).toBe('7.8.9-rc1');
+  });
+
+  // Host-states-data, same as `capabilities`: the payload carries the unit so the webview never has
+  // to know the mode, and the help modal cannot promise the wrong one.
+  it('carries whichever delete unit the host declares, verbatim', () => {
+    const asTuple = buildInitPayload(baseArgs);
+    const asImage = buildInitPayload({ ...baseArgs, deleteUnit: 'image' as const });
+    if (asTuple.type !== 'init' || asImage.type !== 'init') throw new Error('expected init');
+    expect(asTuple.deleteUnit).toBe('tuple');
+    expect(asImage.deleteUnit).toBe('image');
   });
 
   it('converts the winners map into a plain record keyed by tuple index', () => {

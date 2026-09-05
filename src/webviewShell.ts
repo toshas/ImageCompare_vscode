@@ -725,7 +725,7 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         </div>
         <div id="fp-actions">
           <button id="crop-btn" title="Crop all modalities (C)">Crop</button>
-          <button id="delete-btn" title="Delete current tuple files (Del)">Delete</button>
+          <button id="delete-btn" title="Delete current tuple files (Del)">Delete</button><!-- title restated on init: what Del removes is the host's to say (docs/session-files.md: mode-behaviour-is-a-table) -->
           <button id="pptx-btn" title="Export voted tuples to PPTX">PPTX</button>
         </div>
       </div>
@@ -767,7 +767,7 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr id="help-row-savesession"><td>Ctrl/Cmd+S</td><td>Save Session As \u2014 keep a copy of this comparison</td></tr>
         <tr><td>C</td><td>Toggle crop mode</td></tr>
         <tr><td>2\u00d7-click</td><td>On a crop edge handle, square the crop toward that edge (in crop mode)</td></tr>
-        <tr><td>Del / Backspace</td><td>Delete current tuple files (permanent!)</td></tr>
+        <tr><td>Del / Backspace</td><td id="help-delete-text">Delete current tuple files (permanent!)</td></tr><!-- restated on init: the modal may not promise the wrong unit (docs/session-files.md: mode-behaviour-is-a-table) -->
         <tr><td>Esc</td><td>Reset zoom / cancel crop / close this help</td></tr>
       </table>
       <div style="margin-top: 20px;">

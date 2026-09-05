@@ -1,5 +1,6 @@
 // Pure crop-flow orchestration (no vscode): the whole confirm-to-cropComplete sequence — one name, relative rect, per-modality render/inject/write, arrivals, then the terminal post — lives only here; both products inject IO (docs/standalone.md: adapter-contains-no-logic).
-import { nextCropName, scaleAndClampRect, toRelativeRect } from './cropPlan';
+import { cropNamesPerImage, nextCropName, scaleAndClampRect, toRelativeRect } from './cropPlan';
+import { MODES } from './modePolicy';
 import { CROP_RECT_KEYWORD, encodeCropMeta, pngInjectText } from './pngText';
 import { ExtensionMessage, TupleIndex } from './types';
 
@@ -43,7 +44,7 @@ export interface CropFlowIo<TImage, TSaved extends { path: string }> {
 
 /** Crop every modality of a tuple: name once, rect relative, render+inject+write per modality, then arrivals, cropComplete, thumbnails — the one glue order for both products (docs/crop-and-pptx.md: post-crop-message-order). */
 export async function performCrop<TImage extends { name: string }, TSaved extends { path: string }>(
-  scan: { tuples: ReadonlyArray<{ name: string; images: readonly TImage[] }> },
+  scan: { tuples: ReadonlyArray<{ name: string; images: readonly TImage[] }>; mode: 1 | 2 | 3 },
   msg: CropRequest,
   io: CropFlowIo<TImage, TSaved>
 ): Promise<void> {
@@ -59,8 +60,11 @@ export async function performCrop<TImage extends { name: string }, TSaved extend
       }
     })
   );
-  /* Resolved once, outside the per-modality loop, or one crop splits into N tuples (docs/crop-and-pptx.md: shared-crop-filename). */
-  const outputName = nextCropName(nameLists, tuple.name); // naming decided by the shared pure module (docs/standalone.md: crop-plan-shared)
+  /* One tuple-wide name where the columns are separate directories, or one crop splits into N tuples; one name per image where they may share a directory, since a tuple-wide name there is one path written N times (docs/crop-and-pptx.md: shared-crop-filename) (docs/session-files.md: mode-behaviour-is-a-table). */
+  const behaviour = MODES[scan.mode];
+  const outputNames = behaviour.cropNaming === 'per-image'
+    ? cropNamesPerImage(nameLists, tuple.images.map(image => image.name))
+    : tuple.images.map(() => nextCropName(nameLists, tuple.name)); // naming decided by the shared pure module (docs/standalone.md: crop-plan-shared)
 
   // Relative (0-1) is the only form that may cross modalities (docs/crop-and-pptx.md: relative-coords-only).
   const relRect = toRelativeRect(msg.cropRect, msg.srcWidth, msg.srcHeight);
@@ -68,7 +72,7 @@ export async function performCrop<TImage extends { name: string }, TSaved extend
   let cancelled = 0;
   const schedule = io.schedule ?? (<R>(work: () => Promise<R>) => work());
   const results: Array<TSaved | undefined> = await Promise.all(
-    tuple.images.map(async (image): Promise<TSaved | undefined> => {
+    tuple.images.map(async (image, columnIndex): Promise<TSaved | undefined> => {
       try {
         return await schedule(async () => {
           // True dimensions are re-read per modality; the webview's are only a denominator (docs/crop-and-pptx.md: srcdims-are-denominator).
@@ -81,7 +85,7 @@ export async function performCrop<TImage extends { name: string }, TSaved extend
           const png = await io.renderCrop(image, scaled, cropMeta);
           // tEXt injected once here for both products — the cross-tool contract (docs/image-backends.md: metadata-written-twice) (docs/crop-and-pptx.md: croprect-six-integers).
           const withMeta = pngInjectText(Buffer.isBuffer(png) ? png : Buffer.from(png), CROP_RECT_KEYWORD, cropMeta);
-          return io.writeCrop(image, outputName, withMeta);
+          return io.writeCrop(image, outputNames[columnIndex], withMeta);
         });
       } catch (err) {
         if (io.isCancelled?.(err)) {
@@ -102,8 +106,10 @@ export async function performCrop<TImage extends { name: string }, TSaved extend
     return;
   }
 
-  // Every arrival lands before the terminal post (docs/crop-and-pptx.md: post-crop-message-order).
-  for (const s of saved) await io.arriveFile(s);
+  // Every arrival lands before the terminal post — but a file list is enumerated once and does not grow, so its crops land on disk only (docs/crop-and-pptx.md: post-crop-message-order) (docs/session-files.md: folder-of-images-is-a-file-list).
+  if (behaviour.cropsJoin) {
+    for (const s of saved) await io.arriveFile(s);
+  }
   io.post({ type: 'cropComplete', tupleIndex: msg.tupleIndex, count: saved.length, paths: saved.map(s => s.path) });
-  await io.postCropThumbnails?.(saved);
+  if (behaviour.cropsJoin) await io.postCropThumbnails?.(saved);
 }

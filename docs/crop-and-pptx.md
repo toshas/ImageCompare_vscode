@@ -226,12 +226,27 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
 - **`srcdims-are-denominator`** — `srcWidth`/`srcHeight` from the webview are a denominator, never an
   extraction size. True per-modality dimensions are always re-read from disk; the webview's come from
   the decoded image's `naturalWidth`/`naturalHeight`.
-- **`shared-crop-filename`** — all modalities of one crop share one filename, built from the tuple
-  name with a single crop number resolved once, so the watcher re-groups them into exactly one tuple.
+- **`shared-crop-filename`** — where the columns are directories (modes 1 and 2), all modalities of
+  one crop share one filename, built from the tuple name with a single crop number resolved once, so
+  the watcher re-groups them into exactly one tuple. A **file list** (mode 3) is the exception, and
+  has to be: its columns can be files in ONE directory, where "beside each image" is the same path N
+  times — two concurrent writes, one file, and whichever bytes land last. There the name is built
+  from each image's own stem (`shot_a.png` → `shot_a_crop01.png`), numbered against that image's own
+  listing, with each name claimed as it is handed out so two images that reduce to the same stem
+  (`a.png` beside `a.jpg`) number past each other. Nothing is lost by not sharing, because nothing
+  re-groups them: a file list is enumerated once and does not grow, so its crops land on disk and
+  stay there (`docs/session-files.md: folder-of-images-is-a-file-list`). That is enforced in the
+  shared flow rather than left to each host, and it had to be: the provider dropped a mode-3 crop
+  through `handleNewFile`'s early return while the adapter's `arriveFile` called the arrival planner
+  unconditionally, so one crop gesture produced no new row in one product and two single-column rows
+  in the other. Both branches are on `ScanResult.mode` inside `performCrop`, never on a host's guess
+  (`docs/session-files.md: mode-is-explicit`).
 - **`cropnn-writer-reader-match`** — the `_cropNN` writer format keeps matching every `_crop\d+`
-  reader — `fileService.ts`'s reference deprioritization, the PPTX parent/crop pairing, and
+  reader — `fileService.ts`'s reference deprioritization and its enumeration filter
+  (`docs/session-files.md: folder-of-images-is-a-file-list`), the PPTX parent/crop pairing, and
   `nextCropName`'s own scan for the next free number. Zero-padded, decimal, at the end of the
-  basename.
+  basename. The two `fileService` readers test through `CROP_SUFFIX_RE`, exported from `cropPlan.ts`
+  beside the writer, so the format has one regex rather than a copy per reader.
 - **`croprect-six-integers`** — the `CropRect` value stays `x,y,w,h,srcW,srcH`, six integers, in
   source-image pixels. Both the exporter and an external tool parse it. (That it is written to both
   EXIF and `tEXt`, and that `readCropMetadata` may use a bare `sharp()`, are `metadata-written-twice`
@@ -270,7 +285,10 @@ untested, as are the coordinate contract, the EXIF path, `readCropMetadata`, and
 - **`post-crop-message-order`** — the shared `performCrop` flow (`cropFlow.ts`) owns the sequence:
   after the whole write batch, it lands each saved file in modality order through the product's
   `arriveFile` io, posts `cropComplete` only after the last arrival, and runs the thumbnail hook
-  after that; full images come only on the webview's `requestImage`. The per-file wire payloads —
+  after that; full images come only on the webview's `requestImage`. A file list (mode 3) skips both
+  the arrivals and the thumbnail hook and posts `cropComplete` alone — there is no row for a crop to
+  join, and the hook would otherwise push thumbnails for a tuple that was never added
+  (`docs/session-files.md: folder-of-images-is-a-file-list`). The per-file wire payloads —
   the first saved file a *sparse* `tupleAdded` at its sorted insert position (only its own modality
   named, current/winner indices shifted), each further file a `fileRestored` with `imageInfo` — are
   produced only by the shared arrival planner (`arrivalPlan.ts`), which the provider's `arriveFile`

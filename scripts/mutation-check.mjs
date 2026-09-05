@@ -1683,6 +1683,193 @@ const mutations = [
     killedBy: 'commit transcript test (the last file of a modality leaving must drop the column)'
   },
 
+  // ── Delete-slot flow: the other unit Del can take (docs/session-files.md: mode-behaviour-is-a-table) ──
+  {
+    name: 'deleteSlotFlow: commits at the passed indices, not the live ones (a shifted column deletes the wrong slot)',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/deleteFlow.test.ts',
+    find: '  const liveTuple = scan.tuples.indexOf(tuple);\n  const liveModality = scan.modalities.indexOf(modality);',
+    replace: '  const liveTuple = tupleIndex;\n  const liveModality = modalityIndex;',
+    killedBy: 'slot live-index test (a column spliced during the await must not shift the commit onto a neighbour)'
+  },
+  {
+    name: 'deleteSlotFlow: deletes the whole row instead of the one slot',
+    file: 'src/removalPlan.ts',
+    suite: 'test/unit/deleteFlow.test.ts',
+    find: '  const image = tuple.images.find(img => img.modality === modality);\n  if (!image) return;',
+    replace: '  const image = tuple.images[0];\n  if (!image) return;',
+    killedBy: 'slot transcript test (the named column\'s file is the one removed, and the sibling survives)'
+  },
+
+  // ── Selection shape decides voting and the delete unit (docs/session-files.md: mode-behaviour-is-a-table) ──
+  {
+    name: 'modes: voting offered in a file list (one row of unrelated files gets a ranking)',
+    file: 'src/modePolicy.ts',
+    suite: 'test/unit/modePolicy.test.ts',
+    find: '    grows: false,\n    voting: false,',
+    replace: '    grows: false,\n    voting: true,',
+    killedBy: 'mode-table test (a file list has nothing to rank)'
+  },
+  {
+    name: 'modes: Del takes the row in a file list (deletes every file the user opened)',
+    file: 'src/modePolicy.ts',
+    suite: 'test/unit/modePolicy.test.ts',
+    find: "    voting: false,\n    deleteUnit: 'image',",
+    replace: "    voting: false,\n    deleteUnit: 'tuple',",
+    killedBy: 'mode-table test (a file list deletes the one image on screen)'
+  },
+  {
+    name: 'modes: a file list grows (a fixed enumeration starts accepting new neighbours)',
+    file: 'src/modePolicy.ts',
+    suite: 'test/unit/modePolicy.test.ts',
+    find: '    labelsApply: false,\n    grows: false,',
+    replace: '    labelsApply: false,\n    grows: true,',
+    killedBy: 'mode-table test (a file list is enumerated once)'
+  },
+  {
+    name: 'modes: a file list column is a directory (a pill names a folder that is not there)',
+    file: 'src/modePolicy.ts',
+    suite: 'test/unit/modePolicy.test.ts',
+    find: "    roots: 'files',\n    columnIsFile: true,",
+    replace: "    roots: 'files',\n    columnIsFile: false,",
+    killedBy: 'mode-table test (a file list column IS a file)'
+  },
+  {
+    name: 'modes: mode 1 back to a two-column floor (one subdir is an error again)',
+    file: 'src/modePolicy.ts',
+    suite: 'test/unit/modePolicy.test.ts',
+    find: '    rootSubdirsAreColumns: true,\n    // Discovered, not named: finding one is an answer, and a comparison runs at one column.\n    minColumns: 1,',
+    replace: '    rootSubdirsAreColumns: true,\n    minColumns: 2,',
+    killedBy: 'mode-table test (mode 1 discovers its columns, so one is an answer)'
+  },
+
+  // ── What a directory resolves to (docs/session-files.md: subdir-structure-wins, folder-of-images-is-a-file-list) ──
+  {
+    name: 'scanDirectory: a directory of loose images is rejected again instead of opening as a file list',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/folderScan.test.ts',
+    find: '    return scanEnumeratedFiles(files);',
+    replace: "    throw new Error('This directory contains only image files without subdirectory structure.');",
+    killedBy: 'folder-of-images tests (a directory of loose images opens as mode 3)'
+  },
+  {
+    name: 'scanDirectory: loose images win over the subdirectory structure beside them',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/folderScan.test.ts',
+    find: '  if (subdirs.length >= 1) {',
+    replace: '  if (files.length === 0 && subdirs.length >= 1) {',
+    killedBy: 'structure-wins test (one imageful subdir beats the loose images next to it)'
+  },
+  {
+    name: 'scanDirectoriesAsModalities: mode 1 keeps the two-column floor (a single subdir is an error again)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/folderScan.test.ts',
+    find: '  if (modalityFiles.size < MODES[mode].minColumns) {',
+    replace: '  if (modalityFiles.size < 2) {',
+    killedBy: 'one-subdir test (a directory holding a single image subdir opens as mode 1)'
+  },
+  {
+    name: 'scanDirectoriesAsModalities: mode 2 loses its floor (a selected imageless dir passes silently)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/folderScan.test.ts',
+    find: '  if (modalityFiles.size < MODES[mode].minColumns) {',
+    replace: '  if (modalityFiles.size < 1) {',
+    killedBy: 'mode-2 floor test (two selected dirs, one imageless, is still an error)'
+  },
+  {
+    name: 'scanEnumeratedFiles: _cropNN outputs join the comparison they were cut from',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/folderScan.test.ts',
+    find: '  const withoutCrops = files.filter(file => !CROP_SUFFIX_RE.test(stripExtension(file.name)));',
+    replace: '  const withoutCrops = files;',
+    killedBy: 'crop-exclusion test (a folder of parents plus their crops opens on the parents)'
+  },
+  {
+    name: 'scanEnumeratedFiles: the all-crops fall-back removed (a folder of crops becomes a dead end)',
+    file: 'src/fileService.ts',
+    suite: 'test/unit/folderScan.test.ts',
+    find: '  const chosen = withoutCrops.length >= MODES[3].minColumns ? withoutCrops : files;',
+    replace: '  const chosen = withoutCrops;',
+    killedBy: 'all-crops test (excluding crops must not leave a real folder unopenable)'
+  },
+
+  {
+    name: 'initPayload: deleteUnit dropped from the init message (the webview falls back to the row everywhere)',
+    file: 'src/initPayload.ts',
+    suite: 'test/unit/initPayload.test.ts',
+    find: '    deleteUnit: args.deleteUnit,',
+    replace: '    /* mutated: deleteUnit never sent */',
+    killedBy: 'delete-unit payload test (the host\'s declared unit reaches the webview verbatim)'
+  },
+
+  // ── Where an export lands (docs/session-files.md: exports-land-beside-the-images) ──
+  {
+    name: 'exportTarget: the file-list branch removed (mode 3 exports throw "Cannot determine output directory" again)',
+    file: 'src/exportTarget.ts',
+    suite: 'test/unit/exportTarget.test.ts',
+    find: '  return roots.firstImagePath ? path.dirname(roots.firstImagePath) : undefined;',
+    replace: '  return undefined;',
+    killedBy: 'file-list branch test (a mode-3 deck lands in the first image\'s own directory)'
+  },
+  {
+    name: 'exportTarget: a modality dir taken whole (the deck lands INSIDE a modality column)',
+    file: 'src/exportTarget.ts',
+    suite: 'test/unit/exportTarget.test.ts',
+    find: '  if (roots.modalityDirs.length > 0) return path.dirname(roots.modalityDirs[0]);',
+    replace: '  if (roots.modalityDirs.length > 0) return roots.modalityDirs[0];',
+    killedBy: 'mode-2 test (the deck goes to the modality dirs\' parent, not into one of them)'
+  },
+  {
+    name: 'exportTarget: base dir loses its precedence (a labelled mode-1 root is ignored)',
+    file: 'src/exportTarget.ts',
+    suite: 'test/unit/exportTarget.test.ts',
+    find: '  if (roots.baseDir) return roots.baseDir;',
+    replace: '  if (false) return roots.baseDir;',
+    killedBy: 'precedence test (the base directory wins over every other root)'
+  },
+
+  // ── Crop naming where the columns share a directory (docs/crop-and-pptx.md: shared-crop-filename) ──
+  {
+    name: 'performCrop: one tuple-wide crop name in a file list too (N columns, one path, one surviving file)',
+    file: 'src/cropFlow.ts',
+    suite: 'test/unit/cropFlow.test.ts',
+    find: "  const outputNames = behaviour.cropNaming === 'per-image'",
+    replace: '  const outputNames = false',
+    killedBy: 'file-list naming test (each crop is named after its own image, so two columns in one directory write two files)'
+  },
+  {
+    name: 'performCrop: a file list grows its own crops (the standalone divergence, restored)',
+    file: 'src/cropFlow.ts',
+    suite: 'test/unit/cropFlow.test.ts',
+    find: '  if (behaviour.cropsJoin) {\n    for (const s of saved) await io.arriveFile(s);\n  }',
+    replace: '  for (const s of saved) await io.arriveFile(s);',
+    killedBy: 'file-list arrival test (a mode-3 crop lands on disk and joins no row)'
+  },
+  {
+    name: 'performCrop: the thumbnail hook runs for a file list (thumbnails for a tuple never added)',
+    file: 'src/cropFlow.ts',
+    suite: 'test/unit/cropFlow.test.ts',
+    find: '  if (behaviour.cropsJoin) await io.postCropThumbnails?.(saved);',
+    replace: '  await io.postCropThumbnails?.(saved);',
+    killedBy: 'file-list arrival test (no arrivals means no thumbnail hook either)'
+  },
+  {
+    name: 'cropNamesPerImage: the name is not claimed as it is handed out (colliding stems get one path)',
+    file: 'src/cropPlan.ts',
+    suite: 'test/unit/cropPlan.test.ts',
+    find: '    for (const listing of listings) listing.push(name);',
+    replace: '    /* mutated: name never claimed */',
+    killedBy: 'colliding-stems test (a.png beside a.jpg must number past each other)'
+  },
+  {
+    name: 'cropNamesPerImage: numbers against every listing instead of the image\'s own',
+    file: 'src/cropPlan.ts',
+    suite: 'test/unit/cropPlan.test.ts',
+    find: '    const name = nextCropName([listings[i] ?? []], stemOf(imageName));',
+    replace: '    const name = nextCropName(listings, stemOf(imageName));',
+    killedBy: 'own-listing test (an unrelated column\'s _crop07 must not inflate a neighbour\'s number)'
+  },
+
   // ── Modality adoption: the suite imports the real adoptionPlan.ts ──
   {
     name: 'adoptionPlan: dot-dir guard dropped (.git becomes an adoptable column)',

@@ -21,6 +21,7 @@ import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextM
 import { NoticeEvent, buildNotice } from './noticeChannel';
 import { centreOffset, scrollStep, wheelPixels, zoomFactor } from './axisScroll';
 import { ColumnWindow, MIN_TILE_PITCH, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
+import type { DeleteUnit } from '../modePolicy';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -111,6 +112,7 @@ const helpVersionEl = document.getElementById('help-version')!;
 const helpBtn = document.getElementById('help-btn')!;
 const helpContextMenuItemsEl = document.getElementById('help-contextmenu-items')!;
 const helpRowSaveSessionEl = document.getElementById('help-row-savesession')!;
+const helpDeleteTextEl = document.getElementById('help-delete-text')!;
 const closeHelpBtn = document.getElementById('close-help-btn')!;
 const reorderLeftBtn = document.getElementById('reorder-left')!;
 const reorderRightBtn = document.getElementById('reorder-right')!;
@@ -198,6 +200,9 @@ let labelsExplicit = false;
 // What this host can serve. Capability, never identity: no branch here asks whether it is VS Code (docs/standalone.md: affordances-rendered-by-the-webview).
 let capabilities: HostCapabilities = NO_HOST_CAPABILITIES;
 
+// What Del removes here, stated by the host; an init that names none means a row, the shape every mode but the file list has (docs/session-files.md: mode-behaviour-is-a-table).
+let deleteUnit: DeleteUnit = 'tuple';
+
 // Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see docs/testing.md.
 if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
   (window as unknown as { __ic_test: unknown }).__ic_test = {
@@ -217,6 +222,7 @@ if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?:
       cropRect: crop.cropRect ? { ...crop.cropRect } : null,
       winners: Array.from(winners.entries()),
       votingEnabled,
+      deleteUnit,
       pptxBusy,
       thumbUrlsLive: thumbnailUrls.liveCount,
       capabilities: { ...capabilities },
@@ -341,7 +347,7 @@ function setupEventListeners() {
   });
 
   // Delete button
-  deleteBtn.addEventListener('click', deleteCurrentTuple);
+  deleteBtn.addEventListener('click', deleteCurrent);
 
   // PPTX export button
   pptxBtn.addEventListener('click', () => {
@@ -371,9 +377,24 @@ function setupEventListeners() {
   });
 }
 
-// Delete the current tuple's files from disk (no confirmation, per user choice)
-function deleteCurrentTuple() {
+// Delete what Del removes here from disk (no confirmation, per user choice): the row, or the one image on screen.
+function deleteCurrent() {
+  if (deleteUnit === 'image') {
+    vscode.postMessage({
+      type: 'deleteImage',
+      tupleIndex: currentTupleIndex,
+      modalityIndex: toOriginal(currentModalityIndex, modalityOrder),
+    });
+    return;
+  }
   vscode.postMessage({ type: 'deleteTuple', tupleIndex: currentTupleIndex });
+}
+
+/** The button hint and the help row say what Del will actually take here, so neither can promise the wrong unit. */
+function applyDeleteUnitToAffordances(): void {
+  const what = deleteUnit === 'image' ? 'current image file' : 'current tuple files';
+  deleteBtn.setAttribute('title', `Delete ${what} (Del)`);
+  helpDeleteTextEl.textContent = `Delete ${what} (permanent!)`;
 }
 
 // Crop confirmation callback
@@ -524,11 +545,13 @@ function handleWinnersReset(message: { winners: Record<number, OriginalModalityI
   updateModalitySelector();
 }
 
-function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version?: string; capabilities?: HostCapabilities }) {
+function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors?: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version?: string; capabilities?: HostCapabilities; deleteUnit?: DeleteUnit }) {
   // Absent/empty version renders nothing: the :empty CSS rule hides the footer entirely.
   helpVersionEl.textContent = message.version ? `ImageCompare v${message.version}` : '';
   capabilities = message.capabilities ?? NO_HOST_CAPABILITIES;
+  deleteUnit = message.deleteUnit ?? 'tuple';
   applyCapabilitiesToHelp();
+  applyDeleteUnitToAffordances();
   // Reset all state for new comparison
   tuples = message.tuples;
   modalities = message.modalities;
@@ -2463,11 +2486,11 @@ function handleKeyDown(e: KeyboardEvent) {
 
     case 'Delete':
     case 'Backspace': {
-      // Del deletes the current tuple's files, same as the Tools-panel Delete button
+      // Del removes whatever the Tools-panel Delete button removes, which the host stated on init
       const active = document.activeElement as HTMLElement | null;
       if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) break;
       e.preventDefault();
-      deleteCurrentTuple();
+      deleteCurrent();
       break;
     }
   }

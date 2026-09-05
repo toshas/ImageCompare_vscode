@@ -15,6 +15,8 @@ function debugLog(...args: unknown[]): void {
 
 // One comparator shared with the watcher-time row insertion (docs/file-watching.md: rows-insert-in-order).
 import { naturalCompare as naturalSort } from './watcherLogic';
+import { CROP_SUFFIX_RE } from './cropPlan';
+import { MODES } from './modePolicy';
 
 /**
  * Strip file extension from filename
@@ -179,7 +181,6 @@ export function matchTuplesWithTrie(
       }
 
       // A crop ref never beats a non-crop one (docs/tuple-matching.md: crop-never-beats-noncrop); then length diff, then LCS.
-      const cropSuffixRe = /_crop\d+$/; // Must keep matching the writer (docs/crop-and-pptx.md: cropnn-writer-reader-match).
       let bestIdx = candidates[0];
 
       if (candidates.length > 1) {
@@ -189,7 +190,7 @@ export function matchTuplesWithTrie(
         if (debugEnabled()) debugLog(`  FUZZY: ${mod}/${file.name} - ${candidates.length} candidates (LCP=${lcpLength}):`);
         for (const idx of candidates) {
           const refName = stripExtension(refFiles[idx].name);
-          const isCrop = cropSuffixRe.test(refName);
+          const isCrop = CROP_SUFFIX_RE.test(refName); // reads the writer's format (docs/crop-and-pptx.md: cropnn-writer-reader-match)
           const lenDiff = Math.abs(refName.length - query.length);
           const lcs = lcsLength(query, refName);
           if (debugEnabled()) debugLog(`    candidate ref[${idx}] ${refName}: crop=${isCrop}, lenDiff=${lenDiff}, LCS=${lcs}`);
@@ -394,8 +395,8 @@ async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
     }
   }
 
-  // Check for multi-modality mode (2+ subdirectories with images)
-  if (subdirs.length >= 2) {
+  // Structure wins where there is any: a lone subdirectory of images is a comparison of one column, which runs (docs/session-files.md: subdir-structure-wins).
+  if (subdirs.length >= 1) {
     // Subdirectories have no caller-intended order, so sort them for a stable view.
     subdirs.sort((a, b) => naturalSort(a.name, b.name));
     const modalityResult = await scanDirectoriesAsModalities(subdirs, 1);
@@ -404,18 +405,12 @@ async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
     }
   }
 
-  // A directory of only files has no second axis and is not a mode (docs/session-files.md).
+  // No structure to use: the loose images ARE the selection, read exactly as if the user had picked them (docs/session-files.md: folder-of-images-is-a-file-list).
   if (files.length > 0) {
-    throw new Error(
-      'This directory contains only image files without subdirectory structure.\n\n' +
-      'For multi-modality comparison, please either:\n' +
-      '• Select a directory containing 2+ subdirectories (each subdirectory becomes a modality)\n' +
-      '• Select multiple directories (each directory becomes a modality)\n' +
-      '• Select specific image files to compare directly'
-    );
+    return scanEnumeratedFiles(files);
   }
 
-  throw new Error('Directory must contain 2+ subdirectories with images for comparison');
+  throw new Error('Directory must contain images, or subdirectories with images, to compare');
 }
 
 /** Directory listings in flight at once; the scan costs one round trip per wave (docs/tuple-matching.md: dir-listings-overlap). */
@@ -489,7 +484,8 @@ async function scanDirectoriesAsModalities(
     }
   }
 
-  if (modalityFiles.size < 2) {
+  // How few columns each shape may yield is the mode table's, not a constant (docs/session-files.md: subdir-structure-wins) (docs/session-files.md: mode-behaviour-is-a-table).
+  if (modalityFiles.size < MODES[mode].minColumns) {
     return null; // Not enough directories with images
   }
 
@@ -552,9 +548,10 @@ async function scanDirectoriesAsModalities(
  * Scan selected files as a single tuple
  */
 async function scanFiles(uris: vscode.Uri[]): Promise<ScanResult> {
+  // No crop filter: a hand-picked selection is respected as picked (docs/session-files.md: folder-of-images-is-a-file-list).
   const imageUris = uris.filter(uri => isImageFile(uri.path));
 
-  if (imageUris.length < 2) {
+  if (imageUris.length < MODES[3].minColumns) {
     throw new Error('Please select at least 2 image files');
   }
 
@@ -567,6 +564,21 @@ async function scanFiles(uris: vscode.Uri[]): Promise<ScanResult> {
     name: uri.path.split('/').pop() || 'unknown',
     uri
   })));
+}
+
+/**
+ * A directory's own images read as a mode-3 file list. `_cropNN` outputs are this app's own writes:
+ * they interleave with the parents they were cut from, so enumeration drops them — unless that
+ * would leave nothing to compare, so a folder someone moved their crops into still opens
+ * (docs/session-files.md: folder-of-images-is-a-file-list) (docs/crop-and-pptx.md: cropnn-writer-reader-match).
+ */
+function scanEnumeratedFiles(files: Array<{ name: string; uri: vscode.Uri }>): ScanResult {
+  const withoutCrops = files.filter(file => !CROP_SUFFIX_RE.test(stripExtension(file.name)));
+  const chosen = withoutCrops.length >= MODES[3].minColumns ? withoutCrops : files;
+  if (chosen.length < MODES[3].minColumns) {
+    throw new Error('This directory holds one image; a comparison needs at least 2.');
+  }
+  return scanFilesAsTuple([...chosen].sort((a, b) => naturalSort(a.name, b.name)));
 }
 
 /**

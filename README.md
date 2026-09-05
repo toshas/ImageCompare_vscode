@@ -39,7 +39,23 @@ my_experiment/
 └── model_v2/        → modality 3
 ```
 
-Each subfolder becomes a modality. Images are matched by filename.
+Each subfolder becomes a modality. Images are matched by filename. One subfolder of images is
+enough — a comparison of a single column runs, and gains more as they appear.
+
+### Compare a Folder of Images
+
+Right-click a folder that holds images and no image subfolders → **"Open in ImageCompare"**
+
+```
+shots/
+├── render_a.png    → modality 1
+├── render_b.png    → modality 2
+└── notes.txt       → ignored
+```
+
+The images become the modalities of one comparison — the same result as selecting them all by hand.
+Non-images are ignored, and so are this extension's own `_cropNN` outputs, so a folder you have
+cropped in before reopens on the originals.
 
 ### Compare Specific Files
 
@@ -96,7 +112,7 @@ Tip: tab titles show the full filename; add this setting to display `session` in
 | `Ctrl+C` | Copy the current image to the clipboard (as PNG), when no text is selected |
 | `Ctrl+S` | Save Session As — save a copy of the `.imagecompare` file (also via the title-bar save icon) |
 | `C` | Toggle crop mode |
-| `Del` / `Backspace` | Delete current tuple files (permanent — see warning below) |
+| `Del` / `Backspace` | Delete the current tuple's files — or, comparing a file list, just the image on screen (permanent — see warning below) |
 | `Esc` | Reset zoom / cancel crop / close the help overlay |
 
 The modality row is a single scrollable strip: scroll it with the wheel when it overflows, and any
@@ -113,9 +129,14 @@ zooms, and `Drag` draws/moves/resizes the rectangle instead of panning; `Enter` 
 `Esc` cancels it and `C` leaves crop mode. `↑` `↓`, `[` `]` and `Del`/`Backspace` are ignored until
 you leave.
 
-You can also delete the current tuple's files by clicking **Delete** in the floating Tools panel.
+You can also delete by clicking **Delete** in the floating Tools panel; the button's tooltip and the
+help overlay both name whichever unit is about to go.
 
-Warning: deletion is immediate and permanent. Every image file of the current tuple is erased from disk in all modalities — there is no confirmation prompt, the files do not go to the trash/recycle bin, and there is no undo. Take particular care with `Backspace`, which many keyboards make the reflexive "go back" key.
+Warning: deletion is immediate and permanent. Comparing folders, every image file of the current
+tuple is erased from disk in all modalities; comparing a list of files — a folder of images, or a
+hand-picked selection — only the one image on screen is. Either way there is no confirmation prompt,
+the files do not go to the trash/recycle bin, and there is no undo. Take particular care with
+`Backspace`, which many keyboards make the reflexive "go back" key.
 
 ## Features
 
@@ -154,7 +175,7 @@ A draggable, collapsible panel in the top-right corner provides:
 
 - **Minimap** — Thumbnail with viewport indicator when zoomed in (hidden while the panel is collapsed)
 - **Crop** — Enter crop mode to crop all modalities to the same region
-- **Delete** — Delete all files for the current tuple
+- **Delete** — Delete the current tuple's files, or the single image on screen when comparing a file list
 - **PPTX** — Export voted tuples to PowerPoint
 
 ### Smart Filename Matching
@@ -169,7 +190,7 @@ This handles different naming conventions (e.g., `img_001_gt.png` matches `img_0
 ### Live Updates
 
 The view automatically updates when files change:
-- **New images** appear as soon as VS Code's watcher reports them (directory comparisons; a fixed file list stays as listed). Where that watcher is silent, both a new *modality directory* and a new file in an existing directory are picked up within a sweep (~10s)
+- **New images** appear as soon as VS Code's watcher reports them (directory comparisons; a file list — including a folder opened as one — is enumerated once and stays as listed). Where that watcher is silent, both a new *modality directory* and a new file in an existing directory are picked up within a sweep (~10s)
 - **Deleted images** are marked as removed
 - **Modified images** reload automatically
 

@@ -10,7 +10,9 @@ import { matchDeletedFile, shiftIndexAfterRemoval } from './watcherLogic';
 import { adoptableImages, applyModalityInsert, newModalityDirCandidates } from './adoptionPlan';
 import { planDirSweep, planSweepDirs, pruneBarrenMemos, recordDirListing, shouldLogPoolSnapshot } from './pollPlan';
 import { applyArrival, planArrival } from './arrivalPlan';
-import { commitSlotRemoval, deleteTupleFlow, removeModalityStep, removeTupleStep } from './removalPlan';
+import { commitSlotRemoval, deleteSlotFlow, deleteTupleFlow, removeModalityStep, removeTupleStep } from './removalPlan';
+import { MODES } from './modePolicy';
+import { exportOutputDir } from './exportTarget';
 import { DeckIo, DECK_IMAGE_MAX_DIM, DECK_JPEG_QUALITY, exportDeck } from './pptxDeck';
 import { persistResults } from './resultsFile';
 import { ImageServeIo, ImageServeReply, refreshTupleImages, serveImage } from './imageServe';
@@ -250,14 +252,15 @@ export class ImageCompareProvider {
         return;
       }
 
-      // Mode 1 sets baseUri, mode 2 sets modalityDirs, mode 3 neither (see docs/session-files.md).
+      // What the roots mean is the mode table's to say; mode 3's roots are files, so neither is set (docs/session-files.md: mode-behaviour-is-a-table).
       let baseUri: vscode.Uri | undefined;
       const modalityDirs = new Map<string, vscode.Uri>();
 
       // The scan's verdict, not the raw input: a listed path that no longer exists is dropped first (docs/session-files.md: mode-is-explicit).
-      if (scanResult.mode === 1) {
+      const behaviour = MODES[scanResult.mode];
+      if (behaviour.roots === 'base-dir') {
         baseUri = scanResult.roots[0];
-      } else if (scanResult.mode === 2) {
+      } else if (behaviour.roots === 'modality-dirs') {
         // Labels must be applied at every naming site (docs/session-files.md: labels-all-or-none).
         const disambiguated = applyLabels(disambiguateDirectoryNames(scanResult.roots), labels);
         for (const { name, uri } of disambiguated) {
@@ -284,8 +287,8 @@ export class ImageCompareProvider {
         }
       }
 
-      // Voting is directory-based modes only (docs/session-files.md).
-      const votingEnabled = baseUri !== undefined || modalityDirs.size > 0;
+      // Whether the shape can be ranked at all is the mode table's (docs/session-files.md: mode-behaviour-is-a-table); whether this host has anywhere to write is its own.
+      const votingEnabled = behaviour.voting && (baseUri !== undefined || modalityDirs.size > 0);
 
       const panelKey = nextPanelKey();
       const panelState: PanelState = {
@@ -304,7 +307,7 @@ export class ImageCompareProvider {
         sessionFileUri,
         colorsByUri: colors,
         modalityDirs,
-        labelsExplicit: !!labels && labels.size > 0 && scanResult.mode === 2,
+        labelsExplicit: !!labels && labels.size > 0 && behaviour.labelsApply,
         recentlyDeleted: [],
         winners: new Map<TupleIndex, OriginalModalityIndex>(),
         votingEnabled,
@@ -482,6 +485,10 @@ export class ImageCompareProvider {
         await this.handleDeleteTuple(state, message.tupleIndex);
         break;
 
+      case 'deleteImage':
+        await this.handleDeleteImage(state, message.tupleIndex, message.modalityIndex);
+        break;
+
       case 'exportPptx':
         await this.handleExportPptx(state, message.tupleIndices, message.winnerModalityIndices, message.modalityOrder);
         break;
@@ -535,6 +542,26 @@ export class ImageCompareProvider {
       deleteFile: async img => { await vscode.workspace.fs.delete(img.uri); },
       removeTuple: idx => this.removeTuple(state, idx),
       removeModality: idx => this.removeModality(state, idx)
+    });
+  }
+
+  /**
+   * Handle delete image request: delete the one file behind a slot, then commit its removal.
+   */
+  private async handleDeleteImage(state: PanelState, tupleIndex: TupleIndex, modalityIndex: OriginalModalityIndex): Promise<void> {
+    // Remove eagerly rather than waiting on a watcher event, which may be up to a sweep away (docs/file-watching.md: self-writes-never-wait).
+    await deleteSlotFlow<ImageFile>(state.scanResult, state.winners, tupleIndex, modalityIndex, {
+      deleteFile: async img => { await vscode.workspace.fs.delete(img.uri); },
+      post: msg => state.panel.webview.postMessage(msg),
+      // A load that resolved before the delete re-populated this slot; clear it or it is served as a ghost.
+      onSlotRemoved: (t, m) => this.invalidateSlot(state, t, m),
+      removeTuple: idx => this.removeTuple(state, idx),
+      removeModality: idx => this.removeModality(state, idx),
+      saveResults: () => {
+        if (state.votingEnabled) {
+          this.saveResults(state);
+        }
+      }
     });
   }
 
@@ -678,12 +705,13 @@ export class ImageCompareProvider {
     });
   }
 
-  /** Export output directory: the base dir, or the first modality's parent, or undefined. */
+  /** Export output directory; the choice among this panel's roots is the shared rule's (docs/session-files.md: exports-land-beside-the-images). */
   private pptxOutputDir(state: PanelState): string | undefined {
-    const baseDir = state.baseUri?.fsPath ||
-      (state.modalityDirs.size > 0 ? Array.from(state.modalityDirs.values())[0].fsPath : undefined);
-    if (!baseDir) return undefined;
-    return state.baseUri ? baseDir : path.dirname(baseDir);
+    return exportOutputDir({
+      baseDir: state.baseUri?.fsPath,
+      modalityDirs: Array.from(state.modalityDirs.values(), dir => dir.fsPath),
+      firstImagePath: state.scanResult.tuples[0]?.images[0]?.uri.fsPath,
+    });
   }
 
   /**
@@ -932,6 +960,8 @@ ${lead}
       version: String(this.context.extension.packageJSON.version ?? ''),
       // This host's flags; Save Session As needs a session file to copy (docs/standalone.md: affordances-rendered-by-the-webview).
       capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: !!state.sessionFileUri },
+      // What Del removes here, stated rather than inferred by the webview (docs/session-files.md: mode-behaviour-is-a-table).
+      deleteUnit: MODES[state.scanResult.mode].deleteUnit,
       colorOverride: (mod, i) => this.resolveModalityColor(state, mod, i)
     });
 
@@ -1645,7 +1675,7 @@ ${lead}
     for (const tuple of state.scanResult.tuples) {
       const img = tuple.images.find(i => i.modality === modality);
       // Mode 3 columns are files; modes 1 and 2 are directories even when the scan yields one row.
-      if (img) return state.scanResult.mode === 3 ? img.uri.fsPath : path.dirname(img.uri.fsPath);
+      if (img) return MODES[state.scanResult.mode].columnIsFile ? img.uri.fsPath : path.dirname(img.uri.fsPath);
     }
     return modality;
   }
@@ -2271,10 +2301,11 @@ ${lead}
 
   /**
    * Place a genuinely new file into an existing tuple or a new one. Modes 1 and 2 only —
-   * a mode-3 comparison is an explicit file list with no structure to extend.
+   * a mode-3 comparison is a fixed list of files, enumerated once, with no axis a newcomer joins
+   * (docs/session-files.md: folder-of-images-is-a-file-list).
    */
   private async handleNewFile(state: PanelState, uri: vscode.Uri, filename: string): Promise<void> {
-    if (state.scanResult.mode === 3) {
+    if (!MODES[state.scanResult.mode].grows) {
       return;
     }
 

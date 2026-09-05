@@ -75,6 +75,17 @@ function makeRig(opts: {
 const scan2 = () => ({
   tuples: [{ name: 'shot', images: [img('a'), img('b')] }],
   modalities: ['a', 'b'],
+  mode: 1 as const,
+});
+
+/** A file list whose columns are files in ONE directory — the shape a tuple-wide crop name collides in. */
+const scanFlat = () => ({
+  tuples: [{ name: 'shot', images: [
+    { name: 'shot_a.png', modality: 'a' },
+    { name: 'shot_b.png', modality: 'b' },
+  ] }],
+  modalities: ['a', 'b'],
+  mode: 3 as const,
 });
 
 const req = (over: Partial<{ tupleIndex: number; cropRect: CropRect; srcWidth: number; srcHeight: number }> = {}) => ({
@@ -160,12 +171,57 @@ describe('performCrop (real cropFlow code)', () => {
     expect(log.filter(l => l.startsWith('post:') || l.startsWith('arrive:'))).toEqual([]);
   });
 
+  // A file list's columns can be files in one directory, where a tuple-wide name is one path
+  // written N times (docs/crop-and-pptx.md: shared-crop-filename).
+  it('names each crop after its own image in a file list, instead of handing every column one name', async () => {
+    const { io, log } = makeRig({ dirNames: { a: ['shot_a.png', 'shot_b.png'], b: ['shot_a.png', 'shot_b.png'] } });
+    await performCrop(scanFlat(), req(), io);
+    expect(log.filter(l => l.startsWith('write:'))).toEqual([
+      'write:a:shot_a_crop01.png',
+      'write:b:shot_b_crop01.png',
+    ]);
+  });
+
+  // A file list is enumerated once and does not grow, so its crops land on disk only. Both hosts
+  // must agree: the provider dropped them through handleNewFile's early return, while the adapter's
+  // arriveFile called the arrival planner unconditionally and grew two single-column rows
+  // (docs/session-files.md: folder-of-images-is-a-file-list).
+  it('lands a file list\'s crops on disk without adding them to the comparison', async () => {
+    const { io, log } = makeRig({ withThumbnails: true });
+    await performCrop(scanFlat(), req(), io);
+    expect(log.filter(l => l.startsWith('write:'))).toHaveLength(2);
+    expect(log.filter(l => l.startsWith('arrive:'))).toEqual([]);
+    expect(log.filter(l => l.startsWith('thumbs:'))).toEqual([]);
+    // The user is still told what happened, and with both real paths.
+    expect(log.filter(l => l.startsWith('post:cropComplete'))).toEqual([
+      'post:cropComplete:2:/root/a/shot_a_crop01.png|/root/b/shot_b_crop01.png',
+    ]);
+  });
+
+  it('still lands every arrival, then cropComplete, then thumbnails where the crop joins a row', async () => {
+    const { io, log } = makeRig({ withThumbnails: true });
+    await performCrop(scan2(), req(), io);
+    expect(log.filter(l => l.startsWith('arrive:'))).toHaveLength(2);
+    const order = log.filter(l => l.startsWith('arrive:') || l.startsWith('post:cropComplete') || l.startsWith('thumbs:'));
+    expect(order[order.length - 2]).toMatch(/^post:cropComplete/);
+    expect(order[order.length - 1]).toBe('thumbs:2');
+  });
+
+  it('keeps the one shared name where the columns are directories, so the watcher still regroups them', async () => {
+    const { io, log } = makeRig({ dirNames: { a: ['t.png'], b: ['t.png'] } });
+    await performCrop(scan2(), req(), io);
+    expect(log.filter(l => l.startsWith('write:'))).toEqual([
+      'write:a:shot_crop01.png',
+      'write:b:shot_crop01.png',
+    ]);
+  });
+
   it('a missing tuple or an empty tuple touches no io at all', async () => {
     const a = makeRig();
-    await performCrop({ tuples: [] }, req(), a.io);
+    await performCrop({ tuples: [], mode: 1 }, req(), a.io);
     expect(a.log).toEqual([]);
     const b = makeRig();
-    await performCrop({ tuples: [{ name: 'empty', images: [] }] }, req(), b.io);
+    await performCrop({ tuples: [{ name: 'empty', images: [] }], mode: 1 }, req(), b.io);
     expect(b.log).toEqual([]);
   });
 });

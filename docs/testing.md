@@ -103,6 +103,10 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `arrivalPlan` | real source | Watcher/crop arrival placement: exact-basename regroup, free-slot tie-break, taken-slot → new tuple, ` (2)` uniquification, natural insert position, winner/current shifts, `tupleAdded`/`fileRestored` payloads |
 | `cropRelRect` | real source | `toRelativeRect`: per-axis denominators (non-square source), round-trip with `scaleAndClampRect` |
 | `winnersToNames` | real source | Winner indices → durable modality names; unresolvable winners dropped, never written |
+| `deleteFlow` | real source | Both units Del can take, as transcripts: the tuple flow (every file deleted before the plan runs, planned off the tuple's live index) and the slot flow (one file, then the shared commit off re-derived live indices — the sibling untouched, the winner cleared, an emptied row taken with its last file, a rejecting delete still committing) |
+| `exportTarget` | real source | Where a generated file lands: the base dir (mode 1), the modality dirs' parent (mode 2), the first image's own directory (mode 3), the preference order between them, and `undefined` only when the comparison has no root. The mode-3 branch did not exist — `pptxOutputDir` returned `undefined` and every file-list export threw "Cannot determine output directory" |
+| `modePolicy` | real source | The mode table every site reads instead of testing a mode number: all ten fields for all three shapes (roots, column-is-a-file, root-subdirs-are-columns, column floor, labels, growth, voting, delete unit, crop naming, crops-join), the cross-table properties that keep a fourth mode coherent, and the one sentence four of the cells follow from — pinned against the mode table in `docs/session-files.md`, not against the implementation |
+| `folderScan` | real source | What a *directory* resolves to, through the real `scanForImages` over real temp dirs: loose images as a mode-3 file list in natural order (junk and `_cropNN` writes dropped, the crops shown anyway when excluding them would leave nothing), one image subdir opening as mode 1, structure winning over the loose images beside it, mode 2 keeping its two-column floor, and a folder of one image still refused |
 | `removalPlan` | real source | Tuple-delete sequence: step order, emptied-modality indices pre-shifted for earlier splices, `tupleDeleted`→refresh→re-save transcript, re-save after every step, winner shifts and clamping |
 | `pptxDeck` | real source | Deck build against a recorder pptx + stub io: slide counts, parent/crop pairing (a voted crop never ships without its parent), winner captions, `modalityOrder` slide order, callout-rect gating on crop metadata |
 | `debugLog` | real source | The debug sink: disabled → the message thunk is never invoked and the channel stays empty; enabled → one `+<ms>ms [TAG] text` line in the "ImageCompare" channel; verbose gate; runtime config change both ways; channel disposed with the subscription; the byte/elapsed/tier/throughput formatters against hand-computed values |
@@ -342,6 +346,23 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **What Del does in the webview, by mutation.** `test/webview/delete-unit.spec.ts` drives the real
+  bundle through `init.deleteUnit` and asserts which message it posts, that a *reordered* strip still
+  names the ORIGINAL column rather than the screen position, and that the help row and the button
+  hint follow the declared unit. All of that is DOM and wire behaviour, outside the Vitest-only
+  harness; the policy that produces the unit IS mutation-covered, in `test/unit/modePolicy.test.ts`.
+  Six of the seven were watched failing against the pre-change bundle, which posted `deleteTuple`
+  unconditionally and carried the Del wording as a static string in the shell. The seventh is
+  labelled in the file as what it is: a regression guard for the tuple path, which passed before too.
+- **The standalone in mode 3, by mutation.** `standalone opens a folder of loose images, and never
+  polls a results.txt it does not own` is the only check that the adapter's poll stays off a shape
+  whose `<root>/<modality>` directories do not exist. It asserts the effect that actually dies with
+  the gate — a stray `results.txt` in the folder being read and pushed back as `winnersReset`, into
+  a mode where voting is off. It was first written against the *wrong* mechanism ("an ungated cycle
+  empties the comparison"), passed with the gate removed, and is recorded here because that is the
+  shape of a Layer-3 test that certifies nothing: it needs a real OPFS tree, a real artifact and a
+  shrunk poll interval, none of which Vitest can supply, so a red run with the gate reverted is the
+  only evidence it has.
 - **The carousel's DOM shape, by mutation.** `test/webview/column-virtualization.spec.ts` asserts
   tile counts and layout — that doubling the modalities adds no DOM, that the materialized columns
   are contiguous and correctly placed, and that scrolling releases the near end as it binds the far
