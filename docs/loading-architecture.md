@@ -1110,6 +1110,81 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`rows-contain-their-own-paint`** — every carousel row carries `contain: content`, so its layout,
+  paint and hit-testing cannot escape its box. The reason is measured, not theoretical: a DevTools
+  trace of a wide grid being scrolled spent roughly 2000 ms of 4000 in **Paint** (12 055 of them),
+  **Layerize** (130 x 5.7 ms) and **HitTest** (363 x 1.9 ms), against **270 ms** of script — so the
+  cost of this carousel is the size of its DOM, not the work its code does. The wall is one promoted
+  layer (`will-change: transform`) holding `pool x modalities` tiles, and without containment a
+  change anywhere in it invalidates paint across the whole thing. The same measurement is why
+  `CAROUSEL_OVERSCAN` stays small: every buffered row is DOM that is painted and hit-tested whether
+  or not it is ever seen, and it was briefly raised to 10 on a guess about blank rows that
+  `flyby-rows-defer-decodes` had already made moot. Before optimising anything here, profile it —
+  three fixes on this path targeted script and image decode before a trace showed where the time
+  actually goes.
+- **`flyby-rows-defer-decodes`** — a row bound while the wall is still moving takes the shared blank
+  tile, not its own thumbnails; the rows the user actually lands on are filled once the wheel stops
+  (`CAROUSEL_SETTLE_MS`). The cost this removes is not JavaScript: each tile's thumbnail is a
+  *distinct* blob url, so assigning it schedules a decode, and a rebind assigns one per modality.
+  Measured on a 400x25 grid over a 40-notch burst: 4175 src assignments and an 86 ms worst frame,
+  against 1775 and 24 ms with the defer — and the remaining 1775 are all the one blank data url,
+  which decodes once. The blank branch is also what makes this safe: a rebound row cannot show the
+  *previous* tuple's image, because the bind assigns the blank explicitly rather than skipping the
+  assignment. Only the wheel path defers; a drag, a navigation or a resize is a landing, so
+  `scrollCarouselToCurrentTuple` clears the flag before it binds and never flashes a blank.
+  This is a constant-factor fix layered on `carousel-dom-never-searched`, and neither removes the
+  underlying term: binds still cost one tile per modality because columns are not virtualized
+  (`dev_backlog/carousel-column-virtualization.md`), which is the only fix that changes the shape.
+- **`carousel-dom-never-searched`** — nothing on a per-tile or per-arrival path may search the
+  carousel's DOM. The carousel holds `pool x modalities` tiles — thousands at a wide grid — so an
+  attribute-selector search costs a subtree scan, and the two places that did it ran *per item*:
+  `handleThumbnail`/`handleThumbnailError` (and the watcher's delete/restore) searched
+  `.carousel-thumb[data-tuple=..][data-modality=..]` for **every arriving thumbnail**, and
+  `bindCarouselRow` ran a `querySelectorAll` per row plus a `querySelector` per tile for the vote
+  circle. A sweep re-aim delivers hundreds of thumbnails at once, which is how a re-aim bought a
+  second of frozen scrolling. Both are index lookups now: rows are ring-mapped
+  (`slot = tupleIndex % pool`), so the row holding a tuple is arithmetic, and each row's tiles and
+  circles are captured once at creation in `rowParts`. A tile is `parts.imgs[displayIndex]`. The
+  ring mapping is what makes this possible at all, so a change to it must keep `carouselTileFor`
+  honest: it verifies `carouselRowBound[slot] === tupleIndex` before returning, and a slot bound to
+  another tuple correctly returns null rather than the wrong tile. Columns are still not
+  virtualized (`dev_backlog/carousel-column-virtualization.md`), so bind cost remains linear in the
+  modality count — this removes the constant factor, not the term.
+- **`wheel-coalesced-to-one-frame`** — the carousel's row axis is a virtualized wall: an offset
+  change rebinds rows and repaints every tile in them, and `bindCarouselRow` touches *every modality*
+  of each bound row (columns are not virtualized —
+  `dev_backlog/carousel-column-virtualization.md`). So the work per apply scales with the modality
+  count, and a wheel can deliver several events per frame. Applying each one did that work N times
+  and painted only the last. Wheel deltas are therefore summed and applied once per
+  `requestAnimationFrame`; nothing else is coalesced, because navigation and drags must settle
+  synchronously for the next read to be true. The other half is the buffer: `CAROUSEL_OVERSCAN` rows
+  are bound beyond the viewport each way, and a window that outruns its buffer shows blank rows until
+  the next bind. It is sized for a fast flick rather than a slow drag — an Alt notch moves
+  `ALT_SPEED` times as far (`selection-centres-on-navigation`), so the buffer and that multiplier
+  must move together. The horizontal axis needs none of this: it is a native `overflow-x` scroller
+  the compositor drives, which is exactly why it felt smooth while the row axis did not.
+- **`selection-centres-on-navigation`** — every scrollable axis in the viewer obeys one rule, in
+  `webview/axisScroll.ts`: *deliberate navigation centres the selection; a wheel never does.* The
+  three axes are the carousel's rows, the carousel's columns, and the modality pill row. Centring is
+  `centreOffset` — centre the item, optionally snap to the item pitch, clamp to the scrollable range
+  — and the snap is what makes an arrow step move the grid exactly one item or not at all. Pills omit
+  the snap because their widths differ; the two carousel axes pass it.
+  The rule is split in two directions and both halves matter. **Navigation centres**: an arrow, a
+  digit jump, a Space flip, a `[`/`]` reorder or a pill click re-centres its axis, which is why
+  `←`/`→` now moves the carousel horizontally at all — it did not, so at 136 modalities the selected
+  column simply sat off-screen while the row axis tracked correctly. **Render does not**: `render()`
+  runs on every image arrival and every resize frame, so centring there would fight the user's own
+  scroll and override the resize anchor — that is why `updateCarouselSelection` takes
+  `centerOnCurrent` and `render()` passes `false`. A new centring call site belongs on a navigation
+  path. The one paint-path exception is the carousel's `ResizeObserver`, which re-centres the row
+  axis when `clientHeight` *changes* — the visible-row window is derived from it, and it is 0 until
+  the viewer unhides. It is guarded to height only for exactly this reason: a width drag must not
+  re-centre, because the resize anchor owns that. Any other paint-path centring is a bug.
+  `ALT_SPEED` lives in the same module because it has the same one-meaning-everywhere property, and
+  the two kinds of axis need different arithmetic to honour it: scrolling is linear so Alt multiplies
+  the delta, zoom is multiplicative so Alt *compounds* the step (`step ** ALT_SPEED`). Scaling the
+  zoom step by 5 instead would make Alt mean a different amount of movement on the image than on the
+  strips, which is the bug the shared module exists to prevent.
 - **`empty-comparison-is-terminal`** — a comparison with no rows *or* no columns left renders a
   terminal notice: the spinner off, **every** surface that can carry the last frame cleared — the
   canvas hidden *and* the floating panel's minimap (plus its viewport rect), which is a second copy

@@ -113,6 +113,7 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `emptyNotice` | real source | The emptied comparison's terminal notice: silent while anything is drawable, speaking at zero rows *and* at zero columns (the two shapes the two detectors produce), the folder named only when the host established it is gone, and content winning over a still-flagged missing root — the recoverability rule in pure form |
 | `contextMenuModel` | real source | The comparison's context menu: the extension's item set pinned against what the manifest used to contribute, the standalone's differing *only* by an item its `HostCapabilities` disclaim, the local/host split exact both ways, the toggle label following the hidden state, and the help text derived from the same model so it cannot promise a missing item |
 | `noticeChannel` | real source | What a finished host action says: the wordings pinned against the strings the provider used to hand `showInformationMessage`/`showErrorMessage`, the reveal action offered only to a host that can reveal (with the text unchanged either way), and a failure toned `error` with no action |
+| `axisScroll` | real source | The one rule every scrollable axis obeys: centring computed from hand-derived geometry, clamping at both ends and on a short axis, the pitch snap that makes consecutive items differ by exactly one pitch, and Alt — multiplying a linear scroll but *compounding* the zoom step (`1.03**5`, not `1 + 0.03*5`), which is the arithmetic that keeps "faster" meaning the same on every axis |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
@@ -340,6 +341,34 @@ the fix, the docs, and the CI check.
   no test-layer install has it (only `publish.yml`'s runners do, by hand-extracting the tarball). It is checked by hand against a tree built the way `publish.yml`
   builds the universal target; see the Testing section of `docs/image-backends.md`. `test/unit/pngTextChunk.test.ts` uses Sharp only to
   mint a fixture PNG and re-read it — that exercises Sharp incidentally, not the loader or the tiers.
+- **The carousel's decode cost, by mutation.** `rows flown past take the blank tile` counts *blob*
+  src assignments during a wheel burst — 30 pre-fix, 0 after. Nothing in Vitest can see a decode
+  being scheduled, and the offsets and the settled tiles are identical either way, so the count is
+  the only evidence. It also stands in for the stale-tile property: a rebind takes the blank branch
+  or a blob url, so zero blob assignments proves every rebound row went blank rather than keeping
+  the previous tuple's image.
+- **The carousel's cost rules, by mutation.** Two of the axis-scroll spec's tests assert *how much
+  work* happens rather than what it produces: a wheel burst applying once per frame, and a thumbnail
+  burst searching the carousel DOM zero times. Both count operations through a patched
+  `querySelector`/a `MutationObserver`, which no Vitest suite can do, and both are the only evidence
+  that the fix landed — the offsets and the painted tiles are identical either way. Pre-fix they read
+  8 applies and 72 searches for 72 thumbnails; post-fix, 1 and 0.
+- **The pill strip's and the carousel's rendering rules, by mutation.** `test/webview/axis-scroll.spec.ts`
+  also pins what a user *sees*: the active pill's 2px outer ring clearing the strip's box, no overlay
+  scrollbar painting across the pills, a modality switch mutating class attributes and never the
+  labels (the label rewrite on every render was the flicker), navigation sliding while a wheel lands
+  inside its own event, and a wheel burst reaching the same offset in **one** apply rather than eight.
+  None is Vitest-reachable — they are CSS geometry, a MutationObserver count and a rAF boundary. Each
+  was watched failing against the pre-fix bundle; the apply-count one is the reason the burst test
+  asserts a count at all, since summing correctly happens either way.
+- **The three scroll axes' wiring, by mutation.** `test/webview/axis-scroll.spec.ts` pins which
+  events centre the selection and which must not — the wiring lives in `webview/main.ts`, so no
+  Vitest mutation can reach it. The *rule* is mutation-covered in `test/unit/axisScroll.test.ts`;
+  what stands in for the wiring is that six of the seven *tests* were watched failing against the
+  pre-change bundle, and the seventh — the digit-jump/pill-click one — was strengthened after that
+  run showed it passing **vacuously**: containment of the active pill is satisfied trivially by a
+  wrapped row, whose `scrollLeft` is pinned at 0. It now also asserts the strip *moved*, away from an
+  extreme the selection is not at, and fails pre-change too.
 - **The menu's and the notice's DOM rules, by mutation.** `test/webview/context-menu.spec.ts` and
   `test/webview/notice.spec.ts` pin rules that live in `webview/main.ts` and
   `webview/contextMenu.ts` — keys must not act behind an open menu (Del there is a permanent file

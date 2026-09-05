@@ -271,14 +271,24 @@ body {
 }
 #info.hidden { display: none; }
 
+/* One scrollable row, never wrapping: #info is flex-shrink:0, so a wrapped pill wall grew the bar and ate the viewer at high modality counts. position:relative makes a pill's offsetLeft the scroll coordinate (docs/loading-architecture.md: selection-centres-on-navigation). */
 #modality-selector {
+  position: relative;
   display: flex;
-  gap: 2px 4px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
   align-items: center;
-  align-content: center;
   min-width: 0;
+  /* Capped so #status keeps a readable share: the strip's natural width is unbounded and #status collapses to 0 before it. Fewer pills visible than the old wrap showed, deliberately — the wrap paid for them in viewer height. */
+  max-width: 60%;
+  /* The active pill's ring is a 2px OUTER box-shadow and :hover scales 5%, both outside the pill's box, so the strip pads on EVERY side — vertically the overflow crops them, and horizontally the first and last pill's ring falls outside the scroll range at either end. */
+  padding: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* No scrollbar: Chromium's is an OVERLAY here, so on a 22px strip it painted across a quarter of the pills, and reserving space for it cost the whole info bar 12px of permanent height. The strip's affordance is the active pill, which every navigation scrolls into view. */
+  scrollbar-width: none;
 }
+#modality-selector::-webkit-scrollbar { display: none; }
 
 #status {
   color: var(--vscode-descriptionForeground, #888);
@@ -529,6 +539,7 @@ body {
 /* 1px top+bottom on adjacent rows = 2px vertical space, matching the 2px column gap — an equidistant wall, no separator lines. */
 /* No transitions on selection styling: the wall jumps instantly, so a fading highlight pulses the center on every step. */
 /* Absolutely positioned: rows are a recycled pool placed at tupleIndex * rowHeight inside the virtual wall. */
+/* Containment bounds paint, layout and hit-testing to the row: a profile of a wide grid spent ~2000ms of 4000 in Paint (12055 of them), Layerize and HitTest, against 270ms of script (docs/loading-architecture.md: rows-contain-their-own-paint). */
 .carousel-row {
   position: absolute;
   left: 0;
@@ -537,7 +548,9 @@ body {
   gap: 2px;
   padding: 1px 6px;
   cursor: pointer;
+  contain: content;
 }
+/* This gap and padding ARE the column axis: main.ts mirrors them as CAROUSEL_TILE_GAP/CAROUSEL_ROW_PAD to centre a column (docs/loading-architecture.md: selection-centres-on-navigation). Change one, change both. */
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
 
@@ -746,6 +759,8 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
         <tr><td>Enter</td><td>Toggle winner / confirm crop (in crop mode)</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out; scroll tuples on the film strip</td></tr>
         <tr><td>Shift+Scroll</td><td>On the film strip: scroll the film strip sideways</td></tr>
+        <tr><td>Scroll (pills)</td><td>On the modality row: scroll it sideways when it overflows</td></tr>
+        <tr><td>Alt+Scroll</td><td>Anywhere above: 5\u00d7 faster</td></tr>
         <tr><td>Drag</td><td>Pan image</td></tr>
         <tr><td>Click</td><td>Film-strip tile: go to it; its corner circle: toggle winner</td></tr>
         <tr id="help-row-contextmenu"><td>Right-click</td><td>On the image or a pill: <span id="help-contextmenu-items"></span></td></tr>

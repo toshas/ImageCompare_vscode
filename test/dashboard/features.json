@@ -162,6 +162,30 @@
               "match": "clicking a modality pill switches modality"
             }
           ]
+        },
+        {
+          "id": "mouse-alt-zoom",
+          "name": "Alt accelerates zoom (compounded, not scaled)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "compounds the zoom step"
+            },
+            {
+              "suite": "webview",
+              "match": "Alt makes a zoom notch travel further"
+            }
+          ]
+        },
+        {
+          "id": "axis-clamp",
+          "name": "Every axis clamps to its content",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "clamps at both ends"
+            }
+          ]
         }
       ]
     },
@@ -672,6 +696,64 @@
           "id": "carousel-resize",
           "name": "Drag resize handle",
           "tests": []
+        },
+        {
+          "id": "carousel-column-centring",
+          "name": "Arrows move the carousel horizontally too",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "centres the item in the viewport"
+            },
+            {
+              "suite": "webview",
+              "match": "an arrow key moves the carousel horizontally"
+            }
+          ]
+        },
+        {
+          "id": "carousel-alt-speed",
+          "name": "Alt accelerates carousel scrolling",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "multiplies a linear scroll"
+            },
+            {
+              "suite": "webview",
+              "match": "Alt makes a carousel wheel notch travel further"
+            }
+          ]
+        },
+        {
+          "id": "carousel-wheel-coalesced",
+          "name": "Wheel burst applied once per frame",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "travels their exact sum, in one apply"
+            }
+          ]
+        },
+        {
+          "id": "carousel-no-dom-search",
+          "name": "Thumbnail arrivals never search the DOM",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "searches the carousel DOM zero times"
+            }
+          ]
+        },
+        {
+          "id": "carousel-flyby-defers",
+          "name": "Flown-past rows defer thumbnail decodes",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "rows flown past take the blank tile"
+            }
+          ]
         }
       ]
     },
@@ -951,6 +1033,80 @@
             {
               "suite": "webview",
               "match": "a failed export is toned as a failure"
+            }
+          ]
+        },
+        {
+          "id": "pills-single-scrollable-row",
+          "name": "Modality pills: one scrollable row",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "the pill row is one scrollable strip"
+            }
+          ]
+        },
+        {
+          "id": "pills-wheel-scroll",
+          "name": "Wheel scrolls the pill row, without navigating",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a wheel over the pill row scrolls it"
+            }
+          ]
+        },
+        {
+          "id": "pills-centre-on-navigation",
+          "name": "Navigation teleports the pill row to the selection",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "an arrow key teleports the pill row"
+            },
+            {
+              "suite": "webview",
+              "match": "a digit jump and a pill click centre the same way"
+            }
+          ]
+        },
+        {
+          "id": "pills-ring-not-clipped",
+          "name": "Active pill ring fully visible, all four sides",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "the active pill's focus ring is not clipped"
+            }
+          ]
+        },
+        {
+          "id": "pills-no-scrollbar-overlay",
+          "name": "No scrollbar paints over the pills",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "no scrollbar paints over the pill row"
+            }
+          ]
+        },
+        {
+          "id": "pills-no-label-churn",
+          "name": "Switching modality does not rewrite labels",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "mutates classes only, never the labels"
+            }
+          ]
+        },
+        {
+          "id": "pills-smooth-navigation",
+          "name": "Navigation slides, wheel jumps",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "navigation slides the pill row, a wheel jumps it"
             }
           ]
         }
