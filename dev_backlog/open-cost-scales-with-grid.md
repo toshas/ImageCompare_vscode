@@ -1,16 +1,17 @@
-# Backlog: virtualize the tuple axis everywhere except the DOM
+# Backlog: opening a comparison costs the whole grid, before anything is drawn
 
-**Status: not started.** Raised 2026-08-26. Sibling of
-[`carousel-column-virtualization.md`](carousel-column-virtualization.md), which covers the *modality*
-axis; this one covers the *tuple* axis.
+**Status: not started.** Raised 2026-08-26 as "tuple-axis-virtualization"; renamed 2026-09-05
+because that title said the opposite of the item's own first paragraph and invited exactly the wrong
+fix.
 
-## Start here, because it is counter-intuitive
+## Start here, because the old name was misleading
 
-**The carousel's tuple axis is already virtualized in the DOM.** `ensureVisibleCarouselRows`
-materializes rows from a pool sized `ceil(viewH / 14) + 2 * OVERSCAN + 2`, and rebinds them as you
-scroll. That part is done and works.
+**The carousel's tuple axis is already virtualized in the DOM**, and so is its modality axis
+(`docs/loading-architecture.md: columns-virtualize-like-rows`). `ensureVisibleCarouselRows`
+materializes rows from a pool sized `ceil(viewH / MIN_TILE_PITCH) + 2 * OVERSCAN + 2` and rebinds
+them as you scroll; each row materializes only the columns on screen. Both axes are done.
 
-**Everything else along the tuple axis is fully materialized**, and that is what this item is about:
+This item is about everything along the tuple axis that is **not** DOM, and none of it is windowed.
 
 | what | scale on the field grids |
 |---|---|
@@ -45,21 +46,31 @@ The honest position is that we know the *sizes* and not the *costs*. Before chan
 
 - Where does open time actually go on 265 x 136? `scan` was 8.8 s of the 12 s open — that is disk
   traversal, not tuple materialization, and no amount of virtualization touches it.
-- What does the renderer actually hold? The 1.48 GB figure in the column item is an upper bound,
-  not a measurement.
+- What does the renderer actually hold? The 1.48 GB figure this used to defer to was an estimate in
+  a plan that has since been executed and deleted. There is now a real measurement in
+  `docs/loading-architecture.md: columns-virtualize-like-rows` — 27 293 DOM nodes and a 6.7 MB JS
+  heap on 265 x 136 — and it is an order of magnitude below that estimate, because the estimate was
+  about blob and bitmap residency (`dev_backlog/thumb-url-cache-unbounded.md`), which none of this
+  touches.
 - Does a user with 265 tuples suffer, or only one with 40,000? If the answer is "nobody has hit it",
   this item is a preparation for a problem we do not have, and saying so is a legitimate outcome.
+
+**One data point already argues that way.** The 265 x 136 grid was profiled in September 2026 for a
+scrolling complaint, and the renderer's main thread was spending its time in Paint, Layerize and
+Commit — DOM cost — with script at 0.05 ms a call. Nothing in the table above appeared. That says
+open cost and steady-state cost are different problems, and only the first is this item's.
 
 ## Traps
 
 - **`sweep-covers-every-slot-once` is the constraint that makes (1) hard.** It is fuzz-pinned across
   thousands of seeds and has been rewritten twice. A windowed plan must still dispatch every slot
   exactly once as the window moves, including under re-aim and `putBack`.
-- The row pool is sized for the *smallest possible* row height (14 px) deliberately — a pool-size
-  change remaps the whole ring and rebinds every row, a visible hitch mid-resize
-  (`webview/main.ts:1526`). Do not "optimize" that away while nearby.
-- This interacts with the column item: fixing both at once means two axes of virtualization in one
-  cursor. Do them separately and measure between.
+- Both pools are sized for the *smallest possible* item (`MIN_TILE_PITCH`) deliberately — a
+  pool-size change remaps the whole ring and rebinds everything, a visible hitch mid-resize
+  (`ensureVisibleCarouselRows` and `columnPoolSize`). Do not "optimize" that away while nearby.
+- The column axis is finished, so that interaction is gone — but its lesson stands: three
+  constant-factor fixes landed there before a trace showed the cost was elsewhere. Nothing here
+  should be built on the sizes in the table above alone.
 
 ## Acceptance
 

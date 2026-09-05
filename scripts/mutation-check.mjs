@@ -453,6 +453,46 @@ const mutations = [
     killedBy: 'republish test (the vanish check must fire exactly for the session holding the pack)'
   },
   {
+    name: 'columnWindow: pool no longer capped by the columns that exist',
+    file: 'src/webview/columnWindow.ts',
+    suite: 'test/unit/columnWindow.test.ts',
+    find: 'return Math.min(columnCount, forNarrowest);',
+    replace: 'return forNarrowest;',
+    killedBy: 'pool test (a 3-column grid pools 3 slots, not a viewport-full)'
+  },
+  {
+    name: 'columnWindow: pool loses its overscan (a column pops in at the edge of a scroll)',
+    file: 'src/webview/columnWindow.ts',
+    suite: 'test/unit/columnWindow.test.ts',
+    find: 'const forNarrowest = Math.ceil(Math.max(0, viewportWidth) / MIN_TILE_PITCH) + 2 * COLUMN_OVERSCAN + 2;',
+    replace: 'const forNarrowest = Math.ceil(Math.max(0, viewportWidth) / MIN_TILE_PITCH) + 2;',
+    killedBy: 'pool test (the slot count includes the overscan either side)'
+  },
+  {
+    name: 'columnWindow: window loses its trailing overscan (a column pops in at the right edge)',
+    file: 'src/webview/columnWindow.ts',
+    suite: 'test/unit/columnWindow.test.ts',
+    find: 'const to = Math.floor((scrollLeft + Math.max(0, viewportWidth) - pad) / pitch) + COLUMN_OVERSCAN;',
+    replace: 'const to = Math.floor((scrollLeft + Math.max(0, viewportWidth) - pad) / pitch);',
+    killedBy: 'left-edge test (last = floor((220-6)/14) + 2 = 17)'
+  },
+  {
+    name: 'columnWindow: right clamp removed (the ring binds slots past the last column)',
+    file: 'src/webview/columnWindow.ts',
+    suite: 'test/unit/columnWindow.test.ts',
+    find: '    last: Math.max(0, Math.min(to, columnCount - 1)),',
+    replace: '    last: Math.max(0, to),',
+    killedBy: 'right-edge test (the window stops at the last column that exists)'
+  },
+  {
+    name: 'columnWindow: column placement ignores the row padding',
+    file: 'src/webview/columnWindow.ts',
+    suite: 'test/unit/columnWindow.test.ts',
+    find: 'return pad + index * pitch;',
+    replace: 'return index * pitch;',
+    killedBy: 'placement test (column 0 starts at the row pad, not 0)'
+  },
+  {
     name: 'axisScroll: centring drops the snap (an arrow step lands the grid mid-item)',
     file: 'src/webview/axisScroll.ts',
     suite: 'test/unit/axisScroll.test.ts',
@@ -483,6 +523,22 @@ const mutations = [
     find: 'return alt ? Math.pow(step, ALT_SPEED) : step;',
     replace: 'return alt ? 1 + (step - 1) * ALT_SPEED : step;',
     killedBy: 'compounding test (Alt is ALT_SPEED notches, not a scaled step)'
+  },
+  {
+    name: 'axisScroll: a line-mode wheel read as pixels (a gentle swipe moves 3px, not 3 rows)',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: '  if (deltaMode === 1) return delta * lineSize;',
+    replace: '  if (deltaMode === 1) return delta;',
+    killedBy: 'line-mode test (3 lines at a 14px row is 42px)'
+  },
+  {
+    name: 'axisScroll: a page-mode wheel read as pixels',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: '  if (deltaMode === 2) return delta * pageSize;',
+    replace: '  if (deltaMode === 2) return delta;',
+    killedBy: 'page-mode test (one page is the viewport)'
   },
   {
     name: 'axisScroll: Alt stops accelerating a linear scroll',

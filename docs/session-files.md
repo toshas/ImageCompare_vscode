@@ -242,6 +242,11 @@ handed that state as `MenuContext.hidden`.
   (`pointer-events: none` via the `tiny-tiles` class): at that size a tile click is a coin-flip
   between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
   unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
+  Note what changed under it: the tile floor used to be 12 px, below the 21 px threshold, so a grid
+  dense enough to hit the floor was *always* unvotable by mouse. At the 24 px floor
+  (`docs/loading-architecture.md: columns-virtualize-like-rows`) it no longer is, so a scrolled
+  column window and a clickable vote circle now co-occur — which the rule allows, being about size
+  and not about density, but nothing had exercised that combination before.
 - **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label
   (`buildContextMenu` reads it as `MenuContext.hidden`),
   keyboard cycling, and the *order and scope of speculation* — nothing else. The carousel keeps

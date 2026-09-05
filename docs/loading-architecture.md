@@ -424,7 +424,7 @@ webview's `carouselEl.clientHeight / carouselRowHeight()`, the same arithmetic t
 already does to decide which rows to materialise — and both hosts pass it through as the aim's
 `radius`. It has to be reported rather than assumed because a "screenful" here spans an order of
 magnitude: tile size is the carousel width divided by the modality count, so a 3-modality session
-shows ~7 rows and a 30-modality one, at the 12px tile floor, ~64. A host that reports nothing gets
+shows ~7 rows and a 30-modality one, at the tile floor, ~34. A host that reports nothing gets
 `SWEEP_CROSS_RADIUS` (12), deliberately on the small side — an under-estimate costs only reach along
 the column, an over-estimate costs the rectangle (the table below). Zero and negative reports are
 floored at one row: a collapsed carousel still gets a cross.
@@ -1110,33 +1110,101 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`columns-virtualize-like-rows`** — a bound row materializes only the modality columns inside the
+  horizontal viewport, from a per-row pool ring-mapped by display index (`slot = displayIndex % pool`),
+  exactly as the wall materializes only the tuple rows inside the vertical one. Both pools are sized
+  from the *narrowest* item they can hold — 14 px — so a resize never remaps the ring, and both write
+  position only on change. `webview/columnWindow.ts` owns the arithmetic; nothing else may compute a
+  column's `left`, because `selection-centres-on-navigation` reads the same pitch to centre a column
+  and the two drifting apart is a silent mis-scroll.
+  Measured on the field grid (265 tuples x 136 modalities) through an identical scroll burst, before
+  and after:
+
+  | | before | after |
+  |---|---|---|
+  | tiles in the DOM | 7 752 | **2 451** |
+  | DOM nodes | 76 719 | **26 508** |
+  | `Layerize` per occurrence | 34.3 ms | **4.1 ms** |
+  | `Paint` | 1300 ms over 17 776 | **464 ms over 4 336** |
+  | `Commit` per occurrence | 0.89 ms | **0.29 ms** |
+  | `HitTest` per occurrence | 4.4 ms | **2.1 ms** |
+  | DOM nodes | 78 764 | **27 293** |
+  | JS event listeners | 15 690 | **5 089** |
+  | JS heap | 11.3 MB | **6.7 MB** |
+
+  The memory column answers the question the plan this replaced asked and could not answer: its
+  1.48 GB figure was an *estimate* of blob and bitmap residency, and this change does not touch that
+  — `ThumbUrlCache` still retains one object URL per swept slot regardless of what is on screen
+  (`dev_backlog/thumb-url-cache-unbounded.md`). What virtualization removes is DOM: nodes, listeners
+  and the heap that holds them.
+
+  The two axes **compound**, which is why this mattered more than the tile count alone suggests: more
+  modalities means narrower tiles, narrower tiles means shorter rows, and shorter rows means *more
+  rows* in the pool — the tile floor that keeps columns reachable is the same constant that maximises
+  the row count, so the axes reinforce rather than trade off. Virtualizing one axis breaks the
+  product; **raising the floor attacks both at once**, which is why `MIN_TILE_PITCH` is one constant
+  and not two. Doubling it from 14 to 26 (a 12 px tile to 24 px) cut the field grid from 2451 tiles
+  to 910 and took the worst frame of a medium scroll from 104.7 ms to 20.1 ms. The cost is columns
+  on screen: the same strip now shows 9 of them at the floor rather than 16, so a wide grid is
+  scrolled horizontally more.
+
+  The tile count is bounded by the strip's width, so doubling the modalities costs nothing — which is
+  the property `test/webview/column-virtualization.spec.ts` pins, rather than any of these numbers.
+  This is the term that three earlier constant-factor fixes on this path could not reach
+  (`carousel-dom-never-searched`, `images-fill-progressively`, `rows-contain-their-own-paint`); each
+  was real and measured, and none of them changed how many tiles exist.
 - **`rows-contain-their-own-paint`** — every carousel row carries `contain: content`, so its layout,
   paint and hit-testing cannot escape its box. The reason is measured, not theoretical: a DevTools
   trace of a wide grid being scrolled spent roughly 2000 ms of 4000 in **Paint** (12 055 of them),
   **Layerize** (130 x 5.7 ms) and **HitTest** (363 x 1.9 ms), against **270 ms** of script — so the
   cost of this carousel is the size of its DOM, not the work its code does. The wall is one promoted
-  layer (`will-change: transform`) holding `pool x modalities` tiles, and without containment a
+  layer (`will-change: transform`) holding `rowPool x colPool` tiles, and without containment a
   change anywhere in it invalidates paint across the whole thing. The same measurement is why
   `CAROUSEL_OVERSCAN` stays small: every buffered row is DOM that is painted and hit-tested whether
   or not it is ever seen, and it was briefly raised to 10 on a guess about blank rows that
-  `flyby-rows-defer-decodes` had already made moot. Before optimising anything here, profile it —
+  `images-fill-progressively` had already made moot. Before optimising anything here, profile it —
   three fixes on this path targeted script and image decode before a trace showed where the time
   actually goes.
-- **`flyby-rows-defer-decodes`** — a row bound while the wall is still moving takes the shared blank
-  tile, not its own thumbnails; the rows the user actually lands on are filled once the wheel stops
-  (`CAROUSEL_SETTLE_MS`). The cost this removes is not JavaScript: each tile's thumbnail is a
-  *distinct* blob url, so assigning it schedules a decode, and a rebind assigns one per modality.
-  Measured on a 400x25 grid over a 40-notch burst: 4175 src assignments and an 86 ms worst frame,
-  against 1775 and 24 ms with the defer — and the remaining 1775 are all the one blank data url,
-  which decodes once. The blank branch is also what makes this safe: a rebound row cannot show the
-  *previous* tuple's image, because the bind assigns the blank explicitly rather than skipping the
-  assignment. Only the wheel path defers; a drag, a navigation or a resize is a landing, so
-  `scrollCarouselToCurrentTuple` clears the flag before it binds and never flashes a blank.
-  This is a constant-factor fix layered on `carousel-dom-never-searched`, and neither removes the
-  underlying term: binds still cost one tile per modality because columns are not virtualized
-  (`dev_backlog/carousel-column-virtualization.md`), which is the only fix that changes the shape.
+- **`images-fill-progressively`** — a bind never pays for a thumbnail. While a wheel is moving the
+  wall a bound tile takes the shared blank; when the gesture settles, a budgeted filler gives tiles
+  their real image a few per frame, nearest row to the current one first. Both halves are measured,
+  on the 265 x 136 field grid through a medium scroll (~2 rows per frame):
+
+  | | median frame | worst |
+  |---|---|---|
+  | images bound during the gesture | 215.9 ms | 423.1 ms |
+  | the same with `decoding="async"` | 171.8 ms | 303.8 ms |
+  | the same with 16x16 thumbnails | 106.2 ms | 150.5 ms |
+  | **blank during, filled after** | **29.3 ms** | **100.5 ms** |
+
+  The reason is the unit cost, and it is the number to know before optimising anything here: **one
+  `img.src = blobURL` costs 1-3 ms**, because a blob URL is a *resource load*, not a memory read —
+  the user's own trace showed thousands of `ThrottlingURLLoader::Start` events. Image size barely
+  moves it (16x16 is only 2.4x cheaper than 200x150), so this is not a decode problem and
+  `decoding="async"` does not rescue it. At ~2.9 ms per tile, a screenful of this grid — around
+  910 tiles at the 24 px floor, and 2451 before it was raised — is seconds of main-thread work
+  *however* it is scheduled.
+  The filler cannot beat that; what it buys is that the cost is spread over frames instead of
+  landing in one, which is the difference between a wall that fills in and a viewer that freezes.
+  **Which frames give up their images is a speed decision, not a blanket one.** Once
+  `columns-virtualize-like-rows` and the raised tile floor cut a screenful from 2451 tiles to 910, a
+  *slow* scroll became affordable — it stays fully painted at 34.5 ms a frame, where the same thing
+  cost 215 ms before. So only a frame moving more than `CAROUSEL_FLYBY_ROWS` rows gives up its
+  images; below that the wall stays populated and you can see the gesture working. A flick still
+  blanks, at 16.7 ms a frame, for tiles that are gone before they could be read.
+  Two rules keep that honest. A tile already showing its own image is **kept**, flying or not —
+  keeping costs no assignment, and blanking it throws away content the user is looking at, which is
+  what made a gesture appear to wipe the wall. And a rebound row is blanked *explicitly* rather than
+  left alone, so it can never show the previous tuple's image. Two things would actually move the ceiling and neither is scheduling —
+  fewer tiles on screen, or a tile that is a canvas blit rather than a URL load
+  (`dev_backlog/tile-appropriate-thumbnails.md`).
+  The blank branch is what makes the defer safe: a rebound row cannot show the *previous* tuple's
+  image, because the bind assigns the blank explicitly rather than skipping the assignment. Only the
+  wheel defers; a drag, a navigation or a resize is a landing, so `scrollCarouselToCurrentTuple`
+  clears the flag and fills straight away.
+
 - **`carousel-dom-never-searched`** — nothing on a per-tile or per-arrival path may search the
-  carousel's DOM. The carousel holds `pool x modalities` tiles — thousands at a wide grid — so an
+  carousel's DOM. The carousel holds `rowPool x colPool` tiles — thousands at a wide grid — so an
   attribute-selector search costs a subtree scan, and the two places that did it ran *per item*:
   `handleThumbnail`/`handleThumbnailError` (and the watcher's delete/restore) searched
   `.carousel-thumb[data-tuple=..][data-modality=..]` for **every arriving thumbnail**, and
@@ -1144,25 +1212,29 @@ Opening a panel is asynchronous, and step order is load-bearing:
   circle. A sweep re-aim delivers hundreds of thumbnails at once, which is how a re-aim bought a
   second of frozen scrolling. Both are index lookups now: rows are ring-mapped
   (`slot = tupleIndex % pool`), so the row holding a tuple is arithmetic, and each row's tiles and
-  circles are captured once at creation in `rowParts`. A tile is `parts.imgs[displayIndex]`. The
+  circles are captured once at creation in `rowParts`. A tile is `parts.imgs[displayIndex % colPool]`,
+  and only when `colBound[slot]` still holds that column. The
   ring mapping is what makes this possible at all, so a change to it must keep `carouselTileFor`
   honest: it verifies `carouselRowBound[slot] === tupleIndex` before returning, and a slot bound to
-  another tuple correctly returns null rather than the wrong tile. Columns are still not
-  virtualized (`dev_backlog/carousel-column-virtualization.md`), so bind cost remains linear in the
-  modality count — this removes the constant factor, not the term.
+  another tuple correctly returns null rather than the wrong tile. Since
+  `columns-virtualize-like-rows` the lookup also passes through the column ring, so a column that is
+  not on screen has no tile and correctly returns null — the thumbnail waits in the url cache until
+  it scrolls in. This removed a constant factor; the term was the tile count, and that is that
+  invariant's.
 - **`wheel-coalesced-to-one-frame`** — the carousel's row axis is a virtualized wall: an offset
-  change rebinds rows and repaints every tile in them, and `bindCarouselRow` touches *every modality*
-  of each bound row (columns are not virtualized —
-  `dev_backlog/carousel-column-virtualization.md`). So the work per apply scales with the modality
-  count, and a wheel can deliver several events per frame. Applying each one did that work N times
+  change rebinds rows and repaints every tile in them. Before `columns-virtualize-like-rows` that
+  was *every modality* of each bound row, so the work per apply scaled with the modality count; it
+  is now bounded by the horizontal viewport, but a wheel can still deliver several events per frame. Applying each one did that work N times
   and painted only the last. Wheel deltas are therefore summed and applied once per
-  `requestAnimationFrame`; nothing else is coalesced, because navigation and drags must settle
+  `requestAnimationFrame`. The horizontal scroller's column rebind is coalesced the same way and for
+  the same reason (`columns-virtualize-like-rows`); nothing else is, because navigation and drags must settle
   synchronously for the next read to be true. The other half is the buffer: `CAROUSEL_OVERSCAN` rows
   are bound beyond the viewport each way, and a window that outruns its buffer shows blank rows until
   the next bind. It is sized for a fast flick rather than a slow drag — an Alt notch moves
   `ALT_SPEED` times as far (`selection-centres-on-navigation`), so the buffer and that multiplier
-  must move together. The horizontal axis needs none of this: it is a native `overflow-x` scroller
-  the compositor drives, which is exactly why it felt smooth while the row axis did not.
+  must move together. The horizontal axis needs no *offset* coalescing — it is a native `overflow-x`
+  scroller the compositor drives, which is exactly why it felt smooth while the row axis did not —
+  but its scroll events still move the column window, and that rebind is coalesced.
 - **`selection-centres-on-navigation`** — every scrollable axis in the viewer obeys one rule, in
   `webview/axisScroll.ts`: *deliberate navigation centres the selection; a wheel never does.* The
   three axes are the carousel's rows, the carousel's columns, and the modality pill row. Centring is
