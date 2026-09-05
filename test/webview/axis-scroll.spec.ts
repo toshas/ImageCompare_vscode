@@ -351,40 +351,58 @@ test.describe('axis scrolling', () => {
       .toBeGreaterThan(0);
   });
 
-  // Reported: vertical scrolling stayed laggy on a wide grid. Every row rebind swapped one distinct
-  // blob url per modality, and each is a decode — measured 4175 src assignments across a 40-notch
-  // burst, worst frame 86ms. Rows flown past take the shared blank tile instead and are filled when
-  // the wall settles: 1775 assignments, all of one data url, worst frame 24ms.
-  test('rows flown past take the blank tile, and are filled once the wall settles', async ({ page }) => {
+  // Reported: vertical scrolling stayed laggy on a wide grid. Measured cause: one `img.src = blobURL`
+  // costs 1-3 ms because a blob URL is a resource load, so binding images as rows turn over cost 8x
+  // the frame time (215.9 ms median against 29.3 ms). A bind takes the blank tile while the wheel is
+  // moving; a budgeted filler gives them their images once it settles, a few per frame so the cost
+  // never lands in one (docs/loading-architecture.md: images-fill-progressively).
+  test('a gesture binds blank tiles, and they fill once it settles', async ({ page }) => {
     await loadInited(page, TALL);
     await page.locator('#carousel').hover();
 
     const flyby = await page.evaluate(async () => {
       const el = document.getElementById('carousel')!;
-      let distinct = 0;
+      let blobSets = 0;
       const proto = Object.getPrototypeOf(document.createElement('img'));
       const desc = Object.getOwnPropertyDescriptor(proto, 'src')!;
       Object.defineProperty(proto, 'src', {
         get() { return desc.get!.call(this); },
-        set(v: string) { if (v.startsWith('blob:')) distinct++; desc.set!.call(this, v); },
+        set(v: string) { if (v.startsWith('blob:')) blobSets++; desc.set!.call(this, v); },
       });
       for (let i = 0; i < 12; i++) {
         el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
         await new Promise(requestAnimationFrame);
       }
-      return { blobSetsDuringFlyby: distinct };
+      return { blobSetsDuringGesture: blobSets };
     });
-    // Zero is also what rules out a STALE tile, without having to ask which rows were rebound: a
-    // rebind takes the blank branch or a blob url, so no blob assignment means every rebound row went
-    // blank. (Rows still in the window that were never rebound keep their own images, correctly —
-    // asserting "no visible blob" would fail on those and would be asserting the wrong thing.)
-    expect(flyby.blobSetsDuringFlyby).toBe(0);
+    // Zero also rules out a STALE tile without asking which rows were rebound: a rebind takes the
+    // blank branch or a blob url, so no blob assignment means every rebound row went blank.
+    expect(flyby.blobSetsDuringGesture).toBe(0);
 
-    // And once it settles, the rows the user landed on get their real thumbnails.
+    // And the filler takes over once the wheel stops.
     await expect
       .poll(() => page.$$eval('.carousel-row .carousel-thumb', (imgs) =>
-        imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length))
+        imgs.filter((i) => (i as HTMLImageElement).src.startsWith('blob:')).length), { timeout: 5000 })
       .toBeGreaterThan(0);
+  });
+
+  // A LINE-mode wheel sends "3" meaning three lines; read as pixels that is a 3px scroll, which is
+  // why a gentle swipe barely moved the wall. One line is one row on this axis.
+  test('a line-mode wheel scrolls rows, not pixels', async ({ page }) => {
+    await loadInited(page, TALL);
+    const travelled = await page.evaluate(() => {
+      const el = document.getElementById('carousel')!;
+      const wall = () => {
+        const w = document.getElementById('carousel-wall') as HTMLElement;
+        const m = /translateY\((-?[\d.]+)px\)/.exec(w.style.transform);
+        return m ? -Number(m[1]) : 0;
+      };
+      const before = wall();
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 3, deltaMode: 1, bubbles: true, cancelable: true }));
+      return new Promise<number>((res) => requestAnimationFrame(() => res(wall() - before)));
+    });
+    // Three rows, not three pixels.
+    expect(travelled).toBeGreaterThan(20);
   });
 
   test('Alt makes a zoom notch travel further, and the help modal says so', async ({ page }) => {

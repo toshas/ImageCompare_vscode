@@ -349,6 +349,12 @@ the fix, the docs, and the CI check.
   `test/unit/columnWindow.test.ts`. Three of the four were watched failing against the pre-change
   bundle, where tiles-per-row *was* the modality count. The fourth is labelled in the file as what it
   is: a regression guard for click targeting, which passed before too.
+- **The carousel's fill model, by mutation.** `a gesture binds blank tiles, and they fill once it
+  settles` counts *blob* src assignments during a wheel burst (0 during, non-zero after). No Vitest
+  suite can see a resource load being scheduled, and the settled tiles look identical either way, so
+  the count is the only evidence. The wheel-unit half IS mutation-covered, in
+  `test/unit/axisScroll.test.ts` — a line-mode wheel read as pixels scrolls 3 px where it should
+  scroll three rows, which is what a gentle swipe on the carousel actually did.
 - **The carousel's decode cost, by mutation.** `rows flown past take the blank tile` counts *blob*
   src assignments during a wheel burst — 30 pre-fix, 0 after. Nothing in Vitest can see a decode
   being scheduled, and the offsets and the settled tiles are identical either way, so the count is

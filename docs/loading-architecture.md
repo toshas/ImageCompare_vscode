@@ -1147,7 +1147,7 @@ Opening a panel is asynchronous, and step order is load-bearing:
   The tile count is bounded by the strip's width, so doubling the modalities costs nothing — which is
   the property `test/webview/column-virtualization.spec.ts` pins, rather than any of these numbers.
   This is the term that three earlier constant-factor fixes on this path could not reach
-  (`carousel-dom-never-searched`, `flyby-rows-defer-decodes`, `rows-contain-their-own-paint`); each
+  (`carousel-dom-never-searched`, `images-fill-progressively`, `rows-contain-their-own-paint`); each
   was real and measured, and none of them changed how many tiles exist.
 - **`rows-contain-their-own-paint`** — every carousel row carries `contain: content`, so its layout,
   paint and hit-testing cannot escape its box. The reason is measured, not theoretical: a DevTools
@@ -1158,21 +1158,38 @@ Opening a panel is asynchronous, and step order is load-bearing:
   change anywhere in it invalidates paint across the whole thing. The same measurement is why
   `CAROUSEL_OVERSCAN` stays small: every buffered row is DOM that is painted and hit-tested whether
   or not it is ever seen, and it was briefly raised to 10 on a guess about blank rows that
-  `flyby-rows-defer-decodes` had already made moot. Before optimising anything here, profile it —
+  `images-fill-progressively` had already made moot. Before optimising anything here, profile it —
   three fixes on this path targeted script and image decode before a trace showed where the time
   actually goes.
-- **`flyby-rows-defer-decodes`** — a row bound while the wall is still moving takes the shared blank
-  tile, not its own thumbnails; the rows the user actually lands on are filled once the wheel stops
-  (`CAROUSEL_SETTLE_MS`). The cost this removes is not JavaScript: each tile's thumbnail is a
-  *distinct* blob url, so assigning it schedules a decode, and a rebind assigns one per modality.
-  Measured on a 400x25 grid over a 40-notch burst: 4175 src assignments and an 86 ms worst frame,
-  against 1775 and 24 ms with the defer — and the remaining 1775 are all the one blank data url,
-  which decodes once. The blank branch is also what makes this safe: a rebound row cannot show the
-  *previous* tuple's image, because the bind assigns the blank explicitly rather than skipping the
-  assignment. Only the wheel path defers; a drag, a navigation or a resize is a landing, so
-  `scrollCarouselToCurrentTuple` clears the flag before it binds and never flashes a blank.
-  This is a constant-factor fix layered on `carousel-dom-never-searched`, and neither removes the
-  underlying term — that took `columns-virtualize-like-rows`, which cut how many tiles exist at all.
+- **`images-fill-progressively`** — a bind never pays for a thumbnail. While a wheel is moving the
+  wall a bound tile takes the shared blank; when the gesture settles, a budgeted filler gives tiles
+  their real image a few per frame, nearest row to the current one first. Both halves are measured,
+  on the 265 x 136 field grid through a medium scroll (~2 rows per frame):
+
+  | | median frame | worst |
+  |---|---|---|
+  | images bound during the gesture | 215.9 ms | 423.1 ms |
+  | the same with `decoding="async"` | 171.8 ms | 303.8 ms |
+  | the same with 16x16 thumbnails | 106.2 ms | 150.5 ms |
+  | **blank during, filled after** | **29.3 ms** | **100.5 ms** |
+
+  The reason is the unit cost, and it is the number to know before optimising anything here: **one
+  `img.src = blobURL` costs 1-3 ms**, because a blob URL is a *resource load*, not a memory read —
+  the user's own trace showed thousands of `ThrottlingURLLoader::Start` events. Image size barely
+  moves it (16x16 is only 2.4x cheaper than 200x150), so this is not a decode problem and
+  `decoding="async"` does not rescue it. At ~2.9 ms per tile, a screenful of this grid — around
+  2150 tiles at the 12 px floor — is several seconds of main-thread work *however* it is scheduled.
+  The filler cannot beat that; what it buys is that the cost is spread over frames instead of
+  landing in one, which is the difference between a wall that fills in and a viewer that freezes.
+  Filling *during* the gesture is not an oversight: it costs 8x the frame time, for tiles the user
+  has already scrolled past. Two things would actually move the ceiling and neither is scheduling —
+  fewer tiles on screen, or a tile that is a canvas blit rather than a URL load
+  (`dev_backlog/tile-appropriate-thumbnails.md`).
+  The blank branch is what makes the defer safe: a rebound row cannot show the *previous* tuple's
+  image, because the bind assigns the blank explicitly rather than skipping the assignment. Only the
+  wheel defers; a drag, a navigation or a resize is a landing, so `scrollCarouselToCurrentTuple`
+  clears the flag and fills straight away.
+
 - **`carousel-dom-never-searched`** — nothing on a per-tile or per-arrival path may search the
   carousel's DOM. The carousel holds `rowPool x colPool` tiles — thousands at a wide grid — so an
   attribute-selector search costs a subtree scan, and the two places that did it ran *per item*:

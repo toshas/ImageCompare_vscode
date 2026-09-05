@@ -525,6 +525,22 @@ const mutations = [
     killedBy: 'compounding test (Alt is ALT_SPEED notches, not a scaled step)'
   },
   {
+    name: 'axisScroll: a line-mode wheel read as pixels (a gentle swipe moves 3px, not 3 rows)',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: '  if (deltaMode === 1) return delta * lineSize;',
+    replace: '  if (deltaMode === 1) return delta;',
+    killedBy: 'line-mode test (3 lines at a 14px row is 42px)'
+  },
+  {
+    name: 'axisScroll: a page-mode wheel read as pixels',
+    file: 'src/webview/axisScroll.ts',
+    suite: 'test/unit/axisScroll.test.ts',
+    find: '  if (deltaMode === 2) return delta * pageSize;',
+    replace: '  if (deltaMode === 2) return delta;',
+    killedBy: 'page-mode test (one page is the viewport)'
+  },
+  {
     name: 'axisScroll: Alt stops accelerating a linear scroll',
     file: 'src/webview/axisScroll.ts',
     suite: 'test/unit/axisScroll.test.ts',

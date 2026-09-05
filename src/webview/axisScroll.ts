@@ -18,6 +18,17 @@ export function centreOffset(start: number, size: number, viewport: number, cont
   return Math.max(0, Math.min(snapped, Math.max(0, content - viewport)));
 }
 
+/**
+ * A wheel delta in pixels. `deltaMode` says what the number counts — pixels, lines or pages — and a
+ * handler that ignores it scrolls a LINE-mode wheel by about 3px per notch instead of three rows.
+ * The caller supplies what a line and a page mean on its own axis.
+ */
+export function wheelPixels(delta: number, deltaMode: number, lineSize: number, pageSize: number): number {
+  if (deltaMode === 1) return delta * lineSize;
+  if (deltaMode === 2) return delta * pageSize;
+  return delta;
+}
+
 /** How far a linear scroller moves for one wheel notch. Alt multiplies, because distance adds. */
 export function scrollStep(delta: number, alt: boolean): number {
   return delta * (alt ? ALT_SPEED : 1);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALT_SPEED, ZOOM_STEP, centreOffset, scrollStep, zoomFactor } from '../../src/webview/axisScroll';
+import { ALT_SPEED, ZOOM_STEP, centreOffset, scrollStep, wheelPixels, zoomFactor } from '../../src/webview/axisScroll';
 
 // Values are computed by hand from the geometry, never re-derived from the implementation.
 describe('axis scrolling (axisScroll.ts, real code)', () => {
@@ -34,6 +34,23 @@ describe('axis scrolling (axisScroll.ts, real code)', () => {
     it('honours an origin offset, so an axis whose first item is padded still centres', () => {
       // The carousel's tiles start 6px in; the same item therefore sits 6px further along.
       expect(centreOffset(6 + 100, 20, 200, 1000)).toBe(centreOffset(100, 20, 200, 1000) + 6);
+    });
+  });
+
+  describe('wheel units', () => {
+    // A LINE-mode wheel sends "3" meaning three lines. Read as pixels that is a 3px scroll, which is
+    // what a gentle swipe on the carousel actually did before this: it barely moved.
+    it('converts a line-mode delta into pixels using the caller s line', () => {
+      expect(wheelPixels(3, 1, 14, 700)).toBe(42);
+      expect(wheelPixels(-3, 1, 14, 700)).toBe(-42);
+    });
+
+    it('converts a page-mode delta with the caller s page', () => {
+      expect(wheelPixels(1, 2, 14, 700)).toBe(700);
+    });
+
+    it('leaves a pixel-mode delta alone', () => {
+      expect(wheelPixels(120, 0, 14, 700)).toBe(120);
     });
   });
 

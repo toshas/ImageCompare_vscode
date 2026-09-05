@@ -18,8 +18,8 @@ Column virtualization cut *how many* tiles decode at once; it did nothing about 
 ## Why it is worth doing now rather than then
 
 Before virtualization this was one of two compounding terms and the smaller one. Now it is the
-remaining term on the same path: `flyby-rows-defer-decodes` defers decodes during a flyby, but every
-settle still decodes a screenful of 200 px bitmaps to paint them at 12 px.
+remaining term on the same path: `images-fill-progressively` keeps a gesture cheap, but the fill it schedules still pays ~2.9 ms per
+tile because a blob URL is a resource load; a 12x12 tile that is a canvas blit would not.
 
 ## The decision this needs
 

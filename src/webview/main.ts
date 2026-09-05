@@ -19,7 +19,7 @@ import {
 } from './contextMenuModel';
 import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextMenu';
 import { NoticeEvent, buildNotice } from './noticeChannel';
-import { centreOffset, scrollStep, zoomFactor } from './axisScroll';
+import { centreOffset, scrollStep, wheelPixels, zoomFactor } from './axisScroll';
 import { ColumnWindow, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
 
 // VSCode API
@@ -1533,7 +1533,7 @@ let carouselThumbEl: HTMLElement | null = null;
 let carouselHScrollEl: HTMLElement | null = null;
 let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
 const CAROUSEL_OVERSCAN = 3;
-// How long after the last wheel notch the flown-past rows get their real thumbnails. Short enough to read as instant, long enough that a continuous scroll never pays for rows it passes.
+// How long after the last wheel notch the wall starts filling in. Short enough to read as part of the gesture.
 const CAROUSEL_SETTLE_MS = 90;
 let carouselRowPool: HTMLElement[] = [];
 let carouselRowBound: number[] = []; // pool slot -> bound tupleIndex (-1 = hidden)
@@ -1727,14 +1727,49 @@ function carouselTileFor(tupleIndex: number, originalModalityIndex: number): HTM
 }
 
 /** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
-/** True while a wheel is still moving the wall: rows bound during a flyby take the blank tile, not their own (docs/loading-architecture.md: flyby-rows-defer-decodes). */
+/** True while a wheel is still moving the wall: a bind during a gesture takes the blank tile (docs/loading-architecture.md: images-fill-progressively). */
 let carouselFlying = false;
 let carouselSettleTimer: number | undefined;
 
-/** Rebind every bound row now that the wall has stopped, so the rows the user actually landed on get their images. */
-function fillFlybyRows(): void {
-  carouselFlying = false;
-  rebindCarouselColumns();
+/** Tiles given their real image per frame. Measured: an assignment costs 1-2 ms whatever the image's size, so this is the frame budget (docs/loading-architecture.md: images-fill-progressively). */
+const CAROUSEL_FILL_BUDGET = 12;
+let fillRaf = 0;
+
+/** Ask the filler to run; it reschedules itself while any materialized tile is still showing blank. */
+function scheduleCarouselFill(): void {
+  if (fillRaf !== 0) return;
+  fillRaf = requestAnimationFrame(pumpCarouselImages);
+}
+
+/**
+ * Give a bounded number of blank tiles their image, nearest row to the current one first, and come
+ * back next frame if there are more. Binding is what stays cheap; this is what makes the wall fill
+ * while a gesture is still running instead of all at once when it stops.
+ */
+function pumpCarouselImages(): void {
+  fillRaf = 0;
+  // Silent while the wall is moving: the settle restarts it, and a fill mid-gesture buys a tile the user is already past.
+  if (carouselFlying) return;
+  let budget = CAROUSEL_FILL_BUDGET;
+  const rows: number[] = [];
+  for (let s = 0; s < carouselRowPool.length; s++) if (carouselRowBound[s] >= 0) rows.push(s);
+  rows.sort((a, b) => Math.abs(carouselRowBound[a] - currentTupleIndex) - Math.abs(carouselRowBound[b] - currentTupleIndex));
+  for (const s of rows) {
+    const parts = rowParts.get(carouselRowPool[s]);
+    if (!parts) continue;
+    const tupleIdx = carouselRowBound[s];
+    for (let slot = 0; slot < parts.containers.length; slot++) {
+      const displayIdx = parts.colBound[slot];
+      if (displayIdx < 0) continue;
+      const img = parts.imgs[slot];
+      const url = thumbnailUrls.get(`${tupleIdx}-${modalityOrder[displayIdx]}`);
+      if (!url || img.getAttribute('src') === url) continue;
+      img.src = url;
+      img.classList.remove('placeholder');
+      img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
+      if (--budget <= 0) { scheduleCarouselFill(); return; }
+    }
+  }
 }
 
 function bindCarouselRow(el: HTMLElement, tupleIdx: number, win: ColumnWindow = currentColumnWindow()) {
@@ -1788,11 +1823,16 @@ function bindCarouselTile(
   }
   img.dataset.tuple = String(tupleIdx);
   img.dataset.modality = String(originalIdx);
-  const url = carouselFlying ? undefined : thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
-  if (url) {
-    if (img.getAttribute('src') !== url) img.src = url;
+  const url = thumbnailUrls.get(`${tupleIdx}-${originalIdx}`);
+  if (url && !carouselFlying && img.getAttribute('src') === url) {
     img.classList.remove('placeholder');
     img.classList.toggle('missing', url === PLACEHOLDER_THUMB);
+  } else if (url) {
+    // Blank now, real image from the filler: assigning it here would cost this frame every tile that turned over (docs/loading-architecture.md: images-fill-progressively).
+    if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
+    img.classList.add('placeholder');
+    img.classList.remove('missing');
+    if (!carouselFlying) scheduleCarouselFill();
   } else {
     // Removing the src of a recycled tile leaves the browser's broken-image glyph (docs/loading-architecture.md: empty-tile-never-broken).
     if (img.getAttribute('src') !== BLANK_THUMB) img.src = BLANK_THUMB;
@@ -1846,11 +1886,11 @@ function handleCarouselClick(e: MouseEvent) {
 
 function scrollCarouselToCurrentTuple() {
   if (!isMultiTupleMode || !carouselWallEl) return;
-  const rowH = carouselRowHeight();
-  if (rowH <= 0) return;
-  // Navigation is a landing, not a flyby: clear the defer first so the rows it binds take their images directly.
+  // Navigation is a landing, not a gesture: the rows it binds fill straight away.
   if (carouselSettleTimer !== undefined) clearTimeout(carouselSettleTimer);
   carouselFlying = false;
+  const rowH = carouselRowHeight();
+  if (rowH <= 0) return;
   // Virtual rows make the row top pure arithmetic; snapped to whole rows so a step moves the grid exactly one row or not at all (docs/loading-architecture.md: selection-centres-on-navigation).
   applyCarouselOffset(centreOffset(currentTupleIndex * rowH, rowH, carouselEl.clientHeight, carouselContentHeight(), rowH));
 }
@@ -2546,12 +2586,14 @@ function handleCopyEvent(e: ClipboardEvent) {
 function handleCarouselWheel(e: WheelEvent) {
   e.preventDefault();
   e.stopPropagation();
+  // A line is a row and a page is a screenful, on both axes of this grid.
+  const px = (d: number) => wheelPixels(d, e.deltaMode, carouselRowHeight(), carouselEl.clientHeight);
   // Sideways intent (trackpad deltaX or shift+wheel) pans the overflowing columns; otherwise scroll rows.
   if (carouselHScrollEl && (e.deltaX !== 0 || e.shiftKey)) {
-    carouselHScrollEl.scrollLeft += scrollStep(e.deltaX !== 0 ? e.deltaX : e.deltaY, e.altKey);
+    carouselHScrollEl.scrollLeft += scrollStep(px(e.deltaX !== 0 ? e.deltaX : e.deltaY), e.altKey);
     return;
   }
-  queueCarouselWheel(scrollStep(e.deltaY, e.altKey));
+  queueCarouselWheel(scrollStep(px(e.deltaY), e.altKey));
 }
 
 let pendingWheelDelta = 0;
@@ -2566,7 +2608,7 @@ function queueCarouselWheel(delta: number): void {
   if (wheelRaf !== 0) return;
   carouselFlying = true;
   if (carouselSettleTimer !== undefined) clearTimeout(carouselSettleTimer);
-  carouselSettleTimer = setTimeout(fillFlybyRows, CAROUSEL_SETTLE_MS) as unknown as number;
+  carouselSettleTimer = setTimeout(() => { carouselFlying = false; scheduleCarouselFill(); }, CAROUSEL_SETTLE_MS) as unknown as number;
   wheelRaf = requestAnimationFrame(() => {
     wheelRaf = 0;
     const delta = pendingWheelDelta;
@@ -2579,7 +2621,9 @@ function queueCarouselWheel(delta: number): void {
 function handlePillWheel(e: WheelEvent) {
   if (modalitySelectorEl.scrollWidth <= modalitySelectorEl.clientWidth) return;
   e.preventDefault();
-  modalitySelectorEl.scrollLeft += scrollStep(e.deltaX !== 0 ? e.deltaX : e.deltaY, e.altKey);
+  const raw = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+  const px = wheelPixels(raw, e.deltaMode, modalitySelectorEl.clientHeight, modalitySelectorEl.clientWidth);
+  modalitySelectorEl.scrollLeft += scrollStep(px, e.altKey);
 }
 
 function setupCarouselThumbDrag(thumb: HTMLElement) {
