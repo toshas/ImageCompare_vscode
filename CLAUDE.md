@@ -392,8 +392,15 @@ When the user asks to "release" or "prepare a release":
 
 1. **Work on a branch**, never directly on `main`. If the work is already on one, stay there.
 2. **Read the current version** from `package.json` — the baseline.
-3. **Bump the version** in `package.json`. Patch for fixes; minor when behaviour changed or
-   anything user-visible was added.
+3. **Bump the version** in `package.json` **and `package-lock.json`**. Patch for fixes; minor when
+   behaviour changed or anything user-visible was added. Sync the lockfile with
+   `npm install --package-lock-only` and check the diff is the **two root version fields and
+   nothing else** — the command will also re-resolve dependencies if the lockfile is stale, and a
+   dependency bump has no business riding into a release PR. **Gated**, not advisory: `test.yml`'s
+   `gates` job fails when the two disagree. The gate exists because the prose alone did not hold —
+   every release from 0.3.0 through 0.4.1 bumped `package.json` by itself and the lockfile sat at
+   `0.3.0` for three of them. `npm ci` runs in that same job and does *not* catch it: it verifies
+   the dependency tree, not the root version, so nothing was red.
 4. **Update `CHANGELOG.md`** — a `## [X.Y.Z]` section covering everything since the last tag
    (`git log`, `git diff` against it).
 5. **Run the full local battery** (Verification, above). `npm run test:integration` cannot run on a
