@@ -1110,6 +1110,18 @@ Opening a panel is asynchronous, and step order is load-bearing:
 
 ## Invariants
 
+- **`rows-contain-their-own-paint`** — every carousel row carries `contain: content`, so its layout,
+  paint and hit-testing cannot escape its box. The reason is measured, not theoretical: a DevTools
+  trace of a wide grid being scrolled spent roughly 2000 ms of 4000 in **Paint** (12 055 of them),
+  **Layerize** (130 x 5.7 ms) and **HitTest** (363 x 1.9 ms), against **270 ms** of script — so the
+  cost of this carousel is the size of its DOM, not the work its code does. The wall is one promoted
+  layer (`will-change: transform`) holding `pool x modalities` tiles, and without containment a
+  change anywhere in it invalidates paint across the whole thing. The same measurement is why
+  `CAROUSEL_OVERSCAN` stays small: every buffered row is DOM that is painted and hit-tested whether
+  or not it is ever seen, and it was briefly raised to 10 on a guess about blank rows that
+  `flyby-rows-defer-decodes` had already made moot. Before optimising anything here, profile it —
+  three fixes on this path targeted script and image decode before a trace showed where the time
+  actually goes.
 - **`flyby-rows-defer-decodes`** — a row bound while the wall is still moving takes the shared blank
   tile, not its own thumbnails; the rows the user actually lands on are filled once the wheel stops
   (`CAROUSEL_SETTLE_MS`). The cost this removes is not JavaScript: each tile's thumbnail is a

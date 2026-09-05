@@ -1528,8 +1528,7 @@ let carouselWallEl: HTMLElement | null = null;
 let carouselThumbEl: HTMLElement | null = null;
 let carouselHScrollEl: HTMLElement | null = null;
 let carouselScrollHideTimer: ReturnType<typeof setTimeout> | null = null;
-// Rows bound beyond the viewport, each way. Sized for a fast flick, not a slow drag: an Alt notch moves 5x, and a window that outruns its buffer shows blank rows until the next bind — the jaggedness this buffers against (docs/loading-architecture.md: wheel-coalesced-to-one-frame).
-const CAROUSEL_OVERSCAN = 10;
+const CAROUSEL_OVERSCAN = 3;
 // How long after the last wheel notch the flown-past rows get their real thumbnails. Short enough to read as instant, long enough that a continuous scroll never pays for rows it passes.
 const CAROUSEL_SETTLE_MS = 90;
 let carouselRowPool: HTMLElement[] = [];
