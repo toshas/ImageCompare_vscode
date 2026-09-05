@@ -29,6 +29,7 @@ export interface IcState {
   pptxBusy: boolean;
   thumbUrlsLive: number;
   capabilities: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean };
+  deleteUnit: 'tuple' | 'image';
 }
 
 /** Load the harness and complete the init handshake with synthetic fixtures. */

@@ -27,6 +27,8 @@ Three ingredients, composed by `scripts/build-standalone.mjs`:
    derived from the *extension host's* libuv pool, which the browser does not have; the standalone
    inherits it unmeasured, so a wide browser machine gets 6 where it once got 15 — see
    `dev_backlog/pool-fairness-and-panels.md`),
+   `modePolicy` (what the selection shape alone decides — whether voting is available, and whether
+   Del removes a row or one image — read by both hosts so neither can answer it differently),
    `cropPlan`, `cropFlow` (the whole crop sequence: one name, relative rect, per-modality
    dims/render/inject/write, arrivals, `cropComplete`, thumbnails — over injected render/write IO),
    `pptxDeck` (deck layout plus `exportDeck`, the export sequence: name, build, save, exactly one
@@ -207,7 +209,8 @@ generated-only: it is never edited by hand, and the README it receives says so a
   `runThumbnailSweep`, `docs/loading-architecture.md: thumbnails-centre-out`,
   `docs/loading-architecture.md: sweep-cancels-on-reaim`),
   full-image serving (`imageServe`), init-payload assembly (`initPayload`), post-crop placement
-  (`arrivalPlan`), the tuple-delete sequence and flow (`removalPlan`, `deleteTupleFlow`), the
+  (`arrivalPlan`), the delete sequences and flows (`removalPlan`, `deleteTupleFlow` for a row and
+  `deleteSlotFlow` for one image), the
   poll cycle's diff and rename pairing (`pollPlan`, `diffSnapshots`, `pairRenames`), the
   poll's removal commit (`removalPlan`, `commitSlotRemoval`), and modality-dir adoption
   (`adoptionPlan`: `newModalityDirCandidates`, `adoptableImages`, `applyModalityInsert`)

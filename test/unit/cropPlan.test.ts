@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nextCropName, scaleAndClampRect } from '../../src/cropPlan';
+import { cropNamesPerImage, nextCropName, scaleAndClampRect } from '../../src/cropPlan';
 
 describe('crop plan (cropPlan.ts, real code)', () => {
   describe('nextCropName', () => {
@@ -38,6 +38,41 @@ describe('crop plan (cropPlan.ts, real code)', () => {
     it('zero-pads to two digits and grows past 99 unpadded', () => {
       expect(nextCropName([['scene_crop09.png']], 'scene')).toBe('scene_crop10.png');
       expect(nextCropName([['scene_crop99.png']], 'scene')).toBe('scene_crop100.png');
+    });
+  });
+
+  // A file list's columns can be files in ONE directory, where the tuple-wide name above is one
+  // path handed out N times: two writes, one file, and which bytes survive is a race
+  // (docs/crop-and-pptx.md: shared-crop-filename).
+  describe('cropNamesPerImage', () => {
+    it('names each crop after the image it is cut from, so columns sharing a directory get distinct paths', () => {
+      const listing = ['shot_a.png', 'shot_b.png', 'notes.txt'];
+      expect(cropNamesPerImage([listing, listing], ['shot_a.png', 'shot_b.png']))
+        .toEqual(['shot_a_crop01.png', 'shot_b_crop01.png']);
+    });
+
+    it('numbers each image past its OWN existing crops, not past its neighbour\'s', () => {
+      const listing = ['shot_a.png', 'shot_a_crop01.png', 'shot_a_crop02.png', 'shot_b.png'];
+      expect(cropNamesPerImage([listing, listing], ['shot_a.png', 'shot_b.png']))
+        .toEqual(['shot_a_crop03.png', 'shot_b_crop01.png']);
+    });
+
+    // The one case where two images still reduce to the same stem. Handing both `a_crop01.png`
+    // would be the very collision this function exists to remove.
+    it('separates two images whose stems collide across extensions', () => {
+      const listing = ['a.png', 'a.jpg'];
+      expect(cropNamesPerImage([listing, listing], ['a.png', 'a.jpg']))
+        .toEqual(['a_crop01.png', 'a_crop02.png']);
+    });
+
+    // Discriminating on purpose: both columns hold a file called a.png, so a namesake's crops in the
+    // OTHER directory are exactly what a max-across-listings rule would wrongly number past. There is
+    // nothing to keep in step here — a mode-3 crop never joins its comparison, so it pairs with nothing.
+    it('numbers against the image\'s own listing, not past a namesake in another column\'s directory', () => {
+      expect(cropNamesPerImage(
+        [['a.png'], ['a.png', 'a_crop05.png']],
+        ['a.png', 'a.png'],
+      )).toEqual(['a_crop01.png', 'a_crop06.png']);
     });
   });
 

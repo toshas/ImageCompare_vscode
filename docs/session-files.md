@@ -35,18 +35,33 @@ paths are on disk.
 
 | Selection | Mode | Meaning | `PanelState` |
 |---|---|---|---|
-| 1 directory (with 2+ image subdirs) | 1 | each **subdirectory** is a modality; images matched across them by filename | `baseUri` set, `modalityDirs` empty |
+| 1 directory (with 1+ image subdirs) | 1 | each **subdirectory** is a modality; images matched across them by filename | `baseUri` set, `modalityDirs` empty |
 | 2+ directories | 2 | each **directory** is a modality (name = basename, extended leftward by `disambiguateDirectoryNames()` until unique) | `baseUri` unset; `modalityDirs` populated from `roots` |
 | 2+ image files | 3 | one tuple; modality names derived from the filename differences | both unset |
+| 1 directory of loose images (no image subdirs) | 3 | the same, on the images the directory holds | both unset |
 
-Mixing files and directories is rejected, as is a lone image file; a single *directory* is mode 1,
-not a rejection. A listed path that fails to stat is dropped before the mode is decided, so two
+Mixing files and directories is rejected, as is a lone image file; a single *directory* is never a
+rejection for being one — it resolves to mode 1 or mode 3 by what it holds. A listed path that fails
+to stat is dropped before the mode is decided, so two
 listed directories of which one is missing resolve to mode 1 on the survivor — the mode follows what
 the scan found, not what the caller asked for.
 
-A single directory of only files is rejected: it has no second axis. Each file would become its own
-"modality" — the same one-tuple shape mode 3 makes deliberately, but arrived at by accident.
-`scanDirectory()` throws with the three valid alternatives rather than guess which the user meant.
+The last two rows are the same mode reached two ways, which is the point: dropping a folder of
+images and selecting those same images produce one comparison, not two behaviours. `scanDirectory()`
+prefers structure where there is any and falls back to the loose images, so the mode a directory
+resolves to is a fact about its contents. Both directions of that fall-back used to be rejections —
+a directory of only files threw "no subdirectory structure", and a directory holding a single
+image subdir threw "must contain 2+ subdirectories". Neither refusal survived contact with what the
+viewer can actually display: a comparison runs at one column, and empties only at zero.
+
+The alternative considered and rejected was the **transpose**: a folder of images as N rows of one
+column, which would have been a fourth mode. It reads well on paper and badly in use — the carousel
+becomes the only way to see anything, `keepZoomOnTupleChange` has to be forced on for flipping
+between images to mean anything, and every "the three modes" claim in the repo becomes four. Mode 3
+already *is* "one row whose columns are unrelated files", which is what a folder of images is; the
+only thing that was missing was reaching it from a directory. Voting, crop, PPTX and delete then
+need no new answers — they get mode 3's, which is why `exports-land-beside-the-images` is a repair
+to an existing hole rather than a new rule.
 
 ## Format
 
@@ -188,8 +203,11 @@ the extension with `workbench.editor.customLabels.patterns`.
 
 ## Winner voting persistence
 
-Voting is enabled iff the comparison is directory-based (`votingEnabled = baseUri !== undefined ||
-modalityDirs.size > 0`) — mode 3 has a single tuple and nothing to rank.
+Voting is enabled iff the mode allows it (`votingAvailable()` in `modePolicy.ts` — mode 3 is one row
+of unrelated files, with nothing to rank) **and** the host has somewhere to put the answer (the
+provider: `baseUri !== undefined || modalityDirs.size > 0`; the standalone: a writable root). The
+mode half is read from `ScanResult.mode`, not inferred from `baseUri`/`modalityDirs` both being unset
+— which is the same thing, until it isn't (`mode-is-explicit`).
 
 Votes are held in memory as `PanelState.winners: Map<tupleIndex, modalityIndex>` and persisted as
 a human-editable text file (`writeResultsFile()` / `readResultsFile()` in `fileService.ts`, both
@@ -306,8 +324,42 @@ handed that state as `MenuContext.hidden`.
   finds readers this invariant does not cover. Using it as a mode test silently disabled voting and new-file
   pickup for any *single-tuple* multi-directory comparison; the deleted-path case broke separately,
   from reading the caller's raw URI list instead of `roots`.
-- **`modality-path-always-real`** — every reachable path through `resolveModalityPath` returns a real
+- **`modality-path-always-real`** — every reachable path through the provider's `resolveModalityPath`
+  and the adapter's `modalityPath` returns a real
   filesystem path, never the modality name standing in for one (the trailing `return modality` is a
   total-function fallback no caller can reach). Modes 1 and 2 have a directory to
   name; a file list does not, so it falls back to the first file carrying that modality. Every
-  producer of that string — the init payload and `modalityAdded` — goes through the one resolver.
+  producer of that string — the init payload and `modalityAdded` — goes through its host's one
+  resolver. Both hosts need marking: the adapter reached mode 3 only once a directory of loose
+  images started resolving to it, and until then `<root>/<modality>` was true there by construction.
+
+- **`subdir-structure-wins`** — a directory that holds any subdirectory with images opens on those
+  subdirectories as columns, and only a directory with none falls back to its loose images. One
+  subdir is enough: mode 1 *discovers* its columns, so finding one is an answer, not a user error.
+  Mode 2 keeps the floor of two, because there the caller named the directories and one of them
+  yielding nothing is worth reporting — which is why the floor is a function of the mode
+  (`scanDirectoriesAsModalities`) rather than a constant.
+- **`folder-of-images-is-a-file-list`** — a directory of loose images opens as mode 3 on exactly
+  those images: the same comparison the user would get by selecting them. Enumeration drops
+  `_cropNN` outputs, which are this app's own writes and would otherwise interleave with the
+  parents they were cut from — unless dropping them would leave fewer than two images, in which case
+  the unfiltered set opens, so a folder someone moved their crops into is not a dead end. The filter
+  is enumeration-only: a hand-picked selection of files is respected as picked.
+- **`mode-behaviour-is-a-table`** — everything the selection shape implies lives in one table,
+  `MODES` in `modePolicy.ts`, and every site reads the **field** whose name is the question it is
+  asking — `columnIsFile`, `grows`, `voting`, `cropsJoin` — never the mode number. The table is the
+  executable form of the mode table above; adding a mode is a compile error at every site rather
+  than a silent default, and a new consequence is a new field rather than another `mode === 3`
+  scattered somewhere. This was not the original shape: the same questions were asked with a magic
+  number at fourteen sites across five files, twice in two hosts that then answered them
+  differently — the standalone grew a row per crop where the extension grew none, and resolved a
+  column's path its own way. Two of those fields cross the wire: `deleteUnit` reaches the webview on
+  `init`, so the webview never asks which mode it is in and the help modal cannot promise the wrong
+  unit — the same host-states-data rule as `HostCapabilities`
+  (`docs/standalone.md: affordances-rendered-by-the-webview`). A host may still add its own
+  conjunct: voting also needs somewhere to write, which is the host's fact, not the shape's.
+- **`exports-land-beside-the-images`** — a PPTX export writes into the base dir (mode 1), the
+  modality dirs' parent (mode 2), or the first image's own directory (mode 3). Mode 3 had no third
+  branch and `listExistingNames` threw "Cannot determine output directory", so export was broken
+  for every file-list comparison; a directory opened as mode 3 makes that the common case, since the
+  first image's directory *is* the directory the user opened.

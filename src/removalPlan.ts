@@ -106,6 +106,41 @@ export function commitSlotRemoval<TImage extends { modality: string }>(
   }
 }
 
+export interface SlotDeleteIo<TImage> extends SlotRemovalIo {
+  /** Best-effort disk delete of the one file; an already-gone file still commits the removal. */
+  deleteFile(image: TImage): Promise<void>;
+}
+
+/**
+ * Delete one slot's file on the user's command: the file first, then the shared commit — re-derived
+ * from the live indices, since the await may have shifted rows or columns under it, exactly as
+ * `deleteTupleFlow` re-derives its own (docs/file-watching.md: delete-message-order).
+ */
+export async function deleteSlotFlow<TImage extends { modality: string }>(
+  scan: RemovalScan<TImage>,
+  winners: Map<number, number>,
+  tupleIndex: number,
+  modalityIndex: number,
+  io: SlotDeleteIo<TImage>
+): Promise<void> {
+  const tuple = scan.tuples[tupleIndex];
+  const modality = scan.modalities[modalityIndex];
+  if (!tuple || !modality) return;
+  const image = tuple.images.find(img => img.modality === modality);
+  if (!image) return;
+
+  try {
+    await io.deleteFile(image);
+  } catch {
+    // File may already be gone
+  }
+
+  const liveTuple = scan.tuples.indexOf(tuple);
+  const liveModality = scan.modalities.indexOf(modality);
+  if (liveTuple < 0 || liveModality < 0) return;
+  commitSlotRemoval(scan, winners, liveTuple, liveModality, io);
+}
+
 /** True when any tuple still holds a file of `modality`; its last file leaving is what drops the column. */
 export function modalityHasFiles(tuples: ReadonlyArray<{ images: ReadonlyArray<{ modality: string }> }>, modality: string): boolean {
   return tuples.some(tuple => tuple.images.some(img => img.modality === modality));

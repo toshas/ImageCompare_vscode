@@ -255,6 +255,21 @@ new files.
   `baseUri`+name (mode 1) or the `modalityDirs` mapping (mode 2) *before* the per-file search. The
   same end state is reached from below by `commitSlotRemoval`'s column-empty follow-up once a
   modality's last file is gone.
+- The table is the **provider's**, whose watchers are armed per directory holding an image and so
+  cover every mode. The standalone's poll is mode 1 only, and `startPolling` refuses anything else.
+  A cycle lists `<root>/<modality>` per column, a path that exists only when the columns are
+  subdirectories; in a file list every one of those listings fails. The *file* half of that is
+  harmless by accident rather than by design — a failed listing does make every tracked name a
+  removal candidate, but `applyExternalRemoval` resolves a candidate by its synthesized
+  `<dir>/<name>`, which in a file list is `<root>/<modality>/<file>` and matches no image's real
+  URI, so every removal is a no-op. What the gate exists for is the **tail** of the cycle:
+  `pollResults` reads `<root>/results.txt` and posts `winnersReset` on any change, and in a file
+  list that file belongs to nobody — voting is off there
+  (`docs/session-files.md: mode-behaviour-is-a-table`), so a stray `results.txt` in a
+  folder of images would push winners into a comparison that cannot have any. The wasted 2N
+  directory calls per cycle, forever, are the second reason. A directory of loose images now
+  resolves to mode 3 (`docs/session-files.md: folder-of-images-is-a-file-list`), which is how the
+  standalone can reach that mode at all.
 
 Mode-1 new modality has **three** detectors, because the obvious one is the least reliable. The
 base-dir glob is non-recursive (above), so a create of `base/newmod/img.png` matches no watcher

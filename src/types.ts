@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 // The UI contract lives with the UI that owns it; hosts see it through here and never redeclare it (docs/standalone.md: affordances-rendered-by-the-webview).
+import type { DeleteUnit } from './modePolicy';
 import type { HostCapabilities, MenuActionId, MenuContext } from './webview/contextMenuModel';
 import type { NoticeEvent } from './webview/noticeChannel';
+export type { DeleteUnit } from './modePolicy';
 export type { HostCapabilities, MenuActionId, MenuContext } from './webview/contextMenuModel';
 export type { NoticeEvent } from './webview/noticeChannel';
 
@@ -96,6 +98,8 @@ export type WebViewMessage =
   | { type: 'setWinner'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null } // null = clear winner
   | { type: 'cropImages'; tupleIndex: TupleIndex; cropRect: { x: number; y: number; w: number; h: number }; srcWidth: number; srcHeight: number }
   | { type: 'deleteTuple'; tupleIndex: TupleIndex }
+  // One slot's file, in the mode where a row is a file list; which one Del means is the host's to state (docs/session-files.md: mode-behaviour-is-a-table).
+  | { type: 'deleteImage'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex }
   | { type: 'exportPptx'; tupleIndices: TupleIndex[]; winnerModalityIndices: (OriginalModalityIndex | null)[]; modalityOrder: OriginalModalityIndex[] }
   | { type: 'saveSessionAs' } // Ctrl/Cmd+S in the webview; the title-bar button routes through the command instead
   // A context-menu item the host must serve; the local ones never reach the wire (docs/standalone.md: affordances-rendered-by-the-webview).
@@ -105,7 +109,7 @@ export type WebViewMessage =
 
 // Messages from Extension to WebView
 export type ExtensionMessage =
-  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version: string; capabilities: HostCapabilities }
+  | { type: 'init'; tuples: TupleInfo[]; modalities: string[]; modalityPaths: string[]; modalityColors: string[]; config: WebViewConfig; winners: Record<number, OriginalModalityIndex>; votingEnabled: boolean; labelsExplicit: boolean; version: string; capabilities: HostCapabilities; deleteUnit: DeleteUnit }
   | { type: 'thumbnail'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string } // binary like `image`, and blob-URL'd in the webview (docs/loading-architecture.md: image-payload-normalized)
   | { type: 'thumbnailError'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; error: string }
   | { type: 'image'; tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex; bytes: Uint8Array; mime: string; width: number; height: number } // binary, not base64: string payloads cost ×1.33 and GC pauses

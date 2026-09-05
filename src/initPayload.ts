@@ -1,5 +1,6 @@
 // Pure init-message assembly (no vscode): both the provider and the standalone adapter build their `init` payload here (docs/standalone.md: adapter-contains-no-logic).
 import {
+  DeleteUnit,
   ExtensionMessage,
   HostCapabilities,
   TupleInfo,
@@ -44,6 +45,8 @@ export interface InitPayloadArgs {
   version: string;
   /** What this host can serve — the webview's whole affordance surface keys off it (docs/standalone.md: affordances-rendered-by-the-webview). */
   capabilities: HostCapabilities;
+  /** What Del removes here, so the webview posts the right message and the help modal says the right thing (docs/session-files.md: mode-behaviour-is-a-table). */
+  deleteUnit: DeleteUnit;
   /** Per-column color override (e.g. session-file colors); a falsy return falls back to the positional palette. */
   colorOverride?: (modality: string, index: number) => string | undefined;
 }
@@ -66,5 +69,6 @@ export function buildInitPayload(args: InitPayloadArgs): ExtensionMessage {
     labelsExplicit: args.labelsExplicit,
     version: args.version,
     capabilities: args.capabilities,
+    deleteUnit: args.deleteUnit,
   };
 }

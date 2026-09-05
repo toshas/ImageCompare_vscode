@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deleteTupleFlow, removeTupleStep, removeModalityStep } from '../../src/removalPlan';
+import { deleteSlotFlow, deleteTupleFlow, removeTupleStep, removeModalityStep } from '../../src/removalPlan';
 import { ExtensionMessage } from '../../src/types';
 
 // Transcript-pinning suite: file-delete order, live-index re-planning and step order are
@@ -107,5 +107,99 @@ describe('delete-tuple flow (real removalPlan code)', () => {
     ]);
     expect(scan.modalities).toEqual(['b']);
     expect(scan.tuples.map(t => t.name)).toEqual(['t1']);
+  });
+});
+
+
+// The other unit Del can take: one slot's file, in the mode where a row IS a file list
+// (docs/session-files.md: mode-behaviour-is-a-table). Same two-phase shape as the tuple
+// flow — disk first, then the shared commit off re-derived live indices.
+describe('delete-slot flow (real removalPlan code)', () => {
+  const slotIo = (log: string[], extra: Partial<{ deleteFile: (i: { name: string; modality: string }) => Promise<void> }> = {}) => ({
+    deleteFile: async (image: { name: string; modality: string }) => { log.push(`rm:${image.name}/${image.modality}`); },
+    // Both indices, always: a slot message names a row AND a column, and printing only the first
+    // would have hidden the live-index re-derivation this suite exists to pin.
+    post: (m: ExtensionMessage) => {
+      const idx = m as { tupleIndex?: number; modalityIndex?: number | null };
+      log.push(`post:${m.type}:t${idx.tupleIndex}m${idx.modalityIndex}`);
+    },
+    removeTuple: (idx: number) => { log.push(`step:tuple:${idx}`); },
+    removeModality: (idx: number) => { log.push(`step:modality:${idx}`); },
+    saveResults: () => { log.push('save'); },
+    ...extra,
+  });
+
+  it('deletes only that slot file, then commits it: fileDeleted for the row that survives, and the emptied column drops', async () => {
+    const scan = {
+      tuples: [{ name: 't0', images: [img('t0_a.png', 'a'), img('t0_b.png', 'b')] }],
+      modalities: ['a', 'b'],
+    };
+    const log: string[] = [];
+    await deleteSlotFlow(scan, new Map<number, number>(), 0, 0, slotIo(log));
+    expect(log).toEqual(['rm:t0_a.png/a', 'post:fileDeleted:t0m0', 'save', 'step:modality:0']);
+    // The sibling file was never touched — the whole difference from deleteTupleFlow.
+    expect(scan.tuples[0].images.map(i => i.name)).toEqual(['t0_b.png']);
+  });
+
+  it('takes the tuple with the last file, rather than leaving an empty row behind', async () => {
+    const scan = { tuples: [{ name: 't0', images: [img('t0_a.png', 'a')] }], modalities: ['a'] };
+    const log: string[] = [];
+    await deleteSlotFlow(scan, new Map<number, number>(), 0, 0, slotIo(log));
+    expect(log).toEqual(['rm:t0_a.png/a', 'step:tuple:0', 'step:modality:0']);
+  });
+
+  it('clears a winner cast on the slot it removes', async () => {
+    const scan = {
+      tuples: [{ name: 't0', images: [img('t0_a.png', 'a'), img('t0_b.png', 'b')] }],
+      modalities: ['a', 'b'],
+    };
+    const winners = new Map<number, number>([[0, 1]]);
+    const log: string[] = [];
+    await deleteSlotFlow(scan, winners, 0, 1, slotIo(log));
+    expect(log[1]).toBe('post:winnerUpdated:t0mnull');
+    expect(winners.has(0)).toBe(false);
+  });
+
+  it('commits against the live indices when the await shifts a column underneath it', async () => {
+    const scan = {
+      tuples: [{ name: 't0', images: [img('t0_a.png', 'a'), img('t0_b.png', 'b'), img('t0_c.png', 'c')] }],
+      modalities: ['a', 'b', 'c'],
+    };
+    const log: string[] = [];
+    await deleteSlotFlow(scan, new Map<number, number>(), 0, 2, slotIo(log, {
+      deleteFile: async (image: { name: string; modality: string }) => {
+        log.push(`rm:${image.name}/${image.modality}`);
+        // A concurrent removal drops column 'a' while the delete awaits; 'c' is now index 1.
+        scan.modalities.splice(0, 1);
+        scan.tuples[0].images = scan.tuples[0].images.filter(i => i.modality !== 'a');
+      },
+    }));
+    // Committing at the stale index 2 would strip nothing and drop no column.
+    expect(log).toEqual(['rm:t0_c.png/c', 'post:fileDeleted:t0m1', 'save', 'step:modality:1']);
+    expect(scan.tuples[0].images.map(i => i.modality)).toEqual(['b']);
+  });
+
+  it('a rejecting disk delete still commits — the file was already gone', async () => {
+    const scan = {
+      tuples: [{ name: 't0', images: [img('t0_a.png', 'a'), img('t0_b.png', 'b')] }],
+      modalities: ['a', 'b'],
+    };
+    const log: string[] = [];
+    await deleteSlotFlow(scan, new Map<number, number>(), 0, 0, slotIo(log, {
+      deleteFile: async () => { log.push('rm:threw'); throw new Error('already gone'); },
+    }));
+    expect(log).toEqual(['rm:threw', 'post:fileDeleted:t0m0', 'save', 'step:modality:0']);
+  });
+
+  it('does nothing for a slot that holds no file, rather than deleting a neighbour', async () => {
+    const scan = {
+      tuples: [{ name: 't0', images: [img('t0_a.png', 'a')] }],
+      modalities: ['a', 'b'],
+    };
+    const log: string[] = [];
+    await deleteSlotFlow(scan, new Map<number, number>(), 0, 1, slotIo(log));
+    await deleteSlotFlow(scan, new Map<number, number>(), 5, 0, slotIo(log));
+    expect(log).toEqual([]);
+    expect(scan.tuples[0].images).toHaveLength(1);
   });
 });

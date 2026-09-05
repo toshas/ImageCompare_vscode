@@ -210,6 +210,112 @@ test('standalone build boots the real webview and matches via the real scanForIm
   expect(actual).toBe(expected);
 });
 
+// The standalone reaches mode 3 only now that a directory of loose images resolves to it
+// (docs/session-files.md: folder-of-images-is-a-file-list), and that shape breaks assumptions it
+// never had to face: `<root>/<modality>` is not a path any more, and voting has nothing to rank.
+//
+// The poll half of this test asserts the effect that actually dies when `startPolling`'s mode gate
+// is removed: `pollResults` reads `<root>/results.txt` every cycle and posts `winnersReset` on any
+// change, so a stray results.txt in a folder of images would push winners into a comparison that
+// cannot have any. An earlier version of this test asserted the comparison "was not polled away",
+// which passed with the gate reverted — the file removals a failed listing produces are already
+// no-ops, because `applyExternalRemoval` resolves them by `<root>/<modality>/<file>`, a path no
+// image in a file list has (docs/file-watching.md, "Events by mode").
+test('standalone opens a folder of loose images, and never polls a results.txt it does not own', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __ic_test_enabled: boolean }).__ic_test_enabled = true;
+    // Every message the adapter posts, so a cycle that must not run is observable rather than inferred.
+    (window as unknown as { __ic_seen: string[] }).__ic_seen = [];
+    window.addEventListener('message', (e: MessageEvent) => {
+      const type = (e.data as { type?: string } | null)?.type;
+      if (type) (window as unknown as { __ic_seen: string[] }).__ic_seen.push(type);
+    });
+  });
+  await page.goto(pageUrl);
+
+  // A results.txt the comparison does not own, in place BEFORE the open: `sendInit` never reads one
+  // where voting is off, so the first poll cycle would see it as a change and push it to the webview.
+  const stray = serializeResults([{ name: 'someone_elses_run' }], new Map([[0, 'gt']]), ['gt'], new Date());
+  await page.evaluate(async (strayText) => {
+    const root = await navigator.storage.getDirectory();
+    try {
+      await root.removeEntry('loose', { recursive: true });
+    } catch { /* fresh profile */ }
+    const dir = await root.getDirectoryHandle('loose', { create: true });
+    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, w, h);
+      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
+      return new Uint8Array(await blob.arrayBuffer());
+    };
+    const write = async (name: string, bytes: Uint8Array) => {
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(bytes.slice().buffer as ArrayBuffer);
+      await w.close();
+    };
+    await write('shot_a.png', await makePng(8, 6, '#f00'));
+    await write('shot_b.png', await makePng(9, 7, '#0f0'));
+    // Excluded by enumeration: this app's own crop write, which would otherwise be a third column.
+    await write('shot_a_crop01.png', await makePng(4, 3, '#00f'));
+    await write('notes.txt', new TextEncoder().encode('not an image'));
+    await write('results.txt', new TextEncoder().encode(strayText));
+    const seam = (window as unknown as {
+      __ic_standalone: { pollIntervalMs: number; open(h: FileSystemDirectoryHandle): Promise<void> };
+    }).__ic_standalone;
+    seam.pollIntervalMs = 60; // many cycles inside the wait below
+    await seam.open(dir);
+  }, stray);
+
+  await page.waitForFunction(() => {
+    const t = (window as unknown as { __ic_test?: { getState(): { tupleCount: number } } }).__ic_test;
+    return !!t && t.getState().tupleCount > 0;
+  });
+  await expect(page.locator('#viewer')).toHaveClass(/active/);
+
+  const state = await page.evaluate(
+    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
+  );
+  expect(state.tupleCount).toBe(1);
+  // The crop, the .txt and the results file are all out; the two parents are the columns.
+  expect(state.modalityCount).toBe(2);
+  // Real file paths, not `<root>/<modality>` — a file list owns no directory per column.
+  expect(state.modalityPaths).toEqual(['/loose/shot_a.png', '/loose/shot_b.png']);
+  expect(state.votingEnabled).toBe(false);
+  expect(state.deleteUnit).toBe('image');
+
+  // Ten poll intervals later, that results.txt has never been read back at the webview.
+  await page.waitForTimeout(600);
+  const seen = await page.evaluate(() => (window as unknown as { __ic_seen: string[] }).__ic_seen);
+  expect(seen).not.toContain('winnersReset');
+  const after = await page.evaluate(
+    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
+  );
+  expect(after.winners).toEqual([]);
+  expect(after.modalityCount).toBe(2);
+
+  // Del here takes the ONE file on screen, end to end: the column goes, the row stays, and OPFS
+  // still holds every other file — including the crop the scan excluded, which Del must not touch.
+  await page.keyboard.press('Delete');
+  await expect
+    .poll(() => page.evaluate(
+      () => (window as unknown as { __ic_test: { getState(): { modalityCount: number } } }).__ic_test.getState().modalityCount,
+    ))
+    .toBe(1);
+  const left = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('loose');
+    const out: string[] = [];
+    for await (const name of (dir as unknown as { keys(): AsyncIterable<string> }).keys()) out.push(name);
+    return out.sort();
+  });
+  expect(left).toEqual(['notes.txt', 'results.txt', 'shot_a_crop01.png', 'shot_b.png']);
+});
+
 test('standalone landing falls back to the read-only picker without FSA', async ({ page }) => {
   // Simulate Firefox/Safari: no File System Access API before the page boots.
   await page.addInitScript(() => { delete (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker; });

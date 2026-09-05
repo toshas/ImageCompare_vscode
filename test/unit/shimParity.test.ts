@@ -60,7 +60,7 @@ describe('crop flow on the browser Buffer shim', () => {
     vi.stubGlobal('Buffer', BufferShim);
     try {
       await performCrop(
-        { tuples: [{ name: 'shot', images: [{ name: 't.png', modality: 'a' }] }] },
+        { tuples: [{ name: 'shot', images: [{ name: 't.png', modality: 'a' }] }], mode: 1 },
         { tupleIndex: asTuple(0), cropRect: { x: 10, y: 20, w: 30, h: 40 }, srcWidth: 100, srcHeight: 100 },
         io
       );
