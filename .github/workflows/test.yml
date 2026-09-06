@@ -38,8 +38,10 @@ jobs:
       - run: node scripts/check-sidedness.mjs
       - run: node scripts/check-generated-output.mjs
       # A committed prerelease version means a local-alpha bump leaked (CLAUDE.md: Install Locally).
+      # A lockfile whose version disagrees means a release bumped package.json alone: `npm ci` runs
+      # above and does NOT catch it, which is how the lockfile sat at 0.3.0 through the 0.4.1 release.
       - run: |
-          node -e "const v=require('./package.json').version; if(v.includes('-')){console.error('package.json carries a local prerelease version '+v);process.exit(1)}"
+          node -e "const p=require('./package.json'),l=require('./package-lock.json');if(p.version.includes('-')){console.error('package.json carries a local prerelease version '+p.version);process.exit(1)}const bad=[['root',l.version],['packages[]',l.packages&&l.packages['']&&l.packages[''].version]].filter(([,v])=>v!==p.version);if(bad.length){console.error('package-lock.json disagrees with package.json ('+p.version+'): '+bad.map(([k,v])=>k+'='+v).join(', ')+' — run: npm install --package-lock-only');process.exit(1)}"
       - run: npm test
       - run: node scripts/mutation-check.mjs
 
