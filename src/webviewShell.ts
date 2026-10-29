@@ -177,7 +177,7 @@ body {
   background: var(--vscode-button-background, #0078d4);
   color: var(--vscode-button-foreground, #fff);
 }
-#delete-btn, #pptx-btn {
+#delete-btn, #pptx-btn, #results-btn {
   padding: 3px 8px;
   background: var(--vscode-button-secondaryBackground, #444);
   color: var(--vscode-button-secondaryForeground, #fff);
@@ -187,7 +187,9 @@ body {
   font-size: 11px;
 }
 #delete-btn:hover { background: #a33; }
+#delete-btn:disabled { opacity: 0.4; cursor: default; background: var(--vscode-button-secondaryBackground, #444); }
 #pptx-btn:hover { background: #383; }
+#results-btn:hover { background: #335; }
 #pptx-btn.busy {
   position: relative;
   color: transparent;
@@ -727,6 +729,7 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
           <button id="crop-btn" title="Crop all modalities (C)">Crop</button>
           <button id="delete-btn" title="Delete current tuple files (Del)">Delete</button><!-- title restated on init: what Del removes is the host's to say (docs/session-files.md: mode-behaviour-is-a-table) -->
           <button id="pptx-btn" title="Export voted tuples to PPTX">PPTX</button>
+          <button id="results-btn" title="Copy results.txt to the clipboard" hidden>results.txt</button>
         </div>
       </div>
     </div>

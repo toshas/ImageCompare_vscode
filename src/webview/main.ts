@@ -38,6 +38,8 @@ interface ImageInfo {
   modality: string;
   tupleIndex: TupleIndex;
   modalityIndex: OriginalModalityIndex;
+  /** The host cannot delete this file; absent means deletable. */
+  readOnly?: true;
 }
 
 interface TupleInfo {
@@ -99,6 +101,7 @@ const fpCollapseBtn = document.getElementById('fp-collapse-btn')!;
 const cropBtn = document.getElementById('crop-btn')!;
 const deleteBtn = document.getElementById('delete-btn')!;
 const pptxBtn = document.getElementById('pptx-btn')!;
+const resultsBtn = document.getElementById('results-btn')!;
 const thumbCanvasEl = document.getElementById('thumb-canvas') as HTMLCanvasElement;
 const thumbCtx = thumbCanvasEl.getContext('2d')!;
 const thumbViewportEl = document.getElementById('thumb-viewport')!;
@@ -202,6 +205,8 @@ let capabilities: HostCapabilities = NO_HOST_CAPABILITIES;
 
 // What Del removes here, stated by the host; an init that names none means a row, the shape every mode but the file list has (docs/session-files.md: mode-behaviour-is-a-table).
 let deleteUnit: DeleteUnit = 'tuple';
+// The Delete button's last applied read-only state, so a per-frame refresh touches the DOM only on a change.
+let deleteGreyed: boolean | null = null;
 
 // Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see docs/testing.md.
 if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
@@ -349,9 +354,15 @@ function setupEventListeners() {
   // Delete button
   deleteBtn.addEventListener('click', deleteCurrent);
 
+  // Votes leave a host that states copyResults by the clipboard; the host serializes them.
+  resultsBtn.addEventListener('click', () => {
+    if (capabilities.copyResults && votingEnabled) vscode.postMessage({ type: 'copyResults' });
+  });
+
   // PPTX export button
   pptxBtn.addEventListener('click', () => {
-    if (pptxBusy) return;
+    // A host that cannot hand over a file is never sent an export (docs/crop-and-pptx.md).
+    if (pptxBusy || !capabilities.exportPptx) return;
     // Collect tuples that have winners (voted for)
     const tupleIndices: TupleIndex[] = [];
     // Original space: the wire is always the original index (docs/tuple-matching.md: wire-index-is-original).
@@ -379,6 +390,8 @@ function setupEventListeners() {
 
 // Delete what Del removes here from disk (no confirmation, per user choice): the row, or the one image on screen.
 function deleteCurrent() {
+  // A target holding a file the host cannot delete is never sent (docs/standalone.md: published-originals-never-written).
+  if (deleteTargetReadOnly()) return;
   if (deleteUnit === 'image') {
     vscode.postMessage({
       type: 'deleteImage',
@@ -393,8 +406,34 @@ function deleteCurrent() {
 /** The button hint and the help row say what Del will actually take here, so neither can promise the wrong unit. */
 function applyDeleteUnitToAffordances(): void {
   const what = deleteUnit === 'image' ? 'current image file' : 'current tuple files';
-  deleteBtn.setAttribute('title', `Delete ${what} (Del)`);
   helpDeleteTextEl.textContent = `Delete ${what} (permanent!)`;
+  // Forces the availability pass below to rewrite the button's title for the new unit.
+  deleteGreyed = null;
+  applyDeleteAvailability();
+}
+
+/** Whether what Del would remove holds a file the host flagged read-only: the image on screen, or any real file of the row. */
+function deleteTargetReadOnly(): boolean {
+  const tuple = tuples[currentTupleIndex];
+  if (!tuple) return false;
+  if (deleteUnit === 'image') return tuple.images[toOriginal(currentModalityIndex, modalityOrder)]?.readOnly === true;
+  return tuple.images.some(img => img.name !== '' && img.readOnly === true);
+}
+
+/** Grey the Delete button while its target is read-only; re-run on navigation and every structural change (docs/standalone.md: published-originals-never-written). */
+function applyDeleteAvailability(): void {
+  const greyed = deleteTargetReadOnly();
+  if (greyed === deleteGreyed) return;
+  deleteGreyed = greyed;
+  (deleteBtn as HTMLButtonElement).disabled = greyed;
+  const what = deleteUnit === 'image' ? 'current image file' : 'current tuple files';
+  deleteBtn.setAttribute('title', greyed ? `Read-only here: the ${what} cannot be deleted` : `Delete ${what} (Del)`);
+}
+
+/** Buttons a host states rather than the webview infers: PPTX where a file can be handed over, results.txt where votes can be copied out. */
+function applyHostAffordances(): void {
+  (pptxBtn as HTMLElement).hidden = !capabilities.exportPptx;
+  (resultsBtn as HTMLElement).hidden = !(capabilities.copyResults && votingEnabled);
 }
 
 // Crop confirmation callback
@@ -565,6 +604,7 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
 
   // Load winner state
   votingEnabled = message.votingEnabled;
+  applyHostAffordances();
   winners = new Map();
   if (message.winners) {
     for (const [tupleIdx, modalityIdx] of Object.entries(message.winners)) {
@@ -1245,6 +1285,7 @@ function loadTuple(index: TupleIndex) {
   }
 
   currentTupleIndex = index;
+  applyDeleteAvailability();
   evictDistantWebviewTuples();
   // Reset to the target tuple's cache so no stale frame from the previous tuple can show.
   const cachedForIndex = loadedTuples.get(index);
@@ -2246,6 +2287,7 @@ function applyEmptyNotice(): boolean {
 }
 
 function render() {
+  applyDeleteAvailability();
   // Nothing to draw: a notice, never a spinner over the last frame (docs/loading-architecture.md: empty-comparison-is-terminal).
   if (applyEmptyNotice()) return;
   // Re-derive from the cache; module-level `images` holds a previous tuple's frames (docs/loading-architecture.md: render-from-loaded-tuples).

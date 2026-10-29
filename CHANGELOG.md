@@ -4,6 +4,29 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+### Added
+- **The standalone page publishes a comparison as it is.** Uploaded unmodified next to an
+  `imagecompare.json` — a plain listing of the images, in the usual one-folder-per-column layout —
+  to a Claude artifact or any static host, `image_compare.html` opens that comparison by itself,
+  its images read-only, instead of the folder picker; without one it shows the picker as before. The new
+  `imagecompare-artifact` skill gives agents the whole recipe, with no viewer code to write.
+- **A published comparison remembers each viewer's votes and crops.** They are kept in that
+  viewer's browser, per comparison, and survive a reload; the published images stay read-only, so
+  Delete is greyed for them (and for a folder the Firefox/Safari picker opened read-only) while a
+  viewer's own crops delete as usual. A new **results.txt** button in the Tools panel copies the
+  votes to the clipboard, exactly as `results.txt` would hold them, on a plain-http host too. Copy
+  Path on a published image copies its URL.
+- **Shared as a Claude artifact, a comparison offers no PPTX export**, because the artifact frame
+  blocks every download a page starts and the export would report success with nothing saved. The
+  manifest's `host` names where the page is published; an unknown one is reported, never guessed.
+- **`scripts/share-comparison.mjs` stages a comparison ready to publish** — from a folder or a
+  `.imagecompare` session: the page titled after the comparison, the manifest, every image byte for
+  byte, prebuilt strip thumbnails so viewers do not download every full image to see the strip, and
+  a publish plan in batches the host accepts. Anything the host would refuse (unserved image types,
+  size or count limits), or the page would not open as the same comparison (names that collide on
+  macOS or Windows, a folder of one image), is reported in full and nothing is staged; the script never re-encodes,
+  resizes or drops an image to make it fit.
+
 ## [0.5.0] - 2026-09-06
 
 ### Added

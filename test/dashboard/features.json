@@ -2870,6 +2870,430 @@
           ]
         },
         {
+          "id": "standalone-published-comparison",
+          "name": "Page published next to an imagecompare.json opens that comparison, its listed files read-only (Claude artifacts, any static host)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "standalone page published next to an imagecompare.json opens that comparison, its listed files read-only"
+            },
+            {
+              "suite": "webview",
+              "match": "copies a published image's URL as its path"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone page with no imagecompare.json beside it keeps the landing"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone page reports a manifest that reaches outside its directory instead of opening it"
+            },
+            {
+              "suite": "unit",
+              "match": "returns the listed relative paths in manifest order"
+            },
+            {
+              "suite": "unit",
+              "match": "rejects a manifest with no files"
+            },
+            {
+              "suite": "unit",
+              "match": "rejects paths that leave the page directory"
+            },
+            {
+              "suite": "unit",
+              "match": "reports a page that is not JSON as a parse failure, not a comparison"
+            },
+            {
+              "suite": "unit",
+              "match": "lists the manifest as a folder whose subdirectories are the columns"
+            },
+            {
+              "suite": "unit",
+              "match": "reads each file through the injected fetch by its manifest-relative path, lazily, not at listing time"
+            },
+            {
+              "suite": "unit",
+              "match": "is read-only: nothing a published page lists can be written or deleted"
+            }
+          ]
+        },
+        {
+          "id": "published-viewer-votes",
+          "name": "Published comparison: votes kept per viewer in the browser (survive a reload), copied out by the results.txt button",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "keeps the viewer's votes across a reload and copies them out as results.txt"
+            },
+            {
+              "suite": "webview",
+              "match": "the results.txt button shows with copyResults and voting, and posts copyResults"
+            },
+            {
+              "suite": "webview",
+              "match": "the results.txt button stays hidden where voting is off"
+            },
+            {
+              "suite": "unit",
+              "match": "words the results.txt copy outcomes"
+            },
+            {
+              "suite": "unit",
+              "match": "survives a reload: a fresh layer over the same store and namespace sees the viewer"
+            },
+            {
+              "suite": "unit",
+              "match": "falls back to memory for the visit when the store refuses"
+            },
+            {
+              "suite": "unit",
+              "match": "loses only the write the store refuses"
+            },
+            {
+              "suite": "webview",
+              "match": "copies results.txt on a plain-http host, where the async clipboard API is absent"
+            }
+          ]
+        },
+        {
+          "id": "published-viewer-crops",
+          "name": "Published comparison: crops kept per viewer in the browser and deletable; Delete greyed on listed originals",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "keeps the viewer's crops across a reload and deletes them, never an original"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone published comparison does not poll"
+            },
+            {
+              "suite": "unit",
+              "match": "is writable, and merges its own files into the published listing"
+            },
+            {
+              "suite": "unit",
+              "match": "reads its own files without a fetch, and published ones through it"
+            },
+            {
+              "suite": "unit",
+              "match": "prefers the layer when it holds a path the listing also has"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses to write or delete a published file or directory"
+            },
+            {
+              "suite": "unit",
+              "match": "and a delete of nothing is not found"
+            }
+          ]
+        },
+        {
+          "id": "published-host-regimes",
+          "name": "Published comparison: the manifest's host names the regime (claude-artifact offers no PPTX; an unknown host is reported)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "states the flags a published page offers per regime"
+            },
+            {
+              "suite": "unit",
+              "match": "holds the claude-artifact publish limits, decimal megabytes"
+            },
+            {
+              "suite": "unit",
+              "match": "throws for a regime it does not have rather than defaulting"
+            },
+            {
+              "suite": "unit",
+              "match": "reads the hosting regime, absent meaning static"
+            },
+            {
+              "suite": "unit",
+              "match": "reports a host the regime table does not know instead of opening"
+            },
+            {
+              "suite": "unit",
+              "match": "claims neither a PPTX export nor a results copy when nothing is stated"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone page reports a manifest naming an unknown host instead of opening it"
+            },
+            {
+              "suite": "webview",
+              "match": "a host that cannot hand over a file shows no PPTX button and is never sent an export"
+            },
+            {
+              "suite": "webview",
+              "match": "a host that can shows the PPTX button, and no results.txt button unless it copies votes"
+            },
+            {
+              "suite": "webview",
+              "match": "an init stating no flags offers neither"
+            }
+          ]
+        },
+        {
+          "id": "published-viewer-layer-namespace",
+          "name": "Published comparison: two comparisons on one origin never share votes or crops",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "to another sharing the store"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the manifest filename, query and fragment"
+            },
+            {
+              "suite": "unit",
+              "match": "separates sibling and nested comparisons on one origin"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone published comparisons in sibling directories keep separate votes"
+            }
+          ]
+        },
+        {
+          "id": "published-packed-thumbs",
+          "name": "Published comparison: strip thumbnails from packed JSON, full-image fallback when missing or malformed",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "draws the strip from packed thumbnails without fetching the images"
+            },
+            {
+              "suite": "webview",
+              "match": "falls back to the full images when the thumbs file is missing"
+            },
+            {
+              "suite": "webview",
+              "match": "falls back to the full images when the thumbs file is malformed"
+            },
+            {
+              "suite": "webview",
+              "match": "decodes an image the thumbs file has no entry for"
+            },
+            {
+              "suite": "webview",
+              "match": "loads the open row while the thumbs file is still downloading"
+            },
+            {
+              "suite": "unit",
+              "match": "parses entries keyed by listed path"
+            },
+            {
+              "suite": "unit",
+              "match": "drops a missing, malformed or unknown-format file and keeps the others"
+            },
+            {
+              "suite": "unit",
+              "match": "gives up on a file that never answers instead of stalling the strip"
+            },
+            {
+              "suite": "unit",
+              "match": "decodes bad base64 to null, so the caller decodes the full image"
+            },
+            {
+              "suite": "unit",
+              "match": "reads the thumbs list, absent meaning none"
+            },
+            {
+              "suite": "unit",
+              "match": "reports a thumbs list that is empty, not a list, or leaves the page directory"
+            }
+          ]
+        },
+        {
+          "id": "share-comparison-script",
+          "name": "Sharing script stages a comparison byte-for-byte or refuses (unservable types, size and count limits), never altering it",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "lays a folder of image columns out as it is, ignoring loose files, non-images and results.txt"
+            },
+            {
+              "suite": "unit",
+              "match": "makes each directory of a multi-directory session a column named by its label"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a file-list session whose files share a name, which a flat layout cannot hold"
+            },
+            {
+              "suite": "unit",
+              "match": "stages the page, manifest, thumbs, plan and every image byte for byte"
+            },
+            {
+              "suite": "unit",
+              "match": "packs one thumbnail per listed image: longest side 200, never enlarged, PNG for PNG and JPEG otherwise"
+            },
+            {
+              "suite": "unit",
+              "match": "hands sharp the image bytes, never its path"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses types the host does not serve, naming every file, and stages nothing"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses an image over the per-image limit, naming it and its size"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a non-empty --out together with every other violation, leaving --out as it was"
+            },
+            {
+              "suite": "unit",
+              "match": "removes what it staged when staging itself fails midway"
+            },
+            {
+              "suite": "unit",
+              "match": "counts page, manifest and thumbs files toward the per-version file limit"
+            },
+            {
+              "suite": "unit",
+              "match": "batches within the per-publish caps, page, manifest and thumbs first, the page again in every later batch"
+            },
+            {
+              "suite": "unit",
+              "match": "splits so every file is within the limit, losing no entry"
+            },
+            {
+              "suite": "unit",
+              "match": "stages colliding-tail directories under their derived names, the slash made a lookalike"
+            },
+            {
+              "suite": "unit",
+              "match": "stages a label with a colon under its lookalike, and the staged manifest opens in the page"
+            },
+            {
+              "suite": "unit",
+              "match": "maps every unsafe character of a file name through the one table"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a label no lookalike can make safe, naming it, and stages nothing"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses two columns that would share a folder once made safe"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses two columns whose folders differ only in case"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses two files whose staged paths differ only in case or Unicode normalization"
+            },
+            {
+              "suite": "unit",
+              "match": "names every staged path the page"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a file-list session the page would read back without its _cropNN files"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a folder whose only image is one loose file"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a multi-directory session with fewer than two image directories"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses before building any thumbnail"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a label holding a control character, which no lookalike replaces"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses an input that does not exist, or is neither a folder nor a session"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a folder with neither image subdirectories nor loose images"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a session that does not parse, naming the session"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a session listing no existing image or directory"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a file-list session of one image, which the page would not open"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses a file name no lookalike can make safe, never dropping the file"
+            },
+            {
+              "suite": "unit",
+              "match": "refuses an --out that is a file, and leaves it as it was"
+            },
+            {
+              "suite": "unit",
+              "match": "bundles sharePlan, shareNodeIo and hostRegimes for node without resolving vscode"
+            },
+            {
+              "suite": "unit",
+              "match": "counts the thumbs files it builds"
+            }
+          ]
+        },
+        {
+          "id": "readonly-delete-greyed",
+          "name": "Delete is greyed and Del ignored for a read-only image (published originals, read-only browser roots)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a row holding a read-only file greys Delete and Del does nothing; a writable row deletes"
+            },
+            {
+              "suite": "webview",
+              "match": "with an image unit only the read-only image greys Delete"
+            },
+            {
+              "suite": "webview",
+              "match": "a structural change re-decides it: removing the read-only row frees Delete without navigating"
+            },
+            {
+              "suite": "webview",
+              "match": "an arrival carries no flag: a viewer-made row is deletable"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone no-FSA drop path walks webkit entries into the read-only backend"
+            },
+            {
+              "suite": "unit",
+              "match": "flags readOnly exactly the real files the host says it cannot delete"
+            },
+            {
+              "suite": "unit",
+              "match": "leaves the wire without a readOnly key when the host states no predicate"
+            },
+            {
+              "suite": "unit",
+              "match": "flags only published paths read-only"
+            }
+          ]
+        },
+        {
           "id": "standalone-context-menu",
           "name": "Standalone right-click opens the app menu",
           "tests": [

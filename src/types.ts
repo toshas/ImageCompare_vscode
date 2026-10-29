@@ -76,6 +76,8 @@ export interface ImageInfo {
   modality: string;
   tupleIndex: TupleIndex;
   modalityIndex: OriginalModalityIndex;
+  /** The host cannot delete this file; absent means deletable (docs/standalone.md: published-originals-never-written). */
+  readOnly?: true;
 }
 
 // Tuple info sent to webview
@@ -105,6 +107,7 @@ export type WebViewMessage =
   // A context-menu item the host must serve; the local ones never reach the wire (docs/standalone.md: affordances-rendered-by-the-webview).
   | { type: 'menuAction'; action: MenuActionId; ctx: MenuContext }
   | { type: 'revealPath'; path: string } // a notice's reveal action, whose target is a literal path rather than a slot
+  | { type: 'copyResults' } // the results.txt button; only a host stating `copyResults` is sent it
   | { type: 'log'; message: string };
 
 // Messages from Extension to WebView

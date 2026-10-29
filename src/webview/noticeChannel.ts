@@ -8,7 +8,10 @@ export type NoticeEvent =
   | { kind: 'sessionSaved'; path: string }
   | { kind: 'sessionSaveFailed'; error: string }
   | { kind: 'pathCopied' }
-  | { kind: 'copyPathFailed'; error: string };
+  | { kind: 'copyPathFailed'; error: string }
+  | { kind: 'resultsCopied'; votes: number }
+  | { kind: 'noVotesToCopy' }
+  | { kind: 'copyResultsFailed'; error: string };
 
 export interface Notice {
   text: string;
@@ -33,5 +36,11 @@ export function buildNotice(event: NoticeEvent, caps: HostCapabilities): Notice 
       return { text: 'Path copied', tone: 'info' };
     case 'copyPathFailed':
       return { text: `Could not copy the path: ${event.error}`, tone: 'error' };
+    case 'resultsCopied':
+      return { text: `results.txt copied to the clipboard (${event.votes} ${event.votes === 1 ? 'vote' : 'votes'})`, tone: 'info' };
+    case 'noVotesToCopy':
+      return { text: 'No votes to copy yet', tone: 'info' };
+    case 'copyResultsFailed':
+      return { text: `Could not copy results.txt: ${event.error}`, tone: 'error' };
   }
 }

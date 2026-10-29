@@ -99,7 +99,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`thumbPack.ts`** - Pure (no vscode dependency): the thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
 - **`wireFormat.ts`** - Pure (no vscode dependency): image payload normalization for extension→webview transfer → `docs/loading-architecture.md`
 - **`resultsFile.ts`** - Pure (no vscode dependency): `results.txt` parse/serialize plus the persist flow (empty votes delete the file), shared with the standalone build → `docs/standalone.md`
-- **`cropPlan.ts`** - Pure (no vscode dependency): `_cropNN` output naming and crop-rect scale/clamp → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`cropPlan.ts`** - Pure (no vscode dependency): `_cropNN` output naming, crop-rect scale/clamp, and which of a folder's loose images its enumeration keeps (`enumeratedImages`, shared with the sharing script) → `docs/crop-and-pptx.md`, `docs/standalone.md`
 - **`cropFlow.ts`** - Pure (no vscode dependency): the whole crop sequence (`performCrop` — one name, relative rect, per-modality render/inject/write, arrivals, `cropComplete`, thumbnails) over per-product IO, shared with the standalone build → `docs/crop-and-pptx.md`, `docs/standalone.md`
 - **`pptxDeck.ts`** - Pure (no vscode dependency): PPTX slide selection, parent/crop pairing and layout over an injected IO, `comparison_NN` export-file numbering, and the export flow (`exportDeck` — name, build, save, exactly one answer) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
 - **`prefetchPlan.ts`** - Pure (extension-only, no vscode): what a prefetch wave speculates on — the
@@ -126,6 +126,11 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 - **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
+- **`standalone/publishedPath.ts`** - Pure: the one rule for a published listing path, read by the page's manifest parser and by the sharing script's staging check → `docs/standalone.md`
+- **`standalone/hostRegimes.ts`** - Pure: the hosting-regime table a published comparison's `host` names — the capability flags the page states and the publish limits the sharing script enforces → `docs/standalone.md`
+- **`standalone/viewerLayer.ts`** - The per-viewer writable layer over a published comparison (listed files read-only, the viewer's votes and crops in IndexedDB, namespaced by the comparison's URL directory; the store is injected) → `docs/standalone.md`
+- **`standalone/packedThumbs.ts`** - Pure: the packed-thumbnails format (parse, never-failing load, split within a byte limit) and the strip's thumbnail size, shared by the page and the sharing script → `docs/standalone.md`
+- **`standalone/sharePlan.ts`** (+ `standalone/shareNodeIo.ts`, `scripts/share-comparison.mjs`) - The sharing script: layout per input shape, the regime's limit checks, thumbs packing and publish batches over injected IO (`sharePlan`), the node fs + sharp IO (`shareNodeIo`), argument parsing and printing (the script) → `docs/standalone.md`
 
 ## Design docs (`docs/`)
 
@@ -176,6 +181,7 @@ verification steps.
 | Fix a reported bug end-to-end | `/fix-issue` skill |
 | Implement a new feature end-to-end | `/implement-feature` skill |
 | Open image comparisons programmatically | `/imagecompare` skill |
+| Publish a comparison as a web page (Claude artifact, static host) | `/imagecompare-artifact` skill |
 
 ## Change close-out (mandatory)
 

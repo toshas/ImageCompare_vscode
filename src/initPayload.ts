@@ -18,7 +18,7 @@ export interface SparseTuple {
 }
 
 /** Dense over ALL modalities: a modality the sparse tuple lacks becomes a `name: ''` placeholder (docs/tuple-matching.md: sparse-vs-dense-tuples). */
-export function denseTupleInfo(tuple: SparseTuple, tupleIndex: number, modalities: readonly string[]): TupleInfo {
+export function denseTupleInfo(tuple: SparseTuple, tupleIndex: number, modalities: readonly string[], isReadOnly?: (tupleIndex: number, modality: string) => boolean): TupleInfo {
   return {
     name: tuple.name,
     images: modalities.map((modality, modalityIndex) => {
@@ -28,6 +28,8 @@ export function denseTupleInfo(tuple: SparseTuple, tupleIndex: number, modalitie
         modality,
         tupleIndex: asTuple(tupleIndex),
         modalityIndex: asOriginal(modalityIndex),
+        // Only a real file the host says it cannot delete is flagged; no predicate leaves the wire as it was (docs/standalone.md: published-originals-never-written).
+        ...(img && isReadOnly?.(tupleIndex, modality) ? { readOnly: true as const } : {}),
       };
     }),
   };
@@ -49,6 +51,8 @@ export interface InitPayloadArgs {
   deleteUnit: DeleteUnit;
   /** Per-column color override (e.g. session-file colors); a falsy return falls back to the positional palette. */
   colorOverride?: (modality: string, index: number) => string | undefined;
+  /** Whether the host cannot delete the file in this slot; absent means every file is deletable. */
+  isReadOnly?: (tupleIndex: number, modality: string) => boolean;
 }
 
 /** Assemble the `init` message: dense tuples, positional palette defaults, winners map → record. */
@@ -59,7 +63,7 @@ export function buildInitPayload(args: InitPayloadArgs): ExtensionMessage {
   }
   return {
     type: 'init',
-    tuples: args.tuples.map((tuple, tupleIndex) => denseTupleInfo(tuple, tupleIndex, args.modalities)),
+    tuples: args.tuples.map((tuple, tupleIndex) => denseTupleInfo(tuple, tupleIndex, args.modalities, args.isReadOnly)),
     modalities: [...args.modalities],
     modalityPaths: [...args.modalityPaths],
     modalityColors: args.modalities.map((m, i) => args.colorOverride?.(m, i) || MODALITY_COLORS[i % MODALITY_COLORS.length]),

@@ -1,5 +1,7 @@
 /** The two StandaloneFs backends: FSA directory handle (writable) and webkitdirectory FileList (read-only) — IO only, no decisions (docs/standalone.md). */
 import { FileType, StandaloneFs } from './shims/vscode';
+import { DEFAULT_HOST_REGIME, HostRegimeName, isHostRegimeName } from './hostRegimes';
+import { isPublishedPath } from './publishedPath';
 
 export interface OpenedRoot {
   fs: StandaloneFs;
@@ -7,6 +9,8 @@ export interface OpenedRoot {
   rootName: string;
   /** Present only for FSA roots — the observer/poll accelerator needs the raw handle. */
   handle?: FileSystemDirectoryHandle;
+  /** True for a path this root can never delete; the webview greys Delete for it (docs/standalone.md: published-originals-never-written). */
+  isReadOnly(path: string): boolean;
 }
 
 function splitPath(rootPath: string, path: string): string[] {
@@ -87,7 +91,7 @@ export function createFsaBackend(root: FileSystemDirectoryHandle): OpenedRoot {
     },
   };
 
-  return { fs, rootPath, rootName: root.name || 'folder', handle: root };
+  return { fs, rootPath, rootName: root.name || 'folder', handle: root, isReadOnly: () => false };
 }
 
 /** The webkitGetAsEntry file/reader callbacks, promisified. */
@@ -120,6 +124,51 @@ export async function createDroppedEntryBackend(root: FileSystemDirectoryEntry):
   const files: File[] = [];
   await walkEntry(root, files);
   return createFileListBackend(files);
+}
+
+export interface PublishedManifest {
+  /** The listing: relative paths of the comparison's files. */
+  files: string[];
+  /** The hosting regime the manifest names; absent is `static` (docs/standalone.md: host-regime-is-one-table). */
+  host: HostRegimeName;
+  /** Relative paths of packed-thumbnail files; empty when none are listed. */
+  thumbs: string[];
+}
+
+/** Throws unless every entry is a relative path inside the page's directory. */
+function assertRelativePaths(paths: unknown[]): asserts paths is string[] {
+  for (const file of paths) {
+    if (!isPublishedPath(file)) {
+      throw new Error(`imagecompare.json: not a relative path inside the page's directory: ${JSON.stringify(file)}`);
+    }
+  }
+}
+
+/** The published-comparison manifest, or a thrown reason; only relative paths inside the page's directory and a known host pass (docs/standalone.md: published-comparison-opens-itself). */
+export function parsePublishedManifest(text: string): PublishedManifest {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new Error('imagecompare.json: not valid JSON');
+  }
+  const { files, host, thumbs } = (manifest ?? {}) as { files?: unknown; host?: unknown; thumbs?: unknown };
+  if (!Array.isArray(files) || files.length === 0) throw new Error('imagecompare.json: must list "files"');
+  assertRelativePaths(files);
+  // An unknown regime is reported, never defaulted: a guess could offer an export its host blocks (docs/standalone.md: host-regime-is-one-table).
+  if (host !== undefined && !isHostRegimeName(host)) throw new Error(`imagecompare.json: unknown "host": ${JSON.stringify(host)}`);
+  if (thumbs !== undefined && (!Array.isArray(thumbs) || thumbs.length === 0)) throw new Error('imagecompare.json: "thumbs" must list files');
+  if (thumbs !== undefined) assertRelativePaths(thumbs);
+  return { files, host: host ?? DEFAULT_HOST_REGIME, thumbs: thumbs ?? [] };
+}
+
+/** Read-only backend over a published comparison: the listed paths stand in for a dropped folder, each fetched when read (docs/standalone.md: published-comparison-opens-itself). */
+export function createPublishedBackend(files: readonly string[], fetchFile: (path: string) => Promise<ArrayBuffer>): OpenedRoot {
+  return createFileListBackend(files.map(path => ({
+    name: path.split('/').pop(),
+    webkitRelativePath: `comparison/${path}`,
+    arrayBuffer: () => fetchFile(path),
+  }) as unknown as File));
 }
 
 /** Read-only backend over a `webkitdirectory` FileList (Firefox/Safari fallback) — nothing can be written. */
@@ -177,5 +226,5 @@ export function createFileListBackend(files: readonly File[]): OpenedRoot {
     },
   };
 
-  return { fs, rootPath, rootName };
+  return { fs, rootPath, rootName, isReadOnly: () => true };
 }

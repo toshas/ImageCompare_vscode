@@ -959,7 +959,7 @@ ${lead}
       // Real installed version from the extension's own manifest via the activation context.
       version: String(this.context.extension.packageJSON.version ?? ''),
       // This host's flags; Save Session As needs a session file to copy (docs/standalone.md: affordances-rendered-by-the-webview).
-      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: !!state.sessionFileUri },
+      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: !!state.sessionFileUri, exportPptx: true, copyResults: false },
       // What Del removes here, stated rather than inferred by the webview (docs/session-files.md: mode-behaviour-is-a-table).
       deleteUnit: MODES[state.scanResult.mode].deleteUnit,
       colorOverride: (mod, i) => this.resolveModalityColor(state, mod, i)

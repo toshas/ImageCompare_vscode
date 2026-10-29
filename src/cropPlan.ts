@@ -1,4 +1,5 @@
 // Pure crop planning (no vscode): `_cropNN` naming and rect math live only here (docs/standalone.md: crop-plan-shared).
+import { MODES } from './modePolicy';
 
 /** The `_cropNN` suffix on a crop output's stem: every reader of the format tests through this one regex (docs/crop-and-pptx.md: cropnn-writer-reader-match). */
 export const CROP_SUFFIX_RE = /_crop\d+$/;
@@ -30,6 +31,12 @@ export function nextCropName(existingNamesPerModality: string[][], tupleName: st
 /** A filename without its extension; the crop of `shot_a.png` is named after `shot_a` (docs/crop-and-pptx.md: shared-crop-filename). */
 function stemOf(filename: string): string {
   return filename.replace(/\.[^./]+$/, '');
+}
+
+/** Which of a folder's loose images its enumeration keeps: `_cropNN` outputs set aside unless that leaves too few to compare; shared with the sharing script, which must stage a file list the page reads back whole (docs/session-files.md: folder-of-images-is-a-file-list) (docs/crop-and-pptx.md: cropnn-writer-reader-match). */
+export function enumeratedImages<T extends { name: string }>(files: T[]): T[] {
+  const withoutCrops = files.filter(file => !CROP_SUFFIX_RE.test(stemOf(file.name)));
+  return withoutCrops.length >= MODES[3].minColumns ? withoutCrops : files;
 }
 
 /**

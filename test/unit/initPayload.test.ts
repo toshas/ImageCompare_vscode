@@ -15,7 +15,7 @@ const baseArgs = {
   votingEnabled: true,
   labelsExplicit: false,
   version: '1.2.3',
-  capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true },
+  capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false },
   deleteUnit: 'tuple' as const,
 };
 
@@ -80,6 +80,34 @@ describe('init payload assembly (initPayload.ts, real code)', () => {
     if (asTuple.type !== 'init' || asImage.type !== 'init') throw new Error('expected init');
     expect(asTuple.deleteUnit).toBe('tuple');
     expect(asImage.deleteUnit).toBe('image');
+  });
+
+  // docs/standalone.md: published-originals-never-written — a published comparison's listed files
+  // reach the webview flagged, so Delete is greyed for them; the provider passes no predicate and
+  // its wire must not grow a key.
+  it('flags readOnly exactly the real files the host says it cannot delete', () => {
+    const asked: Array<[number, string]> = [];
+    const msg = buildInitPayload({
+      ...baseArgs,
+      isReadOnly: (tupleIndex, modality) => {
+        asked.push([tupleIndex, modality]);
+        return modality === 'gt';
+      },
+    });
+    if (msg.type !== 'init') throw new Error('expected init');
+    expect(msg.tuples[1].images).toEqual([
+      { name: 'b_gt.png', modality: 'gt', tupleIndex: 1, modalityIndex: 0, readOnly: true },
+      { name: 'b_pred.png', modality: 'pred', tupleIndex: 1, modalityIndex: 1 },
+    ]);
+    // A placeholder is no file: never flagged, never asked about.
+    expect(msg.tuples[0].images[1]).toEqual({ name: '', modality: 'pred', tupleIndex: 0, modalityIndex: 1 });
+    expect(asked).toEqual([[0, 'gt'], [1, 'gt'], [1, 'pred']]);
+  });
+
+  it('leaves the wire without a readOnly key when the host states no predicate', () => {
+    const msg = buildInitPayload(baseArgs);
+    if (msg.type !== 'init') throw new Error('expected init');
+    for (const tuple of msg.tuples) for (const image of tuple.images) expect('readOnly' in image).toBe(false);
   });
 
   it('converts the winners map into a plain record keyed by tuple index', () => {

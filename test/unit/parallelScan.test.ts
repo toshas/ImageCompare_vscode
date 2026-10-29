@@ -250,7 +250,7 @@ describe('scanForImages: the caller order reaches the init payload, not just the
       votingEnabled: false,
       labelsExplicit: false,
       version: '0.0.0',
-      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true },
+      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false },
       deleteUnit: 'tuple',
     });
     if (message.type !== 'init') throw new Error('expected an init message');

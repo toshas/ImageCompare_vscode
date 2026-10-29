@@ -60,7 +60,9 @@ Three ingredients, composed by `scripts/build-standalone.mjs`:
    API directory handles (with a
    read-only fallback for Firefox/Safari, fed by the `webkitdirectory` picker *or* a drag-drop
    walked through `webkitGetAsEntry` — voting/crop/delete disabled, since
-   nothing can be written), browser image decode (canvas; PPMX via the real parser; TIFF degrades
+   nothing can be written), a published comparison (an `imagecompare.json` beside the page, see
+   "Publishing a comparison": the listed files read-only, the viewer's own votes and crops in a
+   browser-local viewer layer), browser image decode (canvas; PPMX via the real parser; TIFF degrades
    to `imageError`), results.txt read/write over FSA, crop writes over FSA, pptxgenjs from CDN fed
    by the pure deck builder, and the external-change poll loop (+ optional `FileSystemObserver`
    accelerator) whose decisions come from `pollPlan` — see `docs/file-watching.md`, "The
@@ -73,7 +75,10 @@ User-visible differences between the products are deliberate and few, and each i
 browser genuinely lacks rather than a feature nobody ported. Three come from `HostCapabilities`
 (`affordances-rendered-by-the-webview`): the standalone menu has no **Reveal in Explorer**, its
 notices carry no reveal action, and its help modal has no **Ctrl/Cmd+S** row, because there is no
-file tree to reveal into and no session file to copy. The fourth is a fact neither host may
+file tree to reveal into and no session file to copy. A published comparison states two more from
+its hosting regime (see "Publishing a comparison"): no **PPTX** button where the host blocks every
+download a page starts (`exportPptx`), and a **results.txt** button that copies the votes out
+(`copyResults`). One more difference is a fact neither host may
 invent: an emptied comparison reaches the same terminal notice here, through the same bundle
 (`docs/loading-architecture.md: empty-comparison-is-terminal`), but only the extension can also say
 *why* — a File System Access root handle cannot distinguish a deleted directory from an unreadable
@@ -137,7 +142,8 @@ speculative prefetch pushes; local FSA reads make the provider's prefetch machin
 External changes on a writable root — file arrivals, removals, renames, and modality directories
 appearing or vanishing under the root (a dir rename executes as remove-then-adopt) — reach the
 view through the poll loop described in `docs/file-watching.md` ("The standalone poll");
-read-only roots never poll.
+read-only roots never poll, and neither does a published comparison, writable though its viewer
+layer is (nothing outside the page can change it; see "The viewer layer").
 
 **Pool width in a browser.** The width the `poolWidth` rule produces here was measured once, and left
 alone. In headless Chromium on a **4-vCPU** box (`navigator.hardwareConcurrency` 4, so the shipped
@@ -192,6 +198,134 @@ neither can drift from this repo's. `CLAUDE.md` is deleted there: development in
 repo whose README forbids development are worse than none, and the deploy is the only thing that
 can remove them. The Pages site serves the same page at `/standalone/`. The artifact repo is
 generated-only: it is never edited by hand, and the README it receives says so at the top.
+
+## Publishing a comparison
+
+The same page, uploaded unmodified next to an `imagecompare.json` and the files it lists (a Claude
+artifact, GitHub Pages, any static host, `python3 -m http.server`), opens that comparison by itself
+instead of the landing. A page with no manifest beside it (`file://`, the Pages copy, a 404) shows
+the landing as before. `skills/imagecompare-artifact/SKILL.md` is the agent-facing recipe.
+
+```json
+{ "files": ["gt/scene_01.png", "pred/scene_01.png"],
+  "host": "claude-artifact",
+  "thumbs": ["imagecompare.thumbs.0.json"] }
+```
+
+- **`files`** is only a directory listing, paths relative to the page, standing in for the folder a
+  user would otherwise drop: `createPublishedBackend` serves it, each listed image is fetched by
+  relative URL on first read, and columns, matching, naming and order are the shared scanner's,
+  exactly as for that dropped folder.
+- **`host`** names the **hosting regime** — what the place the page is published to lets it do.
+  Absent means `static`. One table, `standalone/hostRegimes.ts`, maps each regime to the capability
+  flags the page states on `init` and to the limits the sharing script enforces
+  (`host-regime-is-one-table`), so another way of sharing later — a new host, a peer-to-peer
+  transport — is a new row, not a refactor.
+- **`thumbs`** (optional) lists JSON files of prebuilt thumbnails:
+  `{"format": "imagecompare-thumbs-1", "entries": {"<listed path>": {"mime": "image/png", "data": "<base64>"}}}`.
+  Without them the open-time sweep fetches every full image to draw the strip. A packed entry
+  replaces only that fetch, for a listed image; anything missing, malformed, unreachable or slower
+  than 20 s to arrive falls back to the full-image path (`packed-thumbs-never-required`). A
+  thumbnail waits for its thumbs file outside the work pool, so a pack still downloading holds no
+  slot an image load needs. The format
+  and the strip's thumbnail size are `standalone/packedThumbs.ts`'s, which the page and the sharing
+  script both import.
+
+| Regime | PPTX export | Votes leave the page by | Publish limits the sharing script checks |
+|---|---|---|---|
+| `static` (default) | yes | the **results.txt** copy button | none |
+| `claude-artifact` | no | the **results.txt** copy button | image types `.png .jpg .jpeg .gif .webp` only; at most 511 files and 256 MB per artifact version (page, manifest and thumbs counted); at most 15 MB per image and 16 MB per text file; at most 255 files and 64 MB per publish call |
+
+Why `claude-artifact` has no PPTX: a probe artifact (2026-10-28) measured that the artifact frame
+blocks every download a page starts itself, pptxgenjs's `writeFile` included. The export would
+report success with nothing saved. The platform's own save prompt exists only for signed-in members
+of the owner's organization, never for a public-link visitor, so a comparison shared outside the
+organization has no way to hand anyone a file. The clipboard works for every viewer, which is why
+votes leave by copying. The same probe found that published files arrive byte-identical, including
+paths with spaces and non-ASCII names, and PNG text chunks stay intact. `blob:`/`data:` images, canvas
+decode and encode, keys, wheel, pinch and pointer capture all work for every viewer. The folder
+picker is refused inside the frame, and ranged requests are honoured only for signed-in viewers.
+Types outside the served list (`.tif`, `.ppmx`, any binary relabelled as text) are refused when
+publishing. Those limits are the platform's published ones and can change; the table is where to
+update them.
+
+### The viewer layer
+
+Published files cannot be written; the viewer's own work can. The published backend is wrapped in a
+per-viewer layer kept in the browser (IndexedDB), and every write the shared flows make lands there:
+`results.txt` from voting, so votes survive a reload, and crop files, numbered across both layers by
+the shared crop plan. Reads prefer the layer and listings merge both. The layer is namespaced by the
+comparison's URL directory, the directory `imagecompare.json` was fetched from, so two comparisons
+served from one origin never mix (`viewer-layer-per-comparison`). Every page of a GitHub Pages site
+shares one origin. If the browser refuses storage, as a private window may, the layer lives in memory
+for the visit. When the stored layer cannot be read, nothing is written over it. When it can, a write
+the browser refuses (a crop file over the storage quota) is lost on reload, and only that file: the
+writes after it are still kept, so a crop can come back with one column's file missing.
+
+Nothing in the layer leaves the browser on its own. Votes reach whoever published the comparison
+only when the viewer presses **results.txt** in the Tools panel (`copyResults`), which puts the
+file's text, as `resultsFile` serializes it, on the clipboard: through the async clipboard API in a
+secure context (https, localhost), and through the browser's copy command elsewhere, so a plain-http
+intranet host copies too. Copy Path on a published image or column copies its URL; a viewer's own crop
+has none and copies its path in the comparison. Listed files are never written or deleted
+(`published-originals-never-written`). Each listed image reaches the webview flagged `readOnly` on
+`init`, so Delete is greyed out and Del does nothing for a target holding one, while a row of the
+viewer's own crops deletes as usual. The same flag greys Delete on the read-only Firefox/Safari roots,
+where it used to do nothing silently. A published comparison never polls: nothing outside the page
+can change it.
+
+### The sharing script
+
+`node scripts/share-comparison.mjs <folder | session.imagecompare> --out <dir> [--host claude-artifact|static] [--title <name>]`
+(default host `claude-artifact`) stages a folder ready to publish. Its decisions are
+`standalone/sharePlan.ts`'s, over the node IO in `standalone/shareNodeIo.ts` (sharp makes the
+thumbnails and touches nothing else); the script only parses arguments, builds the page and
+prints. Those modules reach no `vscode` module: the script bundles them for node with no stand-in,
+and a unit test bundles them the same way. It stages:
+
+- the page (`dist/standalone/image_compare.html`, its `<title>` set to the comparison's name), built
+  from the checkout on every run (`npm run compile`, then `npm run build:standalone`), never reused
+  from an earlier build, which may predate the manifest it is staged beside;
+- `imagecompare.json`;
+- the images, byte for byte, at their layout paths;
+- the thumbs files, split to fit the regime's text-file limit;
+- `publish-plan.json`: batches within the per-publish caps, with the page, manifest and thumbs in the
+  first. Every publish call sends the page as the artifact page, so each later batch starts with it
+  again, counted within that batch's caps.
+
+A session is laid out in the one-folder-per-column shape, so the page's scanner reproduces the
+extension's columns. Mode 1 keeps its subdirectories. A mode-2 session's directories become columns
+named as the extension names them, labels when given, and the page orders them by name, as it orders
+any folder's. A file list is laid out flat, and a basename collision is refused. The page reads that
+flat folder as a folder of loose images, whose enumeration sets `_cropNN` files aside
+(`docs/session-files.md: folder-of-images-is-a-file-list`, shared as `enumeratedImages`); a file list
+it would read back short is refused rather than published as a different comparison. So is a folder
+whose only image is one loose file, which the page would not open, and a multi-directory session with
+fewer than two image directories: the extension refuses that session, and staged, its columns would
+open as a one-column folder. Only files the
+extension counts as images are part of the comparison. Session `colors` are not carried; columns
+take the positional palette. `results.txt` is never published, so a viewer starts with no votes.
+
+Names are made safe, never refused for being awkward. Every segment of the layout, column folders
+and file names alike, has each character that is unsafe in a file name on some OS or refused by the
+page's listing rule replaced by one fixed lookalike (`/`→`∕`, `:`→`꞉`, `\`→`⧵`, `*`→`∗`, `?`→`？`,
+`"`→`＂`, `<`→`‹`, `>`→`›`, `|`→`∣`). The table is applied identically everywhere, so names that matched
+across columns still match. So the `a/pred` and `b/pred` the extension derives for two directories
+sharing a tail stage as `a∕pred` and `b∕pred`, and a label `Model: A` as `Model꞉ A`. What no
+substitution can make safe (a control character, an empty name, a trailing dot or space) is refused
+naming the source and the label to change, as are two columns that would share a folder and two
+files that would share a path. Names are compared ignoring case and Unicode normalization, because
+macOS and Windows store `Pred` and `pred` as one folder. The deciding check is the page's own rule:
+every staged path must pass `isPublishedPath` (`standalone/publishedPath.ts`, the one predicate
+`parsePublishedManifest` applies) or the comparison is refused, so the page lists every path the
+script stages.
+
+The script checks the whole comparison against the regime's limits before staging anything, and
+before building a single thumbnail; the thumbs files are then counted and weighed in a second pass.
+On any violation it refuses: it names each exceeded limit with the measured value and the offending files,
+and stages nothing (`pack-refuses-never-alters`). It never re-encodes, resizes, converts or drops a
+file to make a comparison fit. Sharing a smaller selection instead is the sharer's decision.
+Publishing through Claude's Artifact tool is then the recipe in the skill.
 
 ## Invariants
 
@@ -284,4 +418,45 @@ generated-only: it is never edited by hand, and the README it receives says so a
 - **`standalone-single-file`** — the built page is one `.html` with everything inlined; its only
   network dependency is the pptxgenjs CDN script, loaded lazily on first export. A build that
   emits sidecar files or adds network dependencies breaks the artifact's only deployment story
-  (download one file, open it).
+  (download one file, open it). A published comparison's `imagecompare.json`, images and thumbs
+  files are data the page reads from its own directory (`published-comparison-opens-itself`), never
+  code it needs.
+- **`published-comparison-opens-itself`** — on load the page makes exactly one request for
+  `imagecompare.json` in its own directory. Absent or unreachable (any non-OK response, an HTML page
+  in its place as from a host that rewrites every path to one page, or a throwing fetch as on
+  `file://`), the landing is left exactly as it was. Present, it opens a comparison of exactly the
+  listed files, each fetched by its relative URL, unless the user has already opened a folder, which
+  wins. The manifest is reported on the landing rather than opened when `files` is not a non-empty
+  list of relative paths inside the page's directory, when `thumbs` is present and is not such a
+  list, or when `host` names no known regime. `files` is a listing, not a configuration: what the
+  files mean (columns, tuples, names, order) is decided by the shared scanner the dropped-folder path
+  uses, so a published comparison can never be laid out differently from the same folder opened
+  locally. `host` and `thumbs` change what the page offers and how fast the strip fills, never what
+  the files mean.
+- **`host-regime-is-one-table`** — everything a hosting regime implies (the capability flags a
+  published page states on `init`, and the publish limits the sharing script enforces) is one row
+  of the table in `standalone/hostRegimes.ts`, keyed by the manifest's `host`. The adapter and the
+  sharing script both read that row and restate none of it, so a new regime is a new row. An
+  unknown `host` is reported on the landing, never defaulted to a row it did not name: a page that
+  guessed would offer an export its host blocks, and report success with nothing saved.
+- **`published-originals-never-written`** — in a published comparison the only write target is the
+  viewer layer. A listed file is never written or deleted: the layer refuses both for a listed path,
+  every listed image reaches the webview flagged `readOnly` on `init`, and the webview greys Delete
+  and ignores Del for a target holding a `readOnly` image. Viewer-made files (crops, `results.txt`)
+  are written and deleted normally. Breaking any one of the three sites either loses the viewer's
+  own work, or offers a Delete that fails, or claims one that succeeded.
+- **`viewer-layer-per-comparison`** — a published comparison's viewer layer is namespaced by the
+  comparison's URL directory, so two comparisons served from one origin never read or overwrite
+  each other's votes or crops. Nothing in the layer leaves the browser except by the viewer's own
+  action: a copy to the clipboard (results.txt through `copyResults`, Copy Image), or a PPTX export
+  where the regime offers one. The page sends it nowhere.
+- **`packed-thumbs-never-required`** — a packed thumbnail replaces the full-image fetch for a
+  listed image's thumbnail and nothing else. A missing, malformed or unreachable thumbs file, or a
+  missing entry, falls back to decoding the full image, never to a failed slot or a stalled sweep.
+  Waiting for a thumbs file holds no work-pool slot, so a slow pack never holds back an image load.
+  Viewer-made files always decode.
+- **`pack-refuses-never-alters`** — the sharing script publishes the comparison's bytes unchanged
+  or refuses. It never re-encodes, resizes, converts or drops a file to fit a limit. A refusal
+  names every exceeded limit with its measured value and the offending files, exits non-zero, and
+  leaves nothing staged. A silently fitted comparison would be judged on pixels its author never
+  produced.

@@ -12,8 +12,8 @@ import {
 // Provider: src/imageCompareProvider.ts sendInitData (whose saveSessionAs is `!!state.sessionFileUri`;
 // pinned true here for its most capable case — it is the one flag no menu item reads).
 // Standalone: standalone/adapter.ts sendInit.
-const EXTENSION: HostCapabilities = { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true };
-const STANDALONE: HostCapabilities = { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false };
+const EXTENSION: HostCapabilities = { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false };
+const STANDALONE: HostCapabilities = { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, exportPptx: true, copyResults: false };
 
 const image: MenuContext = { section: 'image', tupleIndex: 3, modalityIndex: 1 };
 const pill: MenuContext = { section: 'pill', tupleIndex: 3, modalityIndex: 1 };
@@ -44,6 +44,13 @@ describe('context menu model (contextMenuModel.ts, real code)', () => {
       expect(ids(ctx, NO_HOST_CAPABILITIES)).not.toContain('copyPath');
       expect(ids(ctx, NO_HOST_CAPABILITIES)).not.toContain('revealInExplorer');
     }
+  });
+
+  // An init that names no capabilities claims none: no PPTX button, no results.txt button
+  // (docs/crop-and-pptx.md; docs/standalone.md, "Publishing a comparison").
+  it('claims neither a PPTX export nor a results copy when nothing is stated', () => {
+    expect(NO_HOST_CAPABILITIES.exportPptx).toBe(false);
+    expect(NO_HOST_CAPABILITIES.copyResults).toBe(false);
   });
 
   it('keeps the two local items reachable from any host, capabilities or not', () => {

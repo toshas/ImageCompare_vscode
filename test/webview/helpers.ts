@@ -28,7 +28,7 @@ export interface IcState {
   votingEnabled: boolean;
   pptxBusy: boolean;
   thumbUrlsLive: number;
-  capabilities: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean };
+  capabilities: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean; exportPptx: boolean; copyResults: boolean };
   deleteUnit: 'tuple' | 'image';
 }
 

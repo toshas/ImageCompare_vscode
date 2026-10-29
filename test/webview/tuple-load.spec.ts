@@ -50,13 +50,13 @@ async function loadPartial(page: Page): Promise<void> {
   await page.waitForTimeout(PAST_DWELL_MS);
 }
 
-/** Dispatch keys and read what the bundle posted in the *same* turn — before any timer can fire. */
-async function pressAndCapture(page: Page, codes: string[]): Promise<any[]> {
-  return page.evaluate((keys) => {
+/** Dispatch keys and read what the bundle posted of `type` in the *same* turn — before any timer can fire. */
+async function pressAndCapture(page: Page, codes: string[], type = 'requestImage'): Promise<any[]> {
+  return page.evaluate(([keys, t]) => {
     const start = (window as any).__ic_outbound.length;
     for (const code of keys) document.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true }));
-    return (window as any).__ic_outbound.slice(start).filter((m: any) => m && m.type === 'requestImage');
-  }, codes);
+    return (window as any).__ic_outbound.slice(start).filter((m: any) => m && m.type === t);
+  }, [codes, type] as const);
 }
 
 async function requestsSince(page: Page, start: number): Promise<any[]> {
@@ -278,9 +278,9 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
   test('an arrow-key column move reports its column once the burst settles', async ({ page }) => {
     await loadPartial(page);
     const start = await outboundLength(page);
-    await pressAndCapture(page, ['ArrowRight']);
-    // Nothing yet: a key that may be the first repeat of a held burst is not a destination.
-    expect(await columnReports(page, start)).toHaveLength(0);
+    // Nothing yet: a key that may be the first repeat of a held burst is not a destination. Read in the
+    // key's own turn — a driver round-trip can outlast the dwell, and once did on a Windows runner.
+    expect(await pressAndCapture(page, ['ArrowRight'], 'setCurrentModality')).toHaveLength(0);
     await page.waitForTimeout(PAST_DWELL_MS);
 
     const reports = await columnReports(page, start);
@@ -300,9 +300,9 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
   test('a held arrow key reports once, at the column the burst ended on', async ({ page }) => {
     await loadPartial(page);
     const start = await outboundLength(page);
-    // Ten repeats in one turn — strictly inside the dwell, which is the shape a held key produces.
-    await pressAndCapture(page, new Array(10).fill('ArrowRight'));
-    expect(await columnReports(page, start)).toHaveLength(0);
+    // Ten repeats in one turn — strictly inside the dwell, which is the shape a held key produces —
+    // read in that same turn, as above.
+    expect(await pressAndCapture(page, new Array(10).fill('ArrowRight'), 'setCurrentModality')).toHaveLength(0);
     await page.waitForTimeout(PAST_DWELL_MS);
 
     const reports = await columnReports(page, start);

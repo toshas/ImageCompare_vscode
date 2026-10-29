@@ -205,7 +205,8 @@ the extension with `workbench.editor.customLabels.patterns`.
 
 Voting is enabled iff the mode allows it (`votingAvailable()` in `modePolicy.ts` — mode 3 is one row
 of unrelated files, with nothing to rank) **and** the host has somewhere to put the answer (the
-provider: `baseUri !== undefined || modalityDirs.size > 0`; the standalone: a writable root). The
+provider: `baseUri !== undefined || modalityDirs.size > 0`; the standalone: a writable root, which
+a published comparison is, its votes landing in the browser-local viewer layer — `docs/standalone.md`). The
 mode half is read from `ScanResult.mode`, not inferred from `baseUri`/`modalityDirs` both being unset
 — which is the same thing, until it isn't (`mode-is-explicit`).
 

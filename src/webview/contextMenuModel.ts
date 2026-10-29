@@ -8,6 +8,10 @@ export interface HostCapabilities {
   copyTextToClipboard: boolean;
   /** The host can save a copy of the session file. */
   saveSessionAs: boolean;
+  /** The host can hand the user a PPTX file; without it the PPTX button is not offered. */
+  exportPptx: boolean;
+  /** The host serves `copyResults`, putting results.txt's text on the clipboard. */
+  copyResults: boolean;
 }
 
 /** An `init` that names no capabilities claims none — an unstated capability is absent, never assumed. */
@@ -15,6 +19,8 @@ export const NO_HOST_CAPABILITIES: HostCapabilities = {
   revealInExplorer: false,
   copyTextToClipboard: false,
   saveSessionAs: false,
+  exportPptx: false,
+  copyResults: false,
 };
 
 /** The reveal action's one label, shared with the notice channel so the item text has a single definition. */

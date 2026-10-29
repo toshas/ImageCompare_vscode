@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { HostCapabilities } from '../../src/webview/contextMenuModel';
 import { NoticeEvent, buildNotice } from '../../src/webview/noticeChannel';
 
-const EXTENSION: HostCapabilities = { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true };
-const STANDALONE: HostCapabilities = { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false };
+const EXTENSION: HostCapabilities = { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false };
+const STANDALONE: HostCapabilities = { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, exportPptx: true, copyResults: false };
 
 describe('notice channel (noticeChannel.ts, real code)', () => {
   // Pinned against the strings the provider used to pass to showInformationMessage/showErrorMessage,
@@ -46,6 +46,19 @@ describe('notice channel (noticeChannel.ts, real code)', () => {
       expect(buildNotice(event, EXTENSION).action).toBeUndefined();
       expect(buildNotice(event, EXTENSION).tone).toBe('error');
     }
+  });
+
+  // The results.txt button's three outcomes (docs/standalone.md, "The viewer layer").
+  it('words the results.txt copy outcomes', () => {
+    const ARTIFACT: HostCapabilities = { ...STANDALONE, exportPptx: false, copyResults: true };
+    expect(buildNotice({ kind: 'resultsCopied', votes: 3 }, ARTIFACT))
+      .toEqual({ text: 'results.txt copied to the clipboard (3 votes)', tone: 'info' });
+    expect(buildNotice({ kind: 'resultsCopied', votes: 1 }, ARTIFACT).text)
+      .toBe('results.txt copied to the clipboard (1 vote)');
+    expect(buildNotice({ kind: 'noVotesToCopy' }, ARTIFACT))
+      .toEqual({ text: 'No votes to copy yet', tone: 'info' });
+    expect(buildNotice({ kind: 'copyResultsFailed', error: 'Document is not focused.' }, ARTIFACT))
+      .toEqual({ text: 'Could not copy results.txt: Document is not focused.', tone: 'error' });
   });
 
   it('tones a success as info', () => {

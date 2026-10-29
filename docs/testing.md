@@ -124,6 +124,21 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
 | `openRollup` | real source | The open-path rollup: the pure formatter's spans against hand-computed marks, the real provider emitting exactly one `[IC-OPEN]` line ahead of the sweep, where each mark is *taken* (burnt wall time must surface in `other`, never in a neighbour), what debug costs when off (the init payload is handed to `JSON.stringify` exactly once with debug on and never with it off, measured on a real open), and the handle census — node's own resource list shows the three `fs.watch` handles an open creates gone after the close, and every 10 s poll interval it started cleared |
 
+Four suites pin the published comparison and its sharing script (`docs/standalone.md`, "Publishing a
+comparison"), importing the real `standalone/` modules: `publishedComparison` (the manifest's
+`files`, `host` and `thumbs`, and the regime table's flags and limits against the contract's
+literals), `viewerLayer` (merged listings, layer-first reads, refused writes and deletes of listed
+paths, persistence across a fresh layer, a refused write costing only itself, namespace isolation,
+the in-memory fallback — over an in-memory store the test injects), `packedThumbs` (the format, a bad file or entry
+falling back, a file that never answers timing out, splitting within a UTF-8 byte limit) and
+`shareComparison` (layout per input shape, names made safe by the lookalike table with the
+page's own `parsePublishedManifest` reading the staged manifest, every refusal kind including a
+file list the page would read back short, a layout the page would not open, and names that collide
+only by case or Unicode normalization, the checks running before any thumbnail is built, batching
+with the page in every batch, the script's modules bundling for node with no `vscode` module, and the staged bytes compared with the sources — the real `sharePlan` over the real node IO and sharp, on temp copies of
+`test/fixtures/images`; sharp is wrapped pass-through so a test can see that it is handed bytes, never
+a path — see Findings).
+
 Two more suites sit in the same directory and import the real shipped code via the `vscode` mock
 alias: `test/unit/tupleMatching.test.ts` pins trie matching end to end (crop
 deprioritization, each tie-break in isolation, nested crops, matcher key order, the final row order
@@ -363,6 +378,31 @@ the fix, the docs, and the CI check.
   shape of a Layer-3 test that certifies nothing: it needs a real OPFS tree, a real artifact and a
   shrunk poll interval, none of which Vitest can supply, so a red run with the gate reverted is the
   only evidence it has.
+- **The published-comparison boot, by mutation.** The adapter's one `imagecompare.json` request — that
+  it is made, that a non-OK answer or an HTML page in its place leaves the landing alone, that a
+  folder opened while it is in flight wins, that each image is fetched by its encoded relative URL,
+  and that a rejected manifest is reported on the landing
+  (`docs/standalone.md: published-comparison-opens-itself`) — is pinned only by the five
+  `standalone page ...` tests in `test/webview/standalone-build.spec.ts`, which need a real server
+  and a real artifact. Each was watched failing against its own break (the boot call removed, the
+  `response.ok` check removed, the HTML check removed, the in-flight guard removed, the per-segment
+  encode removed, the landing report removed). The listing itself — what a manifest may name and how
+  each file is fetched — IS mutation-covered, in `test/unit/publishedComparison.test.ts`.
+- **The published comparison's wiring and affordances, by mutation.** That the adapter states the
+  regime row's flags, answers `copyResults` inside the click, wraps the published backend in an
+  IndexedDB-backed layer namespaced by the manifest's directory, flags listed images `readOnly`,
+  never polls a published root, serves packed thumbnails with the full-image fallback and never
+  holds a pool slot while the pack downloads, copies without the async clipboard API (a plain-http
+  host), and copies a published file's URL as its path — and that
+  the webview hides PPTX, shows results.txt and greys Delete from those flags — is pinned only by the
+  `standalone published comparison ...` tests in `test/webview/standalone-build.spec.ts` (plus the
+  unknown-host landing test) and by `test/webview/published-affordances.spec.ts`. Each was watched
+  failing against its own break of `standalone/adapter.ts` or `src/webview/main.ts`; one did not
+  discriminate a single site and says so in its header (the structural-change test survives removing
+  either one of the two refresh sites, since both re-decide). The rules underneath — the table, the
+  manifest fields, the layer, the namespace, the packed-thumbs fallback and the sharing script's
+  every refusal — are mutation-covered in the four suites above, and the `readOnly` payload in
+  `test/unit/initPayload.test.ts`.
 - **The carousel's DOM shape, by mutation.** `test/webview/column-virtualization.spec.ts` asserts
   tile counts and layout — that doubling the modalities adds no DOM, that the materialized columns
   are contiguous and correctly placed, and that scrolling releases the near end as it binds the far
@@ -1199,6 +1239,23 @@ the fix, the docs, and the CI check.
   `test/helpers/providerQuiesce.ts`, and a bed holding a bare `ThumbnailService` must `await flush()`
   before its temp root goes. Both warnings sit where the next author will be standing rather than only
   here — `test/unit/pollCost.test.ts`'s `finish()` and `test/unit/jimpFallback.test.ts`'s `afterAll`.
+
+- **The sharing script handed sharp a path, and Windows kept the file locked — the fourth of the
+  class** *(fixed)* — `test/unit/shareComparison.test.ts` failed seven tests on Windows CI only, every
+  one in its `afterEach`: `EPERM: operation not permitted, unlink '…\cmp\gt\airplane.jpg'` (or
+  `'…\runs\x\s1.jpg'`), a *source* fixture. The seven were exactly the tests that thumbnail a JPEG photo;
+  the ones refused before thumbnailing were green, and so was the one that thumbnails 509 tiny PNGs by
+  path, so the lock is not on every file libvips opens by path — it was on the photos.
+  `standalone/shareNodeIo.ts` was the only `sharp(…)` call in shipped code (`src/`, `standalone/`) given
+  a file path — every other one gets bytes — while on Linux neither `/proc/self/fd` nor
+  `sharp.cache().files` shows anything held afterwards. Harmless in a
+  script that exits, it would lock the sharer's images inside a long-lived extension host. Fixed by
+  reading the bytes first; the witness judges the call at the seam, as the two `node:fs` findings
+  above do: a pass-through wrapper over the real sharp records every input, and the test fails if one
+  is a string. The same run's eighth failure was the test's own: it created file names holding
+  `: * ? " < > |` to exercise the lookalike table, which no Windows file name can hold (NTFS reads the
+  colon as a stream separator and silently creates `a`). That test now skips on Windows, where there
+  is no such name to map.
 
 ## The generated-output rule
 

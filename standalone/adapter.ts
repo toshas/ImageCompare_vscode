@@ -1,8 +1,11 @@
 /** Standalone IO backend + protocol host for the real webview bundle: it decides nothing — matching, naming, ordering, results format, crop math and deck layout are imports (docs/standalone.md: adapter-contains-no-logic). */
 import { FileType, Uri, setStandaloneFs, StandaloneFs } from './shims/vscode';
-import { createDroppedEntryBackend, createFsaBackend, createFileListBackend, OpenedRoot } from './fsBackends';
+import { createDroppedEntryBackend, createFsaBackend, createFileListBackend, createPublishedBackend, OpenedRoot, parsePublishedManifest } from './fsBackends';
+import { HOST_REGIMES, RegimeCapabilities } from './hostRegimes';
+import { createViewerLayer, indexedDbLayerStore, viewerLayerNamespace } from './viewerLayer';
+import { decodePackedThumb, loadPackedThumbs, PackedThumb, THUMBNAIL_JPEG_QUALITY, THUMBNAIL_SIZE, thumbnailMimeFor } from './packedThumbs';
 import { scanForImages, mapWinnersToIndices, RESULTS_FILENAME } from '../src/fileService';
-import { parseResults, persistResults } from '../src/resultsFile';
+import { parseResults, persistResults, serializeResults, winnersToNames } from '../src/resultsFile';
 import { passthroughMime } from '../src/imageMime';
 import { ImageServeIo, ImageServeReply, refreshTupleImages, serveImage } from '../src/imageServe';
 import { parsePpmx } from '../src/ppmxParser';
@@ -19,7 +22,7 @@ import { planThumbnails, runThumbnailSweep, SWEEP_REQUEUE, ThumbnailBytes } from
 import { SweepAimPolicy } from '../src/sweepAimPolicy';
 import { normalizeImageBytes } from '../src/wireFormat';
 import { buildInitPayload } from '../src/initPayload';
-import { nextPanelKey, poolWidth, Priority, TaskCancelled, WorkPool } from '../src/workPool';
+import { nextPanelKey, poolWidth, Priority, SubmitOptions, TaskCancelled, WorkPool } from '../src/workPool';
 import { configureDebugLog, resetDebugClock } from '../src/debugLog';
 import type PptxGenJS from 'pptxgenjs';
 import {
@@ -40,8 +43,24 @@ import {
 
 declare const __IC_VERSION__: string;
 
+/** What a published comparison adds to an opened root: its regime's flags and its packed thumbnails (docs/standalone.md, "Publishing a comparison"). */
+interface PublishedContext {
+  capabilities: RegimeCapabilities;
+  /** Never rejects: a missing or malformed thumbs file is an empty map (docs/standalone.md: packed-thumbs-never-required). */
+  thumbs: Promise<Map<string, PackedThumb>>;
+}
+
+/** A folder the user opened hands over a downloaded deck, and its votes already land in its own results.txt, so it offers no copy. */
+const OPENED_FOLDER_CAPABILITIES: RegimeCapabilities = { exportPptx: true, copyResults: false };
+
 interface StandaloneState {
   fs: StandaloneFs;
+  /** True for a path this root cannot delete; flags it `readOnly` on init (docs/standalone.md: published-originals-never-written). */
+  isReadOnly(path: string): boolean;
+  /** Present only for a comparison published next to the page. */
+  published?: PublishedContext;
+  /** The results.txt text as last read or written, so a copy is exactly what the file holds. */
+  resultsText?: string;
   basePath: string;
   scan: ScanResult;
   winners: Map<number, number>;
@@ -76,8 +95,7 @@ configureDebugLog({
   sink: line => console.log(line)
 });
 
-// Same config the provider reads from settings; the standalone has no settings UI, so these are the extension's defaults.
-const THUMBNAIL_SIZE = 100;
+// Same config the provider reads from settings; the standalone has no settings UI, so these are the extension's defaults (THUMBNAIL_SIZE is packedThumbs.ts's, shared with the sharing script).
 const PREFETCH_COUNT = 3;
 
 // The stub must exist before the webview bundle's top-level `acquireVsCodeApi()` call runs.
@@ -155,15 +173,28 @@ function canvasToBytes(canvas: HTMLCanvasElement, mime: string, quality?: number
 
 const canvasToPngBytes = (canvas: HTMLCanvasElement): Promise<Uint8Array> => canvasToBytes(canvas, 'image/png');
 
+/** A listed image's packed thumbnail, or null for anything the pack cannot serve — which then decodes (docs/standalone.md: packed-thumbs-never-required). */
+async function packedThumbnail(s: StandaloneState, img: ImageFile): Promise<ThumbnailBytes | null> {
+  if (!s.published || !s.isReadOnly(img.uri.path)) return null;
+  const entry = (await s.published.thumbs).get(img.uri.path.substring(s.basePath.length + 1));
+  const bytes = entry ? decodePackedThumb(entry) : null;
+  return bytes && entry ? { bytes: normalizeImageBytes(bytes), mime: entry.mime } : null;
+}
+
+/** The packed thumbnail, awaited before any pool slot is taken so a pack still downloading holds none; else the decode, pooled with `options` (docs/standalone.md: packed-thumbs-never-required). */
+async function thumbnailBytes(s: StandaloneState, img: ImageFile, options: SubmitOptions): Promise<ThumbnailBytes> {
+  return (await packedThumbnail(s, img)) ?? pool.submit(() => decodedThumbnail(s, img), options);
+}
+
 /** Thumbnail at the same decode target the provider uses (thumbnailSize * 2 longest side), on the provider's binary wire shape. */
-async function thumbnailBytes(s: StandaloneState, img: ImageFile): Promise<ThumbnailBytes> {
+async function decodedThumbnail(s: StandaloneState, img: ImageFile): Promise<ThumbnailBytes> {
   const bytes = await s.fs.readFile(img.uri.path);
   const dec = await decodeFile(bytes, img.name);
   const canvas = drawScaled(dec, THUMBNAIL_SIZE * 2);
   dec.close();
-  const mime = extOf(img.name) === '.png' ? 'image/png' : 'image/jpeg';
+  const mime = thumbnailMimeFor(img.name);
   // Same normalization as the provider's post path (docs/loading-architecture.md: image-payload-normalized).
-  return { bytes: normalizeImageBytes(await canvasToBytes(canvas, mime, 0.8)), mime };
+  return { bytes: normalizeImageBytes(await canvasToBytes(canvas, mime, THUMBNAIL_JPEG_QUALITY / 100)), mime };
 }
 
 /** The host's whole contribution to the aim: two timer primitives, no decision (docs/standalone.md: host-supplies-data-not-policy, docs/loading-architecture.md: sweep-centre-dwells). */
@@ -180,9 +211,8 @@ function generateAllThumbnails(s: StandaloneState): Promise<void> {
   s.sweepAim.noteSweepStart(s.currentTupleIndex);
   return runThumbnailSweep(planThumbnails(s.scan.tuples, s.scan.modalities), {
     makeThumbnail: item =>
-      pool
-        // The session is the fair-share bucket, as the panel is in the provider (docs/loading-architecture.md: bulk-sweeps-share-the-pool).
-        .submit(() => thumbnailBytes(s, item.image), { priority: Priority.THUMBNAIL_BULK, key: sweepPoolKey(s), group: s.poolKey })
+      // The session is the fair-share bucket, as the panel is in the provider (docs/loading-architecture.md: bulk-sweeps-share-the-pool).
+      thumbnailBytes(s, item.image, { priority: Priority.THUMBNAIL_BULK, key: sweepPoolKey(s), group: s.poolKey })
         .catch(error => {
           // A live session's cancellation is the sweep's own re-aim drop; a re-open settles the slot silently, like the provider's disposed panel (docs/loading-architecture.md: sweep-cancels-on-reaim).
           if (error instanceof TaskCancelled) return s.closed ? null : SWEEP_REQUEUE;
@@ -209,7 +239,7 @@ async function sendThumbnails(s: StandaloneState, tupleIndices: TupleIndex[]): P
       }
       try {
         // On-demand priority, ranked above the open-time bulk sweep — the provider's class for these re-requests.
-        const thumb = await pool.submit(() => thumbnailBytes(s, img), { priority: Priority.THUMBNAIL, key: s.poolKey });
+        const thumb = await thumbnailBytes(s, img, { priority: Priority.THUMBNAIL, key: s.poolKey });
         post({ type: 'thumbnail', tupleIndex, modalityIndex: asOriginal(modalityIndex), bytes: thumb.bytes, mime: thumb.mime });
       } catch (err) {
         if (err instanceof TaskCancelled) continue;
@@ -291,8 +321,14 @@ async function saveResults(s: StandaloneState): Promise<void> {
   // No ranking, nothing to persist — and an empty winners map DELETES the file, which in a file list would take a `results.txt` the comparison never owned (docs/session-files.md: mode-behaviour-is-a-table).
   if (!MODES[s.scan.mode].voting) return;
   await persistResults(s.scan.tuples, s.scan.modalities, s.winners, {
-    writeText: text => s.fs.writeFile(resultsPath(s), new TextEncoder().encode(text)),
-    deleteFile: () => s.fs.delete(resultsPath(s)),
+    writeText: text => {
+      s.resultsText = text;
+      return s.fs.writeFile(resultsPath(s), new TextEncoder().encode(text));
+    },
+    deleteFile: () => {
+      s.resultsText = undefined;
+      return s.fs.delete(resultsPath(s));
+    },
   });
   await refreshResultsFingerprint(s);
 }
@@ -422,7 +458,7 @@ async function handleCropImages(
         if (!img || modalityIndex < 0) continue;
         try {
           // Post-crop thumbnails at on-demand priority, the provider's class for a regenerated slot.
-          const thumb = await pool.submit(() => thumbnailBytes(s, img), { priority: Priority.THUMBNAIL, key: s.poolKey });
+          const thumb = await thumbnailBytes(s, img, { priority: Priority.THUMBNAIL, key: s.poolKey });
           post({ type: 'thumbnail', tupleIndex: asTuple(newTupleIndex), modalityIndex: asOriginal(modalityIndex), bytes: thumb.bytes, mime: thumb.mime });
         } catch (err) {
           if (err instanceof TaskCancelled) continue;
@@ -525,6 +561,39 @@ async function handleExportPptx(
   });
 }
 
+/** Text onto the clipboard: the async API where the context is secure, else the copy command a plain-http origin still allows; synchronous up to the write, so it runs inside the click (docs/standalone.md, "The viewer layer"). */
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  const copied = document.execCommand('copy');
+  area.remove();
+  focused?.focus();
+  return copied ? Promise.resolve() : Promise.reject(new Error('the browser refused to copy'));
+}
+
+/** Put results.txt's text on the clipboard; synchronous up to the write, so the call runs inside the click's user activation (docs/standalone.md: viewer-layer-per-comparison). */
+function handleCopyResults(s: StandaloneState): void {
+  if (s.winners.size === 0) {
+    postNotice({ kind: 'noVotesToCopy' });
+    return;
+  }
+  const votes = s.winners.size;
+  // The shared serializer, never a format of this host's own (docs/standalone.md: results-format-shared).
+  const text = s.resultsText ?? serializeResults(s.scan.tuples, winnersToNames(s.winners, s.scan.modalities), s.scan.modalities);
+  const failed = (e: unknown) => postNotice({ kind: 'copyResultsFailed', error: e instanceof Error ? e.message : String(e) });
+  try {
+    copyText(text).then(() => postNotice({ kind: 'resultsCopied', votes }), failed);
+  } catch (e) {
+    failed(e);
+  }
+}
+
 /** Serve a context-menu item the webview could not; which items exist is the shared model's call (docs/standalone.md: affordances-rendered-by-the-webview). */
 async function handleMenuAction(s: StandaloneState, action: MenuActionId, ctx: MenuContext): Promise<void> {
   if (action !== 'copyPath') return;
@@ -533,8 +602,10 @@ async function handleMenuAction(s: StandaloneState, action: MenuActionId, ctx: M
   const tuple = ctx.section === 'image' ? s.scan.tuples[ctx.tupleIndex] : undefined;
   const img = tuple ? findImageForModality(tuple, modality) : undefined;
   const target = img ? img.uri.path : modalityPath(s, modality);
+  // A published file or column is addressed by its URL; the viewer's own crops have none, so they keep the comparison's path.
+  const text = s.published && (!img || s.isReadOnly(target)) ? publishedUrl(target.substring(s.basePath.length + 1)) : target;
   try {
-    await navigator.clipboard.writeText(target);
+    await copyText(text);
     postNotice({ kind: 'pathCopied' });
   } catch (e) {
     postNotice({ kind: 'copyPathFailed', error: e instanceof Error ? e.message : String(e) });
@@ -556,6 +627,7 @@ async function sendInit(s: StandaloneState): Promise<void> {
       const text = new TextDecoder().decode(await s.fs.readFile(resultsPath(s)));
       // IO wrapper only: the format is decided in resultsFile.ts (docs/standalone.md: results-format-shared).
       s.winners = new Map(mapWinnersToIndices(parseResults(text), s.scan.tuples, s.scan.modalities));
+      s.resultsText = text;
     } catch { /* no results.txt yet */ }
     // Baseline for the poll: only edits after this point are external.
     await refreshResultsFingerprint(s);
@@ -569,10 +641,15 @@ async function sendInit(s: StandaloneState): Promise<void> {
     votingEnabled,
     labelsExplicit: false,
     version: __IC_VERSION__,
-    // No file tree to reveal into and no session file to copy; text clipboard is the browser's (docs/standalone.md: affordances-rendered-by-the-webview).
-    capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false },
+    // No file tree, no session file, the browser's text clipboard; a published comparison's export/copy flags are its regime row's (docs/standalone.md: affordances-rendered-by-the-webview) (docs/standalone.md: host-regime-is-one-table).
+    capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, ...(s.published?.capabilities ?? OPENED_FOLDER_CAPABILITIES) },
     // What Del removes here, stated rather than inferred by the webview (docs/session-files.md: mode-behaviour-is-a-table).
     deleteUnit: MODES[s.scan.mode].deleteUnit,
+    // Whether a slot's file can be deleted is the root's to say; the webview greys Delete on it (docs/standalone.md: published-originals-never-written).
+    isReadOnly: (tupleIndex, modality) => {
+      const img = findImageForModality(s.scan.tuples[tupleIndex], modality);
+      return !!img && s.isReadOnly(img.uri.path);
+    },
   }));
   void generateAllThumbnails(s);
 }
@@ -626,6 +703,10 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
     case 'menuAction':
       await handleMenuAction(s, message.action, message.ctx);
       break;
+    case 'copyResults':
+      // No await before it: the clipboard write must stay inside the click that posted this.
+      handleCopyResults(s);
+      break;
     case 'saveSessionAs':
     case 'revealPath':
     case 'log':
@@ -660,7 +741,7 @@ async function postSlotThumbnail(s: StandaloneState, tupleIndex: TupleIndex, mod
   const img = tuple && modality ? findImageForModality(tuple, modality) : undefined;
   if (!img) return;
   try {
-    const thumb = await pool.submit(() => thumbnailBytes(s, img), { priority: Priority.THUMBNAIL, key: s.poolKey });
+    const thumb = await thumbnailBytes(s, img, { priority: Priority.THUMBNAIL, key: s.poolKey });
     post({ type: 'thumbnail', tupleIndex, modalityIndex, bytes: thumb.bytes, mime: thumb.mime });
   } catch (err) {
     if (err instanceof TaskCancelled) return;
@@ -899,8 +980,8 @@ function stopPolling(s: StandaloneState): void {
 
 /** Arm the interval poll (plus the FileSystemObserver accelerator when the browser has one) for a writable root. */
 function startPolling(s: StandaloneState, root: OpenedRoot): void {
-  // Read-only roots are static File lists — there is nothing to re-list, so they never poll.
-  if (!s.fs.writable) return;
+  // Read-only roots are static File lists, and a published one changes only by the viewer's own writes — neither has anything to re-list (docs/standalone.md, "The viewer layer").
+  if (!s.fs.writable || s.published) return;
   // The cycle lists `<root>/<column>`, which only this shape has; elsewhere every cycle would re-read a `results.txt` the comparison does not own (docs/file-watching.md, "Events by mode") (docs/session-files.md: mode-behaviour-is-a-table).
   if (!MODES[s.scan.mode].rootSubdirsAreColumns) return;
   s.pollTimer = setInterval(() => schedulePollCycle(s), seam.pollIntervalMs);
@@ -918,7 +999,7 @@ function startPolling(s: StandaloneState, root: OpenedRoot): void {
   } catch { /* observer unavailable mid-detect: interval-only */ }
 }
 
-async function openRoot(root: OpenedRoot): Promise<void> {
+async function openRoot(root: OpenedRoot, published?: PublishedContext): Promise<void> {
   // Re-open stops the old poll and drops the previous root's queued (not running) work, as the provider does per panel (docs/loading-architecture.md: panel-keys-never-reused).
   if (state) {
     stopPolling(state);
@@ -932,6 +1013,8 @@ async function openRoot(root: OpenedRoot): Promise<void> {
   const scan = await scanForImages([Uri.file(root.rootPath)]);
   const s: StandaloneState = {
     fs: root.fs,
+    isReadOnly: path => root.isReadOnly(path),
+    published,
     // The opened directory, never `roots[0]` — a file-list scan's roots are the files (docs/session-files.md: mode-is-explicit).
     basePath: Uri.file(root.rootPath).path,
     scan,
@@ -1085,5 +1168,57 @@ const seam = {
   open: (handle: FileSystemDirectoryHandle) => openRoot(createFsaBackend(handle)),
   // The drop handler's non-FSA branch, exposed because a synthetic DataTransfer cannot carry entries.
   openDroppedEntry: async (entry: FileSystemDirectoryEntry) => openRoot(await createDroppedEntryBackend(entry)),
+  // Settles once the published-comparison boot has opened, reported, or found nothing beside the page.
+  booted: openPublishedComparison(),
 };
 (window as unknown as { __ic_standalone: unknown }).__ic_standalone = seam;
+
+/** A published path as it is requested: each segment URI-encoded. */
+function encodedPublishedPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/** A published path's absolute URL, encoded as it is fetched. */
+function publishedUrl(path: string): string {
+  return new URL(encodedPublishedPath(path), location.href).href;
+}
+
+/** One relative GET per published file; a missing one fails its own slot like any unreadable file (docs/standalone.md: published-comparison-opens-itself). */
+async function fetchPublishedResponse(path: string): Promise<Response> {
+  const response = await fetch(encodedPublishedPath(path));
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+  return response;
+}
+
+async function fetchPublishedFile(path: string): Promise<ArrayBuffer> {
+  return (await fetchPublishedResponse(path)).arrayBuffer();
+}
+
+/** A page uploaded next to an imagecompare.json opens that comparison; without one the landing stays (docs/standalone.md: published-comparison-opens-itself). */
+async function openPublishedComparison(): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch('imagecompare.json', { cache: 'no-cache' });
+  } catch {
+    return;
+  }
+  // A host that answers every path with an HTML page (SPA fallback) has no manifest either.
+  if (!response.ok || /text\/html/i.test(response.headers.get('content-type') ?? '')) return;
+  try {
+    const manifest = parsePublishedManifest(await response.text());
+    // A folder the user opened while the manifest was in flight wins.
+    if (state) return;
+    // Started now and in parallel; a thumbnail awaits it but never fails because of it (docs/standalone.md: packed-thumbs-never-required).
+    const thumbs = loadPackedThumbs(manifest.thumbs, async path => (await fetchPublishedResponse(path)).text());
+    const listed = createPublishedBackend(manifest.files, fetchPublishedFile);
+    // Namespaced by the manifest's URL directory, so sibling comparisons on one origin never share a layer (docs/standalone.md: viewer-layer-per-comparison).
+    const namespace = viewerLayerNamespace(new URL('imagecompare.json', location.href).href);
+    const listedPaths = new Set(manifest.files.map(file => `${listed.rootPath}/${file}`));
+    // Loaded before the scan, so the viewer's votes are on init and their crops are rows (docs/standalone.md: published-originals-never-written).
+    const root = await createViewerLayer(listed, listedPaths, indexedDbLayerStore(), namespace);
+    if (state) return;
+    await openRoot(root, { capabilities: HOST_REGIMES[manifest.host].capabilities, thumbs });
+  } catch (err) {
+    showLandingError(err);
+  }
+}

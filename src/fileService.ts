@@ -15,7 +15,7 @@ function debugLog(...args: unknown[]): void {
 
 // One comparator shared with the watcher-time row insertion (docs/file-watching.md: rows-insert-in-order).
 import { naturalCompare as naturalSort } from './watcherLogic';
-import { CROP_SUFFIX_RE } from './cropPlan';
+import { CROP_SUFFIX_RE, enumeratedImages } from './cropPlan';
 import { MODES } from './modePolicy';
 
 /**
@@ -570,11 +570,10 @@ async function scanFiles(uris: vscode.Uri[]): Promise<ScanResult> {
  * A directory's own images read as a mode-3 file list. `_cropNN` outputs are this app's own writes:
  * they interleave with the parents they were cut from, so enumeration drops them — unless that
  * would leave nothing to compare, so a folder someone moved their crops into still opens
- * (docs/session-files.md: folder-of-images-is-a-file-list) (docs/crop-and-pptx.md: cropnn-writer-reader-match).
+ * (docs/session-files.md: folder-of-images-is-a-file-list).
  */
 function scanEnumeratedFiles(files: Array<{ name: string; uri: vscode.Uri }>): ScanResult {
-  const withoutCrops = files.filter(file => !CROP_SUFFIX_RE.test(stripExtension(file.name)));
-  const chosen = withoutCrops.length >= MODES[3].minColumns ? withoutCrops : files;
+  const chosen = enumeratedImages(files);
   if (chosen.length < MODES[3].minColumns) {
     throw new Error('This directory holds one image; a comparison needs at least 2.');
   }
