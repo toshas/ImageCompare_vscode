@@ -527,9 +527,16 @@ the fix, the docs, and the CI check.
   answer is in `test/unit/publishTargets.test.ts`, which reads the workflow as a document (js-yaml, an
   explicit devDependency) and evaluates the real `if:` expressions under a model of Actions' own
   semantics — implicit `success()` included — rather than asserting their wording, so an equivalent
-  rewrite passes and a weakening does not. Twelve mutations: all twelve killed with those cases
-  present, eleven of them surviving once the cases are removed — the twelfth mutates the semantic
+  rewrite passes and a weakening does not. Fourteen mutations: all fourteen killed with those cases
+  present, twelve of them surviving once the cases are removed — the other two mutate the semantic
   model itself, which goes with them. (`docs/image-backends.md: pull-request-builds-never-publish`)
+- **The PR install check that never ran** *(fixed)* — the item above claimed `codium-smoke` ran on
+  every PR, and the suite agreed, but every real PR run skipped it: the model read the implicit
+  `success()` from a job's direct `needs` only, while Actions carries a skip down the whole chain, so
+  the gates a PR skips skipped the smoke job too. The model now reads every ancestor, which turned the
+  existing PR assertion red against the old workflow before `codium-smoke` got its own `if:`. The
+  same correction showed `publish`'s event gate had been killed only by the model's error; that case
+  now pins the gate's own condition with every ancestor green.
 
 - **The artifact scan passed the very VSIX that shipped the defect** *(fixed, same round)* — the
   scan added above was a per-target *deny*-list naming strays for four of the ten legs. The other

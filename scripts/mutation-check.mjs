@@ -2938,6 +2938,22 @@ const mutations = [
     replace: '  return value;',
     killedBy: 'Actions-semantics test (a model that ignores the implicit success() would call a doomed build green)'
   },
+  {
+    name: 'publish on a PR: codium-smoke left to the implicit success(), so the gates a PR skips skip it too',
+    file: '.github/workflows/publish.yml',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: "    if: ${{ !cancelled() && needs.build.result == 'success' }}\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/download-artifact@v7",
+    replace: '    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/download-artifact@v7',
+    killedBy: 'PR build test (every real PR run skipped the install check while the model called it green)'
+  },
+  {
+    name: 'publish on a PR: the workflow model reads a skip one hop deep instead of down the whole chain',
+    file: 'test/unit/publishTargets.test.ts',
+    suite: 'test/unit/publishTargets.test.ts',
+    find: '  const ancestors = ancestorsOf(id);',
+    replace: '  const ancestors = needsOf(id);',
+    killedBy: 'Actions-semantics test (the one-hop model is how codium-smoke read green on a PR it never ran on)'
+  },
 
   // ── The emptied comparison's terminal notice, and the sweep's root-existence edge ──
   {

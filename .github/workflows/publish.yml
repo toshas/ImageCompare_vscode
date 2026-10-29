@@ -274,6 +274,8 @@ jobs:
   # BEFORE anything is published — a packaging defect here is exactly what dev-mode tests can't see.
   codium-smoke:
     needs: build
+    # The gates a PR skips would skip this too, a skip carrying down the whole chain, so it reads build's own result (docs/image-backends.md: pull-request-builds-never-publish).
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
