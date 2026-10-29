@@ -4,6 +4,8 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-29
+
 ### Added
 - **The standalone page publishes a comparison as it is.** Uploaded unmodified next to an
   `imagecompare.json` — a plain listing of the images, in the usual one-folder-per-column layout —
