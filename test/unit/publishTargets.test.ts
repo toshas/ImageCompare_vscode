@@ -601,7 +601,33 @@ function needsOf(id: string): string[] {
   return Array.isArray(needs) ? needs : [needs];
 }
 
+/** Every job `id` depends on, directly or through another job. */
+function ancestorsOf(id: string): string[] {
+  const seen = new Set<string>();
+  const visit = (job: string): void => {
+    for (const n of needsOf(job)) {
+      if (!seen.has(n)) { seen.add(n); visit(n); }
+    }
+  };
+  visit(id);
+  return [...seen];
+}
+
 type JobResult = 'success' | 'failure' | 'cancelled' | 'skipped' | 'not-run';
+
+/**
+ * The implicit success() and failure() read EVERY ancestor, not just the jobs `id` names: Actions
+ * documents that "a failure or skip applies to all jobs in the dependency chain from the point of
+ * failure or skip onwards". Reading direct `needs` only once called codium-smoke green on a pull
+ * request while every real PR run skipped it behind the gates the PR skips (run 40854658590).
+ */
+function statusFor(id: string, outcome: Record<string, JobResult>): { success: boolean; failure: boolean } {
+  const ancestors = ancestorsOf(id);
+  return {
+    success: ancestors.every((n) => outcome[n] === 'success'),
+    failure: ancestors.some((n) => outcome[n] === 'failure')
+  };
+}
 
 function refFor(event: string): string {
   return event === 'push' ? 'refs/tags/v9.9.9' : 'refs/pull/7/merge';
@@ -631,11 +657,7 @@ function jobOutcomes(
         github: { event_name: event, ref: opts.ref ?? refFor(event) },
         needs: needsCtx,
         inputs: {},
-        status: {
-          success: needs.every((n) => outcome[n] === 'success'),
-          failure: needs.some((n) => outcome[n] === 'failure'),
-          cancelled: opts.cancelled === true
-        }
+        status: { ...statusFor(id, outcome), cancelled: opts.cancelled === true }
       };
       // A cancelled run cancels the jobs that never consulted cancelled() themselves — the whole
       // reason Actions' docs push !cancelled() over always() for a condition that drops success().
@@ -708,6 +730,14 @@ describe('publish workflow on a pull request', () => {
 
     expect(pr.publish).toBe('skipped');
     expect(pr['verify-openvsx']).toBe('skipped');
+
+    // Gated on the event by its OWN condition, not only by the skip it inherits from the gates a PR
+    // skips today: were a gate ever to run on a PR, every ancestor would be green and this alone stands.
+    const allGreen: EvalContext = {
+      ...runContext('pull_request'),
+      needs: Object.fromEntries(needsOf('publish').map((n) => [n, { result: 'success' }]))
+    };
+    expect(conditionHolds(doc.jobs.publish.if, allGreen)).toBe(false);
 
     // Not vacuous: those commands exist, in jobs a PR skips, and a tag run does reach them.
     const publishing = [/\bovsx publish\b/, /\bvsce publish\b/];
@@ -805,6 +835,12 @@ describe('publish workflow release gating', () => {
     expect(conditionHolds('${{ !cancelled() }}', ctx({ cancelled: true }))).toBe(false);
     expect(conditionHolds(undefined, ctx({}))).toBe(false);
     expect(conditionHolds(undefined, ctx({ success: true }))).toBe(true);
+    // A skip carries down the whole chain, not one hop: a job whose own needs all succeeded is still
+    // skipped behind a skipped grandparent — what every real PR run did to codium-smoke.
+    const behindSkippedGates = { test: 'skipped', 'test-full': 'skipped', build: 'success' } as Record<string, JobResult>;
+    expect(statusFor('codium-smoke', behindSkippedGates).success).toBe(false);
+    expect(statusFor('codium-smoke', { ...behindSkippedGates, test: 'success', 'test-full': 'success' }).success).toBe(true);
+    expect(statusFor('publish', { test: 'failure', 'test-full': 'success', build: 'skipped', 'codium-smoke': 'skipped' }).failure).toBe(true);
     expect(namesStatusFunction('${{ always() }}')).toBe(true);
     expect(namesStatusFunction("${{ github.event_name != 'pull_request' }}")).toBe(false);
     // Short-circuit: a taken `||` must not evaluate a right side that would throw.

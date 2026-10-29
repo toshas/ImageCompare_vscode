@@ -417,10 +417,14 @@ expectation table.
   PR build that packaged nothing would be worse than no PR build, because it reports green.
   *Publishes nothing*: the `publish` job is gated on the event itself, not merely its steps, so no
   `pull_request` run — a fork's included — reaches `ovsx publish` or `vsce publish`, and
-  `verify-openvsx` is skipped behind it. Two traps ride along. Giving `build` an `if:` so it can run
+  `verify-openvsx` is skipped behind it. Three traps ride along. Giving `build` an `if:` so it can run
   while both gate jobs are *skipped* removes the implicit `success()`, so the condition must itself
   refuse a gate that **failed** or was **cancelled** — otherwise a tag can publish a build that fails
-  on Windows, which is precisely what `needs: [test, test-full]` exists to prevent. And cancelling
+  on Windows, which is precisely what `needs: [test, test-full]` exists to prevent. A skip carries
+  down the whole `needs` chain, not one hop: `codium-smoke`, whose one need is a green `build`, was
+  skipped behind those same gates on every PR until it got an `if:` reading `build`'s result — and
+  `publish` keeps its event gate although that rule skips it today, because the gate is what still
+  holds if both gate jobs ever run on a PR. And cancelling
   superseded runs must exempt tags: a publish cut mid-flight leaves the two marketplaces
   half-updated, so `cancel-in-progress` is true for `pull_request` only.
 - **`universal-has-no-native`** — the universal VSIX carries the WASM tier and no native
