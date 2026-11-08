@@ -549,6 +549,70 @@ const mutations = [
     killedBy: 'linear-speed test (an Alt notch travels ALT_SPEED times as far)'
   },
   {
+    name: 'pillReorder: a move becomes a swap (the pills between stop closing up; votes re-attributed)',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (from < k && k <= to) return k - 1;\n  if (to <= k && k < from) return k + 1;',
+    replace: '  if (k === to) return from;',
+    killedBy: 'movedIndex 0 -> 2 test ([A, B, C, D] -> [B, C, A, D], not [C, B, A, D])'
+  },
+  {
+    name: 'pillReorder: a rightward move shifts the pills between the wrong way',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (from < k && k <= to) return k - 1;',
+    replace: '  if (from < k && k <= to) return k + 1;',
+    killedBy: 'movedIndex 0 -> 2 test (B and C land at 0 and 1)'
+  },
+  {
+    name: 'pillReorder: a leftward move shifts the pills between the wrong way',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (to <= k && k < from) return k + 1;',
+    replace: '  if (to <= k && k < from) return k - 1;',
+    killedBy: 'movedIndex 3 -> 1 test (B and C land at 2 and 3)'
+  },
+  {
+    name: 'pillReorder: reaching a right neighbour\'s midpoint already passes it',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '(m) => m >= centre)',
+    replace: '(m) => m > centre)',
+    killedBy: 'dropSlot boundary test (centre exactly at the right neighbour midpoint stays in its slot)'
+  },
+  {
+    name: 'pillReorder: reaching a left neighbour\'s midpoint already passes it',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '(m) => m > centre)',
+    replace: '(m) => m >= centre)',
+    killedBy: 'dropSlot boundary test (centre exactly at the left neighbour midpoint stays in its slot)'
+  },
+  {
+    name: 'pillReorder: the drop slot counts from the lifted pill itself (off by one to the right)',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '- (from + 1);',
+    replace: '- from;',
+    killedBy: 'dropSlot unmoved test (a centre that has not moved stays in its own slot)'
+  },
+  {
+    name: 'pillReorder: the pills a rightward drag passes slide right instead of left',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (j > from && j <= to) return -shift;',
+    replace: '  if (j > from && j <= to) return shift;',
+    killedBy: 'slotShift moving-right test (passed pills shift by -24)'
+  },
+  {
+    name: 'pillReorder: a leftward drag leaves the pill at the target slot unshifted',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (j < from && j >= to) return shift;',
+    replace: '  if (j < from && j > to) return shift;',
+    killedBy: 'slotShift moving-left test (pill 1 shifts by +24 when 3 hovers over slot 1)'
+  },
+  {
     name: 'contextMenu: capability gate ignored (a host is offered an item it cannot serve)',
     file: 'src/webview/contextMenuModel.ts',
     suite: 'test/unit/contextMenuModel.test.ts',

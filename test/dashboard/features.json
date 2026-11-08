@@ -506,7 +506,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "reorder-right swaps both the pill name"
+              "match": "a pill drag moves both the pill name and its path tooltip"
             }
           ]
         },
@@ -516,7 +516,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "reorder-right swaps both the pill name"
+              "match": "a pill drag moves both the pill name and its path tooltip"
             },
             {
               "suite": "webview",
@@ -535,6 +535,158 @@
             {
               "suite": "webview",
               "match": "custom order and focus survive an insert"
+            }
+          ]
+        },
+        {
+          "id": "reorder-drag-mouse",
+          "name": "Drag a pill to reorder (mouse)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "dragging a pill 0 -> 2 moves it, the pills between close up"
+            },
+            {
+              "suite": "webview",
+              "match": "a click, and a 3 px wobble, select the pill without reordering"
+            },
+            {
+              "suite": "webview",
+              "match": "a mouse drag lifts a pill without vibrating"
+            },
+            {
+              "suite": "webview",
+              "match": "a CDP pen tap on a pill selects it with exactly one click on the pill"
+            },
+            {
+              "suite": "webview",
+              "match": "a pen down and up with no click from the engine selects the pill with exactly one click"
+            },
+            {
+              "suite": "webview",
+              "match": "after a pen tap the engine never answered, a programmatic click() is not swallowed"
+            },
+            {
+              "suite": "webview",
+              "match": "a CDP pen drag past 5 px reorders"
+            },
+            {
+              "suite": "webview",
+              "match": "a lifted end pill, its lift scale included, stays within the row's ends at either end of a drag"
+            }
+          ]
+        },
+        {
+          "id": "reorder-drag-touch",
+          "name": "Hold a pill, then drag (touch)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a held pill lifts and drags: 0 -> 2 reorders"
+            },
+            {
+              "suite": "webview",
+              "match": "a touch hold that lifts a pill vibrates once"
+            },
+            {
+              "suite": "webview",
+              "match": "a held first pill is drawn within the row's near end from the moment it lifts"
+            }
+          ]
+        },
+        {
+          "id": "reorder-move-remaps",
+          "name": "A move shifts the pills between; votes, peek target and shown modality follow",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "a vote on a pill strictly between from and to follows that pill"
+            },
+            {
+              "suite": "unit",
+              "match": "moving 0 -> 2 of four"
+            },
+            {
+              "suite": "webview",
+              "match": "dragging a pill 0 -> 2 moves it, the pills between close up"
+            }
+          ]
+        },
+        {
+          "id": "reorder-drag-not-click",
+          "name": "Ending a drag never clicks the pill under it",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "dragging a pill that is not current does not select it"
+            },
+            {
+              "suite": "webview",
+              "match": "a tap on a pill 50 ms after a hold-drag drop selects it"
+            },
+            {
+              "suite": "webview",
+              "match": "a tap on a pill 50 ms after a row pan and its fling selects it"
+            },
+            {
+              "suite": "webview",
+              "match": "a real mouse click 50 ms after a mouse drag drop selects the pill"
+            }
+          ]
+        },
+        {
+          "id": "reorder-drag-android-capture",
+          "name": "A pill's own capture loss does not end the drag (Android)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a lostpointercapture at the lifted pill mid-drag does not end the drag"
+            }
+          ]
+        },
+        {
+          "id": "reorder-drag-long-row",
+          "name": "Long row: a drag restyles only passed pills and commits once",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "long row: a drag restyles only the pills it passes"
+            },
+            {
+              "suite": "unit",
+              "match": "exactly at a neighbour midpoint does not pass it; strictly beyond does (right)"
+            },
+            {
+              "suite": "unit",
+              "match": "moving right: the pills it passed slide left by one shift"
+            }
+          ]
+        },
+        {
+          "id": "reorder-row-touch",
+          "name": "A finger pans and flings the pill row; a tap selects",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a quick swipe scrolls the row and reorders nothing"
+            },
+            {
+              "suite": "webview",
+              "match": "a tap selects the pill"
+            },
+            {
+              "suite": "webview",
+              "match": "a touchstart on a pill arrives default-prevented"
+            }
+          ]
+        },
+        {
+          "id": "reorder-buttons-retired",
+          "name": "No ←/→ reorder buttons; [ ] still reorder",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "the reorder buttons are gone and [ ] still reorder"
             }
           ]
         }
@@ -849,6 +1001,147 @@
               "match": "scrolling the strip materializes later columns"
             }
           ]
+        },
+        {
+          "id": "carousel-centre-crop",
+          "name": "Strip tiles are centre-cropped",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "strip tiles are centre-cropped (desktop)"
+            },
+            {
+              "suite": "webview",
+              "match": "strip tiles are centre-cropped (touch)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "area": "Touch layout",
+      "features": [
+        {
+          "id": "touch-layout-gate",
+          "name": "Touch layout only under a coarse primary pointer",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a fine primary pointer keeps the desktop layout"
+            },
+            {
+              "suite": "webview",
+              "match": "a coarse primary pointer gets touch-ui"
+            }
+          ]
+        },
+        {
+          "id": "touch-swipe-modality",
+          "name": "Swipe ←/→ switches modality (skips hidden)",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a sideways swipe on the image steps modality and skips a hidden one"
+            }
+          ]
+        },
+        {
+          "id": "touch-swipe-tuple",
+          "name": "Swipe ↑/↓ switches tuple",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "an up swipe on the image steps to the next tuple, a down swipe back"
+            }
+          ]
+        },
+        {
+          "id": "touch-hold-flip",
+          "name": "Touch and hold flips to the previous modality",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "touch and hold on the image flips to the previous modality until release"
+            }
+          ]
+        },
+        {
+          "id": "touch-pinch",
+          "name": "Pinch zooms, two fingers pan",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a two-finger pinch zooms, and lifting one finger never swipes"
+            },
+            {
+              "suite": "webview",
+              "match": "two fingers dragged together pan the image"
+            }
+          ]
+        },
+        {
+          "id": "touch-zoom-reset",
+          "name": "Tap the zoom readout to reset zoom",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "a tap on the zoom readout resets zoom and pan"
+            }
+          ]
+        },
+        {
+          "id": "touch-strip",
+          "name": "▦ opens the full-width strip; a tile tap navigates and closes it",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "opens a full-width strip; a tile tap navigates and closes it"
+            },
+            {
+              "suite": "webview",
+              "match": "a finger drag on the open strip scrolls its rows and taps nothing"
+            },
+            {
+              "suite": "webview",
+              "match": "a single-tuple comparison has no strip and shows no"
+            },
+            {
+              "suite": "webview",
+              "match": "follows the strip class main.ts sets, and the shell CSS uses no :has()"
+            },
+            {
+              "suite": "webview",
+              "match": "a single-tuple comparison carries no strip class, and ▦ appears only with it"
+            },
+            {
+              "suite": "webview",
+              "match": "the ▦ icon is an SVG centred in its 40 px button"
+            }
+          ]
+        },
+        {
+          "id": "touch-no-desktop-chrome",
+          "name": "No context menu, tooltip, Tools panel or vote circles",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "no context menu, path tooltip, Tools panel or vote circle"
+            },
+            {
+              "suite": "webview",
+              "match": "a finger on the image never reaches the mouse handlers"
+            }
+          ]
+        },
+        {
+          "id": "touch-help",
+          "name": "Help shows the touch gestures",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "help shows the touch rows and hides the keyboard rows"
+            }
+          ]
         }
       ]
     },
@@ -1142,6 +1435,24 @@
           ]
         },
         {
+          "id": "pills-no-lead-space",
+          "name": "Nothing before the pill row: no empty ▦ box, no gap",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "nothing in the bar precedes the pill row: no empty ▦ box and no gap before the first pill"
+            },
+            {
+              "suite": "webview",
+              "match": "a single-tuple comparison (no ▦) has nothing before the pill row either"
+            },
+            {
+              "suite": "webview",
+              "match": "with a strip, ▦ is shown before the pill row"
+            }
+          ]
+        },
+        {
           "id": "pills-wheel-scroll",
           "name": "Wheel scrolls the pill row, without navigating",
           "tests": [
@@ -1172,6 +1483,14 @@
             {
               "suite": "webview",
               "match": "the active pill's focus ring is not clipped"
+            },
+            {
+              "suite": "webview",
+              "match": "a hovered, current end pill 200 px wide paints inside the row at either scroll end"
+            },
+            {
+              "suite": "webview",
+              "match": "a hovered, current sole pill 200 px wide paints inside the row"
             }
           ]
         },

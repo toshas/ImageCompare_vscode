@@ -21,6 +21,9 @@ import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextM
 import { NoticeEvent, buildNotice } from './noticeChannel';
 import { centreOffset, scrollStep, wheelPixels, zoomFactor } from './axisScroll';
 import { ColumnWindow, MIN_TILE_PITCH, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
+import { movedIndex } from './pillReorder';
+import { installPillDrag } from './pillDrag';
+import { installTouchInput } from './touchInput';
 import type { DeleteUnit } from '../modePolicy';
 
 // VSCode API
@@ -117,8 +120,7 @@ const helpContextMenuItemsEl = document.getElementById('help-contextmenu-items')
 const helpRowSaveSessionEl = document.getElementById('help-row-savesession')!;
 const helpDeleteTextEl = document.getElementById('help-delete-text')!;
 const closeHelpBtn = document.getElementById('close-help-btn')!;
-const reorderLeftBtn = document.getElementById('reorder-left')!;
-const reorderRightBtn = document.getElementById('reorder-right')!;
+const stripBtn = document.getElementById('strip-btn')!;
 const imageLoaderEl = document.getElementById('image-loader')!;
 const emptyNoticeEl = document.getElementById('empty-notice')!;
 const emptyNoticeTitleEl = document.getElementById('empty-notice-title')!;
@@ -173,6 +175,14 @@ let spaceDown = false;
 
 let CAROUSEL_WIDTH = 220;
 let CAROUSEL_THUMB_SIZE = 50;
+
+// Decided once, from the primary pointer and nothing else (docs/pointer-input.md: touch-layout-by-primary-pointer).
+const touchUi = window.matchMedia('(pointer: coarse)').matches;
+let stripClosed = touchUi;
+/** Where the image area starts: the strip's width beside it, or 0 in the touch layout, whose strip covers the image (docs/pointer-input.md: strip-offset-from-one-helper). */
+function carouselOffsetPx(): number {
+  return isMultiTupleMode && !touchUi ? CAROUSEL_WIDTH : 0;
+}
 
 let isMultiTupleMode = false;
 let modalityOrder: OriginalModalityIndex[] = []; // maps display position -> original modality index
@@ -270,13 +280,22 @@ function setupEventListeners() {
   helpBtn.addEventListener('click', () => helpModalEl.classList.add('active'));
   closeHelpBtn.addEventListener('click', () => helpModalEl.classList.remove('active'));
 
-  // Reorder buttons
-  reorderLeftBtn.addEventListener('click', () => moveCurrentModality(-1));
-  reorderRightBtn.addEventListener('click', () => moveCurrentModality(1));
+  installPillDrag(modalitySelectorEl, {
+    onStart: hidePillTooltip,
+    // One moveModality, one rebuild; the row stays where the user left it (docs/pointer-input.md: drag-commits-once).
+    onDrop: (from, to) => {
+      const scrolled = modalitySelectorEl.scrollLeft;
+      moveModality(from, to);
+      modalitySelectorEl.scrollLeft = scrolled;
+      scrollCarouselToCurrentColumn();
+    },
+  });
 
   // Keyboard
   document.addEventListener('keydown', handleKeyDown);
   document.addEventListener('keyup', handleKeyUp);
+
+  if (touchUi) setupTouch();
 
   // Mouse wheel zoom
   viewerEl.addEventListener('wheel', handleWheel, { passive: false });
@@ -456,7 +475,7 @@ function getCurrentViewport(): crop.ViewportInfo | undefined {
   const currentImage = images[currentModalityIndex];
   // The missing sentinel is truthy but has no dims, and undefined dims make every mapped rect NaN.
   if (!currentImage || (currentImage as any).missing) return undefined;
-  const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+  const carouselOffset = carouselOffsetPx();
   return {
     viewerEl,
     zoom,
@@ -660,6 +679,7 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   if (isMultiTupleMode) {
     buildCarousel();
   }
+  if (touchUi && !stripClosed) fitStripToViewer();
 
   // Pills are created here once; loadTuple only updates them (rebuild per keystroke stalled the carousel).
   buildModalitySelector();
@@ -831,7 +851,7 @@ function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: numb
 
 function showMissingPlaceholder() {
   // Clear canvas and show missing message
-  const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+  const carouselOffset = carouselOffsetPx();
   
   canvasEl.width = 400;
   canvasEl.height = 200;
@@ -1415,7 +1435,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
       if (currentTupleIndex === tupleIndex && currentModalityIndex === displayModalityIndex) {
         canvasEl.classList.add('preview');
 
-        const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+        const carouselOffset = carouselOffsetPx();
         const vw = viewerEl.clientWidth - carouselOffset;
         const vh = viewerEl.clientHeight;
         
@@ -1441,7 +1461,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
     previewImg.src = thumbnailDataUrl;
   } else {
     // No thumbnail yet — a drawn placeholder beats a blank white canvas.
-    const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+    const carouselOffset = carouselOffsetPx();
     
     canvasEl.width = 400;
     canvasEl.height = 200;
@@ -1473,6 +1493,8 @@ const CAROUSEL_ROW_PAD = 6;
 const CAROUSEL_TILE_GAP = 2;
 // The tile-size floor, derived from the one pitch both pools are sized by so the three can never drift apart.
 const MIN_TILE_PX = MIN_TILE_PITCH - CAROUSEL_TILE_GAP;
+// A finger-sized floor for the touch layout's strip; more columns than fit at it scroll sideways.
+const TOUCH_MIN_TILE_PX = 56;
 
 /** Carousel width that fits every modality column at perTile px (6px row padding each side, scrollbar gutter, 2px gaps). */
 function carouselFitWidth(perTile: number): number {
@@ -1485,11 +1507,12 @@ function updateCarouselThumbSize(snapToDevicePixels = true) {
   // Fractional, not floored: integer steps made every tile snap visibly during a resize drag.
   CAROUSEL_THUMB_SIZE = availableWidth / numModalities;
   // Tiles scale down to fit the width — a floor here reintroduces clipped columns.
-  CAROUSEL_THUMB_SIZE = Math.max(MIN_TILE_PX, CAROUSEL_THUMB_SIZE);
+  const minTile = touchUi ? TOUCH_MIN_TILE_PX : MIN_TILE_PX;
+  CAROUSEL_THUMB_SIZE = Math.max(minTile, CAROUSEL_THUMB_SIZE);
   // At rest, land on the device-pixel grid: fractional row heights make edges shimmer while the wall scrolls.
   if (snapToDevicePixels) {
     const dpr = window.devicePixelRatio || 1;
-    CAROUSEL_THUMB_SIZE = Math.max(MIN_TILE_PX, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
+    CAROUSEL_THUMB_SIZE = Math.max(minTile, Math.round(CAROUSEL_THUMB_SIZE * dpr) / dpr);
   }
   carouselEl.style.setProperty('--thumb-size', CAROUSEL_THUMB_SIZE + 'px');
   // The pitch just moved, so every materialized column sits at the wrong left until it is rewritten — and the strip may have widened, which the ring must absorb before anything binds against it.
@@ -1523,7 +1546,7 @@ function buildCarousel() {
   carouselResizeEl.classList.add('active');
   carouselResizeEl.style.left = (CAROUSEL_WIDTH - 4) + 'px';
   viewerEl.classList.add('has-carousel');
-  viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
+  viewerEl.style.setProperty('--carousel-offset', carouselOffsetPx() + 'px');
 
   carouselColPool = columnPoolSize(CAROUSEL_WIDTH, modalityOrder.length);
 
@@ -2141,6 +2164,7 @@ function contextTargetFor(target: HTMLElement | null): MenuContext | null {
   return null;
 }
 
+// The touch layout's window-capture listener stops every contextmenu before this one sees it (docs/pointer-input.md: touch-opens-no-menu).
 document.addEventListener('contextmenu', (e) => {
   const target = contextTargetFor(e.target as HTMLElement | null);
   if (!target) return;
@@ -2197,61 +2221,46 @@ function updateModalitySelector() {
     const label = votingEnabled && winCounts[displayIdx] > 0 ? `${truncName} (${winCounts[displayIdx]})` : truncName;
     if (btn.textContent !== label) btn.textContent = label;
   });
-
-  if (currentModalityIndex <= 0) {
-    (reorderLeftBtn as HTMLButtonElement).disabled = true;
-  } else {
-    (reorderLeftBtn as HTMLButtonElement).disabled = false;
-  }
-
-  if (currentModalityIndex >= modalities.length - 1) {
-    (reorderRightBtn as HTMLButtonElement).disabled = true;
-  } else {
-    (reorderRightBtn as HTMLButtonElement).disabled = false;
-  }
 }
 
 function moveCurrentModality(direction: number) {
-  if (modalities.length < 2) return;
+  if (moveModality(currentModalityIndex, currentModalityIndex + direction)) centreOnCurrentModality();
+}
 
-  const currentPos = currentModalityIndex;
-  const newPos = asDisplay(currentPos + direction);
+/** Move the modality at display `currentPos` to `newPos`, the ones between closing up; `[`/`]` and a pill drop both land here (docs/pointer-input.md: reorder-is-one-move). */
+function moveModality(currentPos: number, newPos: number): boolean {
+  if (modalities.length < 2) return false;
 
-  if (newPos < 0 || newPos >= modalities.length) return;
+  if (newPos < 0 || newPos >= modalities.length || newPos === currentPos) return false;
+  const move = <T>(a: T[]) => { a.splice(newPos, 0, a.splice(currentPos, 1)[0]); };
+  const remap = (k: number) => asDisplay(movedIndex(k, currentPos, newPos));
 
-  // Swap in modalities
-  [modalities[currentPos], modalities[newPos]] = [modalities[newPos], modalities[currentPos]];
+  // Move in modalities
+  move(modalities);
 
-  // Swap in colors
-  [modalityColors[currentPos], modalityColors[newPos]] = [modalityColors[newPos], modalityColors[currentPos]];
+  // Move in colors
+  move(modalityColors);
 
-  // Swap in paths so the pill tooltip stays attached to its modality
-  [modalityPaths[currentPos], modalityPaths[newPos]] = [modalityPaths[newPos], modalityPaths[currentPos]];
+  // Move in paths so the pill tooltip stays attached to its modality
+  move(modalityPaths);
 
-  // Swap in modalityOrder (tracks original index at each display position)
-  [modalityOrder[currentPos], modalityOrder[newPos]] = [modalityOrder[newPos], modalityOrder[currentPos]];
+  // Move in modalityOrder (tracks original index at each display position)
+  move(modalityOrder);
 
-  // Update winners to reflect swapped indices
+  // Update winners to reflect moved indices
   if (votingEnabled) {
     const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
     for (const [tupleIndex, winnerIdx] of winners) {
-      if (winnerIdx === currentPos) {
-        newWinners.set(tupleIndex, newPos);
-      } else if (winnerIdx === newPos) {
-        newWinners.set(tupleIndex, currentPos);
-      } else {
-        newWinners.set(tupleIndex, winnerIdx);
-      }
+      newWinners.set(tupleIndex, remap(winnerIdx));
     }
     winners = newWinners;
   }
 
-  // Keep the Space-peek target attached to its modality across the swap.
-  if (previousModalityIndex === currentPos) previousModalityIndex = newPos;
-  else if (previousModalityIndex === newPos) previousModalityIndex = currentPos;
+  // Keep the Space-peek target attached to its modality across the move.
+  previousModalityIndex = remap(previousModalityIndex);
 
   // Update current index
-  currentModalityIndex = newPos;
+  currentModalityIndex = remap(currentModalityIndex);
   // render() re-derives `images` from the cache using the new modalityOrder.
 
   // Rebuild UI
@@ -2260,9 +2269,9 @@ function moveCurrentModality(direction: number) {
     buildCarousel();
   }
   render();
-  centreOnCurrentModality();
   // A reorder moves no column but re-permutes the strip the aim ranks over (docs/loading-architecture.md: picked-column-reports-itself).
   columnReport.keyed(currentModalityIndex);
+  return true;
 }
 
 /**
@@ -2332,7 +2341,7 @@ function render() {
   updateStatus(`${name} (${width}×${height})`, `Zoom: ${zoom.toFixed(1)}x`, currentTupleIndex);
 
   // Calculate display size
-  const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+  const carouselOffset = carouselOffsetPx();
   const vw = viewerEl.clientWidth - carouselOffset;
   const vh = viewerEl.clientHeight;
   const baseScale = Math.min(vw / width, vh / height);
@@ -2393,7 +2402,7 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
 
   // Update crop overlay position if active
   if (crop.cropMode) {
-    const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+    const carouselOffset = carouselOffsetPx();
     crop.renderCropOverlay({
       viewerEl, zoom, panX, panY, imgW, imgH, carouselOffset
     });
@@ -2401,6 +2410,99 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
 }
 
 // Event handlers
+/** ←/→ and a sideways swipe. Cycling skips hidden pills; click and digit jump still reach them (docs/session-files.md: hidden-is-presentation-only). */
+function stepModality(dir: 1 | -1): void {
+  const target = nextVisibleModality(currentModalityIndex, dir, hiddenByDisplay());
+  if (target !== currentModalityIndex) {
+    previousModalityIndex = currentModalityIndex;
+    currentModalityIndex = asDisplay(target);
+    render();
+    centreOnCurrentModality();
+    columnReport.keyed(currentModalityIndex);
+  }
+}
+
+function toggleStrip(): void {
+  stripClosed = !stripClosed;
+  viewerEl.classList.toggle('strip-closed', stripClosed);
+  if (!stripClosed) fitStripToViewer();
+}
+
+/** The touch layout's strip spans the viewer; its tiles and columns rebind to that width. */
+function fitStripToViewer(): void {
+  CAROUSEL_WIDTH = viewerEl.clientWidth;
+  carouselEl.style.width = CAROUSEL_WIDTH + 'px';
+  // A hidden strip measured 0 wide, so its columns rebind once it has a width again.
+  requestAnimationFrame(() => { updateCarouselThumbSize(); scrollCarouselToCurrentTuple(); scrollCarouselToCurrentColumn(); });
+}
+
+let touchFlipped = false;
+let pinchZoom0 = 1;
+let pinchAnchorX = 0;
+let pinchAnchorY = 0;
+let pinchRaf = 0;
+
+/** The touch layout: its class, the ▦ strip and the gestures, each mapped onto an action a key already takes (docs/pointer-input.md: gestures-load-nothing). */
+function setupTouch(): void {
+  document.body.classList.add('touch-ui');
+  viewerEl.classList.toggle('strip-closed', stripClosed);
+  stripBtn.addEventListener('click', toggleStrip);
+  window.addEventListener('resize', () => { if (!stripClosed) fitStripToViewer(); });
+  // A tile tap navigates first (the strip's own listener), then the picker gets out of the way.
+  viewerEl.addEventListener('click', (e) => {
+    if (!stripClosed && (e.target as HTMLElement).closest('#carousel .carousel-row')) toggleStrip();
+  });
+  statusInfoEl.addEventListener('click', () => { zoom = 1; panX = panY = 0; render(); });
+  const swapWithPrevious = () => {
+    const temp = currentModalityIndex;
+    currentModalityIndex = previousModalityIndex;
+    previousModalityIndex = temp;
+    render();
+    centreOnCurrentModality();
+  };
+  // The same image-area coordinates handleWheel zooms about.
+  const viewerPoint = (x: number, y: number) => {
+    const rect = viewerEl.getBoundingClientRect();
+    const off = carouselOffsetPx();
+    return { x: x - rect.left - off - (rect.width - off) / 2, y: y - rect.top - rect.height / 2 };
+  };
+  installTouchInput(viewerEl, carouselEl, {
+    stepModality,
+    stepTuple: (dir) => {
+      const next = currentTupleIndex + dir;
+      if (isMultiTupleMode && next >= 0 && next < tuples.length) loadTuple(asTuple(next));
+    },
+    flipStart: () => {
+      if (!images.length || previousModalityIndex === currentModalityIndex) return;
+      if (hiddenModalities.has(modalityOrder[previousModalityIndex])) return;
+      touchFlipped = true;
+      swapWithPrevious();
+    },
+    flipEnd: () => {
+      if (!touchFlipped) return;
+      touchFlipped = false;
+      swapWithPrevious();
+    },
+    pinchStart: (x, y) => {
+      const p = viewerPoint(x, y);
+      pinchZoom0 = zoom;
+      pinchAnchorX = (p.x - panX) / zoom;
+      pinchAnchorY = (p.y - panY) / zoom;
+    },
+    pinchMove: (scale, x, y) => {
+      const p = viewerPoint(x, y);
+      zoom = Math.max(0.1, Math.min(50, pinchZoom0 * scale));
+      panX = p.x - pinchAnchorX * zoom;
+      panY = p.y - pinchAnchorY * zoom;
+      if (pinchRaf === 0) pinchRaf = requestAnimationFrame(() => { pinchRaf = 0; render(); });
+    },
+    scrollStrip: (dx, dy) => {
+      if (dx !== 0 && carouselHScrollEl) carouselHScrollEl.scrollLeft += dx;
+      if (dy !== 0) queueCarouselWheel(dy);
+    },
+  });
+}
+
 function handleKeyDown(e: KeyboardEvent) {
   // Modal for keys, as the host menu it replaced was: Del behind an open menu is a permanent file delete.
   if (isContextMenuOpen()) return;
@@ -2464,15 +2566,7 @@ function handleKeyDown(e: KeyboardEvent) {
     case 'ArrowRight':
     case 'ArrowLeft': {
       e.preventDefault();
-      // Cycling skips hidden pills; click and digit jump still reach them (docs/session-files.md: hidden-is-presentation-only).
-      const target = nextVisibleModality(currentModalityIndex, e.code === 'ArrowRight' ? 1 : -1, hiddenByDisplay());
-      if (target !== currentModalityIndex) {
-        previousModalityIndex = currentModalityIndex;
-        currentModalityIndex = asDisplay(target);
-        render();
-        centreOnCurrentModality();
-        columnReport.keyed(currentModalityIndex);
-      }
+      stepModality(e.code === 'ArrowRight' ? 1 : -1);
       break;
     }
 
@@ -2564,7 +2658,7 @@ function handleWheel(e: WheelEvent) {
   const newZoom = Math.max(0.1, Math.min(50, zoom * delta));
 
   const rect = viewerEl.getBoundingClientRect();
-  const carouselOffset = isMultiTupleMode ? CAROUSEL_WIDTH : 0;
+  const carouselOffset = carouselOffsetPx();
   const mouseX = e.clientX - rect.left - carouselOffset - (rect.width - carouselOffset) / 2;
   const mouseY = e.clientY - rect.top - rect.height / 2;
 
@@ -2731,7 +2825,7 @@ function setupCarouselResize() {
   const refit = (snap: boolean) => {
     carouselEl.style.width = CAROUSEL_WIDTH + 'px';
     carouselResizeEl.style.left = (CAROUSEL_WIDTH - 4) + 'px';
-    viewerEl.style.setProperty('--carousel-offset', CAROUSEL_WIDTH + 'px');
+    viewerEl.style.setProperty('--carousel-offset', carouselOffsetPx() + 'px');
     // Anchor the current row's viewport Y across the row-height change — re-centering per frame made it bob; only the bounds clamp may move it. Rounded: a fractional anchor lands the focused row on shifting subpixel boundaries.
     const anchorY = Math.round(currentTupleIndex * carouselRowHeight() - carouselOffset);
     updateCarouselThumbSize(snap);

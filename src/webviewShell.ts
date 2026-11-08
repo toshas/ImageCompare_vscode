@@ -283,7 +283,7 @@ body {
   min-width: 0;
   /* Capped so #status keeps a readable share: the strip's natural width is unbounded and #status collapses to 0 before it. Fewer pills visible than the old wrap showed, deliberately — the wrap paid for them in viewer height. */
   max-width: 60%;
-  /* The active pill's ring is a 2px OUTER box-shadow and :hover scales 5%, both outside the pill's box, so the strip pads on EVERY side — vertically the overflow crops them, and horizontally the first and last pill's ring falls outside the scroll range at either end. */
+  /* The active pill's ring is a 2px OUTER box-shadow and :hover scales 5%, both outside the pill's box, so the strip pads on EVERY side — vertically the overflow crops them, and horizontally the first and last pill's ring falls outside the scroll range at either end. 5% of a long pill outgrows this padding, so the end pills scale from their outer edge instead, and a sole pill, which has no inner side to grow into, is underlined rather than scaled (below). */
   padding: 4px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -291,6 +291,8 @@ body {
   scrollbar-width: none;
 }
 #modality-selector::-webkit-scrollbar { display: none; }
+/* Every gesture on the row is the row's own, in every layout: a browser pan cannot be handed to a pill lifted mid-gesture (docs/pointer-input.md: row-owns-touch). */
+#modality-selector { touch-action: none; }
 
 #status {
   color: var(--vscode-descriptionForeground, #888);
@@ -332,6 +334,12 @@ body {
   white-space: nowrap;
 }
 .modality-btn:hover { transform: scale(1.05); }
+.modality-btn:first-child { transform-origin: left center; }
+.modality-btn:last-child { transform-origin: right center; }
+.modality-btn:only-child:hover { transform: none; text-decoration: underline; }
+/* A lifted pill follows the pointer with no easing; the others slide aside on the base transition. */
+.modality-btn.pill-dragging { transition: none; z-index: 2; cursor: grabbing; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6); }
+#modality-selector.pill-reordering { cursor: grabbing; }
 
 /* Native title= tooltips drop on re-render and never reappear without leaving the pill, so pills use this instead. */
 #pill-tooltip {
@@ -448,7 +456,6 @@ body {
   flex-shrink: 0;
 }
 .reorder-btn:hover { background: var(--vscode-button-secondaryHoverBackground, #555); }
-.reorder-btn:disabled { opacity: 0.3; cursor: default; }
 
 #help-btn {
   background: var(--vscode-button-secondaryBackground, #444);
@@ -557,7 +564,7 @@ body {
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
 
 .carousel-thumb {
-  object-fit: contain;
+  object-fit: cover;
   background: #111;
   border-radius: 3px;
   border: 2px solid transparent;
@@ -696,7 +703,29 @@ body {
   font-size: 11px;
   color: var(--vscode-descriptionForeground, #888);
 }
-#help-version:empty { display: none; }`;
+#help-version:empty { display: none; }
+
+/* The touch layout, only under a coarse primary pointer (docs/pointer-input.md: touch-layout-by-primary-pointer): no Tools panel, menus or tooltips, larger targets, the strip on demand. */
+/* The ▦ box exists only with a strip, keyed on the class main.ts sets beside #carousel.active, not on the :has pseudo-class, which Safari < 15.4 and Firefox < 121 lack; hidden, it takes no width and no #info gap. */
+#reorder-buttons, .touch-only { display: none; }
+body.touch-ui #viewer.has-carousel ~ #info #reorder-buttons { display: flex; }
+body.touch-ui .touch-only { display: revert; }
+body.touch-ui #help-modal tr:not(.touch-only), body.touch-ui #help-modal h3:not(.touch-only) { display: none; }
+body.touch-ui #floating-panel, body.touch-ui #carousel-resize, body.touch-ui .winner-circle, body.touch-ui #pill-tooltip { display: none !important; }
+body.touch-ui { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+body.touch-ui .carousel-thumb { -webkit-user-drag: none; }
+body.touch-ui #carousel { background: var(--vscode-editor-background, #1e1e1e); border-right: 0; }
+/* The strip's inner scroller is a scroll container, so it must say none itself: an ancestor's none stops at it, and the browser's pan then cancels the finger. */
+body.touch-ui #viewer, body.touch-ui #carousel, body.touch-ui #carousel-hscroll { touch-action: none; }
+body.touch-ui #info { gap: 8px; padding: 6px 8px; }
+body.touch-ui .reorder-btn, body.touch-ui #help-btn { width: 40px; height: 40px; font-size: 18px; }
+body.touch-ui .modality-btn { padding: 9px 12px; font-size: 14px; }
+body.touch-ui #status-info { padding: 10px 4px; cursor: pointer; }
+#viewer.strip-closed #carousel, #viewer.strip-closed #carousel-resize { display: none !important; }
+@media (orientation: portrait) {
+  body.touch-ui #info { flex-wrap: wrap; }
+  body.touch-ui #modality-selector { order: -1; flex-basis: 100%; max-width: 100%; }
+}`;
 
 export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
 
@@ -737,8 +766,7 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
 
   <div id="info" class="hidden">
     <div id="reorder-buttons">
-      <button id="reorder-left" class="reorder-btn" title="Move modality left ([)">\u2190</button>
-      <button id="reorder-right" class="reorder-btn" title="Move modality right (])">\u2192</button>
+      <button id="strip-btn" class="reorder-btn" title="Show or hide the film strip"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 0h4v4H0zM6 0h4v4H6zM12 0h4v4h-4zM0 6h4v4H0zM6 6h4v4H6zM12 6h4v4h-4zM0 12h4v4H0zM6 12h4v4H6zM12 12h4v4h-4z"/></svg></button>
     </div>
     <div id="modality-selector"></div>
     <span id="status"><span id="status-name">Loading...</span></span>
@@ -752,11 +780,21 @@ export const WEBVIEW_BODY = `  <div id="loading">Loading images...</div>
   <div id="help-modal">
     <div class="modal-content">
       <h3>Keyboard Shortcuts</h3>
+      <h3 class="touch-only">Touch</h3>
       <table>
+        <tr class="touch-only"><td>Swipe \u2190 \u2192</td><td>Switch modality (skips hidden)</td></tr>
+        <tr class="touch-only"><td>Swipe \u2191 \u2193</td><td>Next/previous tuple</td></tr>
+        <tr class="touch-only"><td>Touch and hold</td><td>Flip to previous modality until you let go</td></tr>
+        <tr class="touch-only"><td>Hold a pill, then drag</td><td>Reorder modalities</td></tr>
+        <tr class="touch-only"><td>Pinch</td><td>Zoom</td></tr>
+        <tr class="touch-only"><td>Two-finger drag</td><td>Pan</td></tr>
+        <tr class="touch-only"><td>\u25a6</td><td>Show or hide the film strip; drag it to scroll, tap a tile to go there</td></tr>
+        <tr class="touch-only"><td>Zoom readout</td><td>Reset zoom</td></tr>
         <tr><td>\u2190 \u2192</td><td>Switch modality (skips hidden)</td></tr>
         <tr><td>\u2191 \u2193</td><td>Previous/next tuple</td></tr>
         <tr><td>Space</td><td>Flip to previous modality (hold)</td></tr>
         <tr><td>1-9</td><td>Jump to modality N</td></tr>
+        <tr><td>Drag a pill</td><td>Reorder modalities</td></tr>
         <tr><td>[ ]</td><td>Reorder current modality</td></tr>
         <tr><td>Enter</td><td>Toggle winner / confirm crop (in crop mode)</td></tr>
         <tr><td>Scroll</td><td>Zoom in/out; scroll tuples on the film strip</td></tr>
