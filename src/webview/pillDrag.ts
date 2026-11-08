@@ -50,8 +50,15 @@ export function installPillDrag(rowEl: HTMLElement, actions: PillDragActions): v
     const pills = Array.from(rowEl.querySelectorAll<HTMLElement>('.modality-btn'));
     const from = pills.indexOf(pill);
     if (from < 0 || pills.length < 2) { press = null; return; }
-    const lefts = pills.map((el) => el.offsetLeft);
-    const widths = pills.map((el) => el.offsetWidth);
+    // Rects, not offsets, which round to whole px while pills sit at fractional ones; a hover or glide transform is set aside to read them.
+    const moving = pills.filter((el) => getComputedStyle(el).transform !== 'none');
+    for (const el of moving) { el.style.transition = 'none'; el.style.transform = 'none'; }
+    const boxes = pills.map((el) => el.getBoundingClientRect());
+    for (const el of moving) el.style.transform = '';
+    void rowEl.offsetWidth;
+    for (const el of moving) el.style.transition = '';
+    const lefts = boxes.map((b) => b.left);
+    const widths = boxes.map((b) => b.width);
     const gap = from + 1 < pills.length ? lefts[from + 1] - lefts[from] - widths[from] : lefts[from] - lefts[from - 1] - widths[from - 1];
     const rect = rowEl.getBoundingClientRect();
     const last = pills.length - 1;

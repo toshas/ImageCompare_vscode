@@ -2229,16 +2229,12 @@ function moveCurrentModality(direction: number) {
 
 /** Move the modality at display `currentPos` to `newPos`, the ones between closing up; `[`/`]` and a pill drop both land here (docs/pointer-input.md: reorder-is-one-move). */
 function moveModality(currentPos: number, newPos: number): boolean {
-  if (modalities.length < 2) return false;
-
   if (newPos < 0 || newPos >= modalities.length || newPos === currentPos) return false;
   const move = <T>(a: T[]) => { a.splice(newPos, 0, a.splice(currentPos, 1)[0]); };
   const remap = (k: number) => asDisplay(movedIndex(k, currentPos, newPos));
 
-  // Move in modalities
   move(modalities);
 
-  // Move in colors
   move(modalityColors);
 
   // Move in paths so the pill tooltip stays attached to its modality
@@ -2247,7 +2243,6 @@ function moveModality(currentPos: number, newPos: number): boolean {
   // Move in modalityOrder (tracks original index at each display position)
   move(modalityOrder);
 
-  // Update winners to reflect moved indices
   if (votingEnabled) {
     const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
     for (const [tupleIndex, winnerIdx] of winners) {

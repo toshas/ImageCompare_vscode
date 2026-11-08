@@ -37,7 +37,8 @@ While the pill is lifted nothing is rebuilt. It follows the pointer, clamped to 
 its lift scale included (it scales about its centre, whatever origin a resting end pill has), the
 target slot comes from a binary search over pill midpoints cached at the lift (`dropSlot`), and only
 pills that change side get a new transform (`slotShift`), so a move costs the same with five pills or
-five hundred. The slot is searched from where the *pointer* puts the pill, not from the clamped
+five hundred. The clamp, the midpoints and the slide are read from the pills' rects, a hover scale
+set aside: `offsetLeft` and `offsetWidth` round to whole px, and pills sit between them. The slot is searched from where the *pointer* puts the pill, not from the clamped
 drawing: a clamped centre can never pass the midpoint of an end pill no narrower than the dragged one,
 so that end slot would be unreachable. Near the row's edges it auto-scrolls. The drop commits once — one `moveModality`, one
 rebuild of the row and the strip — keeps the row where the user left it, and the landed pill glides

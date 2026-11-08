@@ -2,13 +2,13 @@ import { test, expect, Page } from '@playwright/test';
 import { loadInited, getState, focusViewer } from './helpers';
 import { DEFAULT_SPEC, FixtureSpec } from '../fixtures/messages';
 import { TouchDriver, centreOf } from './touchDriver';
+import { FRACTIONAL_PILLS_CSS } from './harness';
 
 /**
  * Pill drag-reorder (docs/pointer-input.md), on the real bundle. The permutation itself is
  * mutation-covered in test/unit/pillReorder.test.ts; everything here is DOM and pointer wiring in
  * webview/pillDrag.ts and webview/main.ts, which the Vitest-only mutation harness cannot reach — see
- * docs/testing.md, "What nothing covers". Each test was watched failing against a deliberate break of
- * the rule it names (recorded in docs/testing.md).
+ * docs/testing.md, "What nothing covers".
  */
 
 const FOUR: FixtureSpec = { ...DEFAULT_SPEC, modalities: ['A', 'B', 'C', 'D'] };
@@ -42,10 +42,6 @@ async function mouseDrag(page: Page, from: number, to: number, steps = 12): Prom
   await page.mouse.up();
 }
 
-async function names(page: Page): Promise<string[]> {
-  return page.locator('#modality-selector .modality-btn').allTextContents();
-}
-
 /** Replaces `navigator.vibrate` with a counter; read it back with `vibrations`. */
 async function stubVibrate(page: Page): Promise<void> {
   await page.evaluate(() => {
@@ -62,6 +58,7 @@ async function vibrations(page: Page): Promise<number> {
 test.describe('pill drag-reorder (mouse)', () => {
   test('dragging a pill 0 -> 2 moves it, the pills between close up, and votes, peek target and the shown modality follow', async ({ page }) => {
     await loadInited(page, FOUR);
+    await stubVibrate(page);
     await focusViewer(page);
     // Vote B on tuple 0, then return to A so B is the Space-peek target.
     await page.locator(pill(1)).click();
@@ -72,11 +69,13 @@ test.describe('pill drag-reorder (mouse)', () => {
     expect(s.winners).toEqual([[0, 1]]);
 
     await mouseDrag(page, 0, 2);
+    // Only a finger's lift vibrates.
+    expect(await vibrations(page)).toBe(0);
 
     s = await getState(page);
     // [A, B, C, D] -> [B, C, A, D]: a move, not a swap of A and C.
     expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
-    expect(await names(page)).toEqual(['B (1)', 'C', 'A', 'D']);
+    expect(await page.locator('#modality-selector .modality-btn').allTextContents()).toEqual(['B (1)', 'C', 'A', 'D']);
     expect(s.modalityPaths).toEqual(['/fixtures/B', '/fixtures/C', '/fixtures/A', '/fixtures/D']);
     // The shown modality is still A, now at display 2.
     expect(s.modalityOrder[s.currentModalityIndex]).toBe(0);
@@ -142,9 +141,11 @@ test.describe('pill drag-reorder (mouse)', () => {
 
   test('a lifted end pill, its lift scale included, stays within the row\'s ends at either end of a drag', async ({ page }) => {
     await loadInited(page, FOUR);
+    // Fractional pill widths whatever the fonts: whole-pixel offsets put the clamp ~1.3 px past the far end here.
+    await page.addStyleTag({ content: FRACTIONAL_PILLS_CSS });
     const rect = (i: number) => page.locator('#modality-selector .modality-btn').nth(i).evaluate((el) => {
       const r = el.getBoundingClientRect();
-      return { left: r.left, right: r.right, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 };
+      return { left: r.left, right: r.right, width: r.width, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 };
     });
     const scrollLeft = () => page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft);
     // The first pill dragged past the far end, then the last pill (the same one, now at display 3) past the near end.
@@ -155,8 +156,11 @@ test.describe('pill drag-reorder (mouse)', () => {
       const start = await rect(0);
       const end = await rect(3);
       const p = await rect(i);
+      expect(p.width % 1).not.toBe(0);
       expect(await scrollLeft()).toBe(0);
       await page.mouse.move(p.cx, p.cy);
+      // Pressed fully hovered, as a hand presses: the hover scale must not leak into the measured row.
+      await expect.poll(() => page.locator(pill(i)).evaluate((el) => el.matches(':hover') && el.getAnimations().length === 0)).toBe(true);
       await page.mouse.down();
       await page.mouse.move(dir > 0 ? end.right + 200 : start.left - 200, p.cy, { steps: 12 });
       await expect(page.locator(pill(i))).toHaveClass(/pill-dragging/);
@@ -172,14 +176,6 @@ test.describe('pill drag-reorder (mouse)', () => {
       await page.mouse.up();
       expect((await getState(page)).modalityOrder).toEqual(order);
     }
-  });
-
-  test('a mouse drag lifts a pill without vibrating', async ({ page }) => {
-    await loadInited(page, FOUR);
-    await stubVibrate(page);
-    await mouseDrag(page, 0, 2);
-    expect((await getState(page)).modalityOrder).toEqual([1, 2, 0, 3]);
-    expect(await vibrations(page)).toBe(0);
   });
 
   test('the reorder buttons are gone and [ ] still reorder', async ({ page }) => {
@@ -289,18 +285,27 @@ async function handPenTap(page: Page, i: number): Promise<void> {
 }
 
 test.describe('pill drag-reorder (pen)', () => {
-  test('a CDP pen tap on a pill selects it with exactly one click on the pill', async ({ page }) => {
+  test('a CDP pen drag past 5 px reorders, and a CDP pen tap on a pill selects it with exactly one click on the pill', async ({ page }) => {
     await loadInited(page, FOUR);
-    await countPillClicks(page);
     const pen = await penInput(page);
-    const b = await pillBox(page, 2);
-    const x = b.x + b.width / 2, y = b.y + b.height / 2;
-    await pen.down(x, y);
-    await pen.up(x, y);
-    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(2);
+    const { x0, y, x1 } = await dropX(page, 0, 2);
+    await pen.down(x0, y);
+    for (let i = 1; i <= 12; i++) await pen.move(x0 + ((x1 - x0) * i) / 12, y);
+    await pen.up(x1, y);
+    let s = await getState(page);
+    expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
+    expect(s.modalityOrder[s.currentModalityIndex]).toBe(0);
+    // Counted on the rebuilt row.
+    await countPillClicks(page);
+    const b = await pillBox(page, 1);
+    const x = b.x + b.width / 2, ty = b.y + b.height / 2;
+    await pen.down(x, ty);
+    await pen.up(x, ty);
+    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(1);
     await page.waitForTimeout(50);
-    expect(await pillClicks(page)).toEqual([0, 0, 1, 0]);
-    expect((await getState(page)).modalityOrder).toEqual([0, 1, 2, 3]);
+    expect(await pillClicks(page)).toEqual([0, 1, 0, 0]);
+    s = await getState(page);
+    expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
   });
 
   test('a pen down and up with no click from the engine selects the pill with exactly one click', async ({ page }) => {
@@ -309,41 +314,30 @@ test.describe('pill drag-reorder (pen)', () => {
     await handPenTap(page, 3);
     await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(3);
     expect(await pillClicks(page)).toEqual([0, 0, 0, 1]);
-  });
-
-  test('after a pen tap the engine never answered, a programmatic click() is not swallowed', async ({ page }) => {
-    await loadInited(page, FOUR);
-    await handPenTap(page, 3);
-    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(3);
-    // No press precedes this click, so whatever the tap armed must not eat it.
+    // No press precedes this programmatic click(), so whatever the unanswered tap armed must not eat it.
     await page.evaluate(() => (document.querySelectorAll('#modality-selector .modality-btn')[1] as HTMLElement).click());
     expect((await getState(page)).currentModalityIndex).toBe(1);
-  });
-
-  test('a CDP pen drag past 5 px reorders', async ({ page }) => {
-    await loadInited(page, FOUR);
-    const pen = await penInput(page);
-    const { x0, y, x1 } = await dropX(page, 0, 2);
-    await pen.down(x0, y);
-    for (let i = 1; i <= 12; i++) await pen.move(x0 + ((x1 - x0) * i) / 12, y);
-    await pen.up(x1, y);
-    const s = await getState(page);
-    expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
-    expect(s.modalityOrder[s.currentModalityIndex]).toBe(0);
   });
 });
 
 test.describe('pill drag-reorder (touch)', () => {
   test.use({ hasTouch: true });
 
-  test('a held pill lifts and drags: 0 -> 2 reorders', async ({ page }) => {
+  test('a held pill lifts with one vibration and drags 0 -> 2, and a tap 50 ms after the drop selects', async ({ page }) => {
     await loadInited(page, FOUR);
+    await stubVibrate(page);
     const touch = await TouchDriver.attach(page);
     const { x0, y, x1 } = await dropX(page, 0, 2);
     await touch.drag({ x: x0, y }, { x: x1, y }, 12, 16, 400);
-    const s = await getState(page);
+    let s = await getState(page);
     expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
-    expect(s.modalityOrder[s.currentModalityIndex]).toBe(0);
+    expect(s.currentModalityIndex).toBe(2);
+    expect(await vibrations(page)).toBe(1);
+    await page.waitForTimeout(50);
+    await touch.tap(await centreOf(page, pill(0)));
+    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(0);
+    s = await getState(page);
+    expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
   });
 
   test('a held first pill is drawn within the row\'s near end from the moment it lifts', async ({ page }) => {
@@ -361,32 +355,7 @@ test.describe('pill drag-reorder (touch)', () => {
     await touch.end();
   });
 
-  test('a touch hold that lifts a pill vibrates once', async ({ page }) => {
-    await loadInited(page, FOUR);
-    await stubVibrate(page);
-    const touch = await TouchDriver.attach(page);
-    const { x0, y, x1 } = await dropX(page, 0, 2);
-    await touch.drag({ x: x0, y }, { x: x1, y }, 12, 16, 400);
-    expect((await getState(page)).modalityOrder).toEqual([1, 2, 0, 3]);
-    expect(await vibrations(page)).toBe(1);
-  });
-
-  test('a tap on a pill 50 ms after a hold-drag drop selects it', async ({ page }) => {
-    await loadInited(page, FOUR);
-    const touch = await TouchDriver.attach(page);
-    const { x0, y, x1 } = await dropX(page, 0, 2);
-    await touch.drag({ x: x0, y }, { x: x1, y }, 12, 16, 400);
-    let s = await getState(page);
-    expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
-    expect(s.currentModalityIndex).toBe(2);
-    await page.waitForTimeout(50);
-    await touch.tap(await centreOf(page, pill(0)));
-    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(0);
-    s = await getState(page);
-    expect(s.modalityOrder).toEqual([1, 2, 0, 3]);
-  });
-
-  test('a tap on a pill 50 ms after a row pan and its fling selects it', async ({ page }) => {
+  test('a quick swipe scrolls the row and reorders nothing, and a tap 50 ms after its fling selects', async ({ page }) => {
     await loadInited(page, LONG);
     // The pill the tap lands on, read where the press lands (the fling may still be moving the row when the target is measured).
     await page.evaluate(() => {
@@ -402,6 +371,7 @@ test.describe('pill drag-reorder (touch)', () => {
     const start = await centreOf(page, pill(6));
     await touch.drag(start, { x: start.x - 200, y: start.y }, 10, 10);
     expect(await page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft)).toBeGreaterThan(100);
+    expect((await getState(page)).currentModalityIndex).toBe(0);
     await page.waitForTimeout(50);
     await touch.tap({ x: start.x, y: start.y });
     const pressed = await page.evaluate(() => (window as unknown as { __pressed: number[] }).__pressed);
@@ -410,27 +380,6 @@ test.describe('pill drag-reorder (touch)', () => {
     expect(target).toBeGreaterThan(6);
     await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(target);
     expect((await getState(page)).modalityOrder).toEqual(LONG.modalities.map((_, i) => i));
-  });
-
-  test('a quick swipe scrolls the row and reorders nothing', async ({ page }) => {
-    await loadInited(page, LONG);
-    const touch = await TouchDriver.attach(page);
-    const start = await centreOf(page, pill(6));
-    expect(await page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft)).toBe(0);
-    await touch.drag(start, { x: start.x - 200, y: start.y }, 10, 10);
-    const scrolled = await page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft);
-    expect(scrolled).toBeGreaterThan(100);
-    const s = await getState(page);
-    expect(s.modalityOrder).toEqual(LONG.modalities.map((_, i) => i));
-    expect(s.currentModalityIndex).toBe(0);
-  });
-
-  test('a tap selects the pill', async ({ page }) => {
-    await loadInited(page, FOUR);
-    const touch = await TouchDriver.attach(page);
-    await touch.tap(await centreOf(page, pill(2)));
-    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(2);
-    expect((await getState(page)).modalityOrder).toEqual([0, 1, 2, 3]);
   });
 
   test('a touchstart on a pill arrives default-prevented', async ({ page }) => {
@@ -444,6 +393,8 @@ test.describe('pill drag-reorder (touch)', () => {
     const touch = await TouchDriver.attach(page);
     await touch.tap(await centreOf(page, pill(1)));
     expect(await page.evaluate(() => (window as unknown as { __tsPrevented: boolean[] }).__tsPrevented)).toEqual([true]);
+    // So the browser sends no click for the tap: the row clicks the pill itself.
+    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(1);
   });
 
   test("a lostpointercapture at the lifted pill mid-drag does not end the drag (the real-Android hand-over)", async ({ page }) => {

@@ -89,6 +89,12 @@ The full ImageCompare viewer: zoom and pan kept across columns, `←`/`→` colu
 - **The published images are read-only**: Delete is greyed out on them.
 - **PPTX export** is offered on a static host only. A Claude artifact blocks every download a page
   starts, so there it is not offered at all.
+- **Columns reorder by dragging a pill** along the row (on a phone, hold it until it lifts first);
+  `[` / `]` move the current column one slot.
+- **On a phone or tablet** the page switches to a touch layout: swipe sideways for columns and up or
+  down for rows, touch and hold to flip back, pinch to zoom, tap the zoom readout to reset, and ▦
+  opens the film strip. The Tools panel, vote circles and menus are off there, so a viewer on a
+  phone can look but not crop or copy `results.txt`, and votes only with a keyboard (`Enter`).
 
 If the page shows the folder picker with an `imagecompare.json: ...` message, the manifest is
 malformed, names a path outside the folder, or names a host the page does not know; stage it again

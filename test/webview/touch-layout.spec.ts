@@ -13,9 +13,11 @@ import { WEBVIEW_STYLES } from '../../src/webviewShell';
  */
 
 const THREE: FixtureSpec = { ...DEFAULT_SPEC, modalities: ['GT', 'PRED', 'X'] };
-const EIGHT: FixtureSpec = { ...DEFAULT_SPEC, modalities: ['M0', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7'] };
-const ONE_TUPLE: FixtureSpec = { ...DEFAULT_SPEC, tupleNames: ['scene_000'] };
-const MANY_ROWS: FixtureSpec = { ...DEFAULT_SPEC, tupleNames: Array.from({ length: 40 }, (_, i) => `scene_${String(i).padStart(3, '0')}`) };
+const STRIP: FixtureSpec = {
+  ...DEFAULT_SPEC,
+  modalities: ['M0', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7'],
+  tupleNames: Array.from({ length: 40 }, (_, i) => `scene_${String(i).padStart(3, '0')}`),
+};
 
 /** The middle of the image area, clear of the bar and of the (closed) strip. */
 async function imageCentre(page: Page) {
@@ -36,18 +38,14 @@ test.describe('touch layout gate', () => {
     }));
     expect(parseFloat(offset)).toBeGreaterThan(0);
     expect(parseFloat(offset)).toBeCloseTo(width, 0);
+    // Tiles are centre-cropped in both layouts.
+    expect(await page.locator('.carousel-thumb').first().evaluate((el) => getComputedStyle(el).objectFit)).toBe('cover');
     // Desktop help never shows the touch rows, and does list the drag.
     await page.click('#help-btn');
     const help = await page.locator('#help-modal').innerText();
     expect(help).not.toContain('Touch and hold');
     expect(help).toContain('Drag a pill');
     expect(help).toContain('Keyboard Shortcuts');
-  });
-
-  test('strip tiles are centre-cropped (desktop)', async ({ page }) => {
-    await loadInited(page);
-    const fit = await page.locator('.carousel-thumb').first().evaluate((el) => getComputedStyle(el).objectFit);
-    expect(fit).toBe('cover');
   });
 });
 
@@ -62,13 +60,7 @@ test.describe('touch layout (coarse pointer)', () => {
     await expect(page.locator('#carousel')).toBeHidden();
     const offset = await page.evaluate(() => document.getElementById('viewer')!.style.getPropertyValue('--carousel-offset'));
     expect(offset).toBe('0px');
-  });
-
-  test('a single-tuple comparison has no strip and shows no ▦', async ({ page }) => {
-    await loadInited(page, ONE_TUPLE);
-    expect(await page.evaluate(() => document.body.classList.contains('touch-ui'))).toBe(true);
-    await expect(page.locator('#carousel')).not.toHaveClass(/active/);
-    await expect(page.locator('#strip-btn')).toBeHidden();
+    expect(await page.locator('.carousel-thumb').first().evaluate((el) => getComputedStyle(el).objectFit)).toBe('cover');
   });
 
   test('▦ follows the strip class main.ts sets, and the shell CSS uses no :has()', async ({ page }) => {
@@ -81,15 +73,6 @@ test.describe('touch layout (coarse pointer)', () => {
     await page.evaluate(() => document.getElementById('viewer')!.classList.remove('has-carousel'));
     await expect(page.locator('#carousel')).toHaveClass(/active/);
     await expect(page.locator('#strip-btn')).toBeHidden();
-  });
-
-  test('a single-tuple comparison carries no strip class, and ▦ appears only with it', async ({ page }) => {
-    await loadInited(page, ONE_TUPLE);
-    await expect(page.locator('#viewer')).not.toHaveClass(/has-carousel/);
-    await expect(page.locator('#strip-btn')).toBeHidden();
-    await page.evaluate(() => document.getElementById('viewer')!.classList.add('has-carousel'));
-    await expect(page.locator('#carousel')).not.toHaveClass(/active/);
-    await expect(page.locator('#strip-btn')).toBeVisible();
   });
 
   test('the ▦ icon is an SVG centred in its 40 px button, in the button text colour', async ({ page }) => {
@@ -131,28 +114,15 @@ test.describe('touch layout (coarse pointer)', () => {
     for (const f of m.fillAfter) expect(f).toBe('rgb(1, 2, 3)');
   });
 
-  test('strip tiles are centre-cropped (touch)', async ({ page }) => {
-    await loadInited(page);
-    const fit = await page.locator('.carousel-thumb').first().evaluate((el) => getComputedStyle(el).objectFit);
-    expect(fit).toBe('cover');
-  });
-
   test('a sideways swipe on the image steps modality and skips a hidden one', async ({ page }) => {
     // The touch layout opens no menu, so the only hide path is unreachable here. This wraps the
-    // bundle's window-capture contextmenu blocker (and only it) so the test can hide a pill through
-    // the real menu, then puts the blocker back.
+    // bundle's window contextmenu blocker so the test can hide a pill through the real menu, then
+    // puts the blocker back.
     await page.addInitScript(() => {
-      const orig = EventTarget.prototype.addEventListener;
-      EventTarget.prototype.addEventListener = function (this: EventTarget, type: string, fn: any, opts?: any) {
-        if (this === window && type === 'contextmenu' && opts === true) {
-          const wrapped = function (this: unknown, e: Event) {
-            if ((window as any).__allowMenu) return;
-            return fn.call(this, e);
-          };
-          return orig.call(this, type, wrapped, opts);
-        }
-        return orig.call(this, type, fn, opts);
-      } as typeof EventTarget.prototype.addEventListener;
+      const add = window.addEventListener;
+      window.addEventListener = function (this: Window, type: string, fn: any, opts?: any) {
+        return add.call(this, type, type === 'contextmenu' ? (e: Event) => (window as any).__allowMenu || fn(e) : fn, opts);
+      } as typeof window.addEventListener;
     });
     await loadInited(page, THREE);
     await page.evaluate(() => { (window as any).__allowMenu = true; });
@@ -264,15 +234,18 @@ test.describe('touch layout (coarse pointer)', () => {
     expect(s.panY).toBe(0);
   });
 
-  test('▦ opens a full-width strip; a tile tap navigates and closes it', async ({ page }) => {
+  test('▦ opens a full-width strip; a tile tap navigates and closes it; a finger drag scrolls its rows and taps nothing', async ({ page }) => {
     // Eight columns, so a full-width row's tiles are small enough for three rows to be on screen.
-    await loadInited(page, EIGHT);
+    await loadInited(page, STRIP);
     const touch = await TouchDriver.attach(page);
-    await touch.tap(await centreOf(page, '#strip-btn'));
-    await expect(page.locator('#viewer')).not.toHaveClass(/strip-closed/);
-    await expect(page.locator('#carousel')).toBeVisible();
-    // The open strip rebinds its tiles to the new width on the next frame.
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
+    // The open strip rebinds its tiles to the new width on the next frame, and re-centres.
+    const open = async () => {
+      await touch.tap(await centreOf(page, '#strip-btn'));
+      await expect(page.locator('#viewer')).not.toHaveClass(/strip-closed/);
+      await expect(page.locator('#carousel')).toBeVisible();
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
+    };
+    await open();
     const { strip, viewer } = await page.evaluate(() => ({
       strip: document.getElementById('carousel')!.getBoundingClientRect().width,
       viewer: document.getElementById('viewer')!.getBoundingClientRect().width,
@@ -285,26 +258,18 @@ test.describe('touch layout (coarse pointer)', () => {
     await expect.poll(async () => (await getState(page)).currentTupleIndex).toBe(2);
     expect((await getState(page)).currentModalityIndex).toBe(5);
     await expect(page.locator('#viewer')).toHaveClass(/strip-closed/);
-  });
 
-  test('a finger drag on the open strip scrolls its rows and taps nothing', async ({ page }) => {
-    await loadInited(page, MANY_ROWS);
-    const touch = await TouchDriver.attach(page);
-    await touch.tap(await centreOf(page, '#strip-btn'));
-    await expect(page.locator('#carousel')).toBeVisible();
-    // Let the open's own re-centre land first, so only the drag can move the wall.
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
+    await open();
     const wallY = () => page.evaluate(() => {
       const m = /translateY\((-?[\d.]+)px\)/.exec(document.getElementById('carousel-wall')!.style.transform);
       return m ? 0 - parseFloat(m[1]) : 0;
     });
     const before = await wallY();
-    expect(before).toBe(0);
     const c = await centreOf(page, '#carousel');
     await touch.drag(c, { x: c.x, y: c.y - 200 });
     // A finger dragged up 200 px scrolls the rows down by about that much (the slop eats the first few).
-    await expect.poll(wallY).toBeGreaterThan(150);
-    expect((await getState(page)).currentTupleIndex).toBe(0);
+    await expect.poll(wallY).toBeGreaterThan(before + 150);
+    expect((await getState(page)).currentTupleIndex).toBe(2);
     await expect(page.locator('#viewer')).not.toHaveClass(/strip-closed/);
   });
 

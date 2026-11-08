@@ -452,24 +452,13 @@ the fix, the docs, and the CI check.
 - **Pill drag and the touch layout, by mutation.** `test/webview/pill-drag.spec.ts` and
   `test/webview/touch-layout.spec.ts` pin everything in `webview/pillDrag.ts`, `webview/touchInput.ts`
   and the `touch-ui` half of `webview/main.ts` and `webviewShell.ts` (`docs/pointer-input.md`) — the
-  drag's thresholds, the one commit and the transform-only lift on a 40-pill row, the row owning its
-  touches, only the row's capture ending a drag, the gate on `(pointer: coarse)`, every image and strip
-  gesture, the suppressed menus and desktop chrome, the help rows, the ▦ icon centred in its button,
-  the centre-cropped tile. All of it is DOM and pointer wiring, outside the Vitest-only harness; the
-  permutation, the drop slot and the
-  per-pill shift ARE mutation-covered, in `test/unit/pillReorder.test.ts`. What stands in: every spec
-  was watched failing against a deliberate break of its own rule (swap-shaped remap, the row-target
-  check on `lostpointercapture` dropped, the `touchstart` cancel dropped, the click swallow dropped,
-  the click swallow armed by a finger's pan or drop, the lift's haptic fired for a mouse, the ▦ shown
-  without a strip, the swallow left armed past the next press, the swallow eating a `detail`-0 click,
-  a pen tap left to the engine's click or clicked twice, a pen treated as a finger, the ▦ keyed on
-  anything but `has-carousel`, the lift's clamp ignoring its scale or a resting end pill's origin, a
-  held pill drawn unclamped until its first move, every pill restyled per move, a row mutation per
-  move, the hold and the row pan dropped, the gate forced on, the offset helper ignoring the layout,
-  hidden pills no longer skipped, the strip's close, refit and scroll dropped, the pinch reverted to
-  a swipe on a lift, the readout reset and the help hiding dropped, the ▦ icon back to a text glyph
-  or drawn 2 px off centre, its fill fixed rather than `currentColor`, `object-fit` back to
-  `contain`).
+  drag's thresholds, the one commit and the transform-only lift on a 40-pill row, the lift's clamp
+  under fractional pill widths, the row owning its touches, only the row's capture ending a drag, the
+  gate on `(pointer: coarse)`, every image and strip gesture, the suppressed menus and desktop chrome,
+  the help rows, the ▦ icon centred in its button, the centre-cropped tile. All of it is DOM and
+  pointer wiring, outside the Vitest-only harness; the permutation, the drop slot and the per-pill
+  shift ARE mutation-covered, in `test/unit/pillReorder.test.ts`. What stands in: every spec was
+  watched failing against a deliberate break of its own rule.
   Two limits, stated rather than hidden: touch emulation fires no implicit-capture events and no
   Chrome long-press cancel, so the `lostpointercapture` a real Android WebView sends is dispatched
   by hand, and the `touchstart` cancel is pinned only by its `defaultPrevented` (the emulated drags
@@ -479,10 +468,9 @@ the fix, the docs, and the CI check.
   stylus engine that fires touch events too is stood in for by hand-dispatched pen pointer events
   with no click; Chromium's CDP pen sends its own. And the long-row test's scroll-position assertion
   is a regression guard — the drop rebuilds the row synchronously, so Chromium never clamps its
-  `scrollLeft` even without the restore. Writing these specs is what found two defects in the
-  design's prototype: a lifted pill no narrower than an end pill could never be dropped in that end
-  slot (the slot was searched from the clamped drawing), and the strip's inner scroller, a scroll
-  container, let the browser claim a vertical drag and cancel the finger.
+  `scrollLeft` even without the restore. Pill geometry depends on the runner's fonts, which is why
+  the clamp spec forces fractional widths itself (`FRACTIONAL_PILLS_CSS` in `test/webview/harness.ts`);
+  `IC_FRACTIONAL_PILLS=1 npm run test:webview` applies the same CSS to every spec.
 - **The menu's and the notice's DOM rules, by mutation.** `test/webview/context-menu.spec.ts` and
   `test/webview/notice.spec.ts` pin rules that live in `webview/main.ts` and
   `webview/contextMenu.ts` — keys must not act behind an open menu (Del there is a permanent file
@@ -539,6 +527,13 @@ the fix, the docs, and the CI check.
   and silent.
 
 ## Findings (caught by this testbed)
+
+- **A lifted pill overshot the row's far end on CI only** *(fixed)* — `webview/pillDrag.ts` built the
+  lift's clamp, the drop midpoints and the slide shift from whole-pixel `offsetLeft`/`offsetWidth`
+  while the CI runners' fonts drew the pills at fractional widths, so the Playwright step failed on
+  all three OSes (the ubuntu log names the clamp test) and passed locally; it now reads the pills'
+  rects, and the spec forces fractional widths
+  so it fails on any runner against the old code (`docs/pointer-input.md`, "The drag").
 
 - **Three platform targets were never published, and VS Code blamed the engine range** *(fixed)* —
   a remote-session install failed with *"not compatible with the current version of Visual Studio
@@ -1388,6 +1383,12 @@ interactions run in the Playwright layer (`npm run test:webview`) — both on ev
    keeps the tile grid pixel-stationary at the ends too — only tile content and the highlight
    change, with the last column always clear of the scrollbar thumb — and wheel or thumb drag
    scroll freely.
+7. On a real phone (Android Chrome or an app's WebView; an iPhone too, if one is at hand), open a
+   published comparison: hold a pill until it lifts, drag it to either end of the row and drop it;
+   pan the row and tap a pill straight after; swipe both ways, hold to flip, pinch, tap the zoom
+   readout; open ▦ and tap a tile. Emulated touch is not evidence for any of it: the drag's worst
+   bug, a pill's `lostpointercapture` bubbling to the row, never fires under CDP touch emulation
+   (docs/pointer-input.md: only-row-capture-ends-drag).
 
 ## What changed in the app to enable testing
 

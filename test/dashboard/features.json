@@ -552,23 +552,11 @@
             },
             {
               "suite": "webview",
-              "match": "a mouse drag lifts a pill without vibrating"
-            },
-            {
-              "suite": "webview",
               "match": "a CDP pen tap on a pill selects it with exactly one click on the pill"
             },
             {
               "suite": "webview",
               "match": "a pen down and up with no click from the engine selects the pill with exactly one click"
-            },
-            {
-              "suite": "webview",
-              "match": "after a pen tap the engine never answered, a programmatic click() is not swallowed"
-            },
-            {
-              "suite": "webview",
-              "match": "a CDP pen drag past 5 px reorders"
             },
             {
               "suite": "webview",
@@ -582,11 +570,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "a held pill lifts and drags: 0 -> 2 reorders"
-            },
-            {
-              "suite": "webview",
-              "match": "a touch hold that lifts a pill vibrates once"
+              "match": "a held pill lifts with one vibration and drags 0 -> 2"
             },
             {
               "suite": "webview",
@@ -622,11 +606,11 @@
             },
             {
               "suite": "webview",
-              "match": "a tap on a pill 50 ms after a hold-drag drop selects it"
+              "match": "and a tap 50 ms after the drop selects"
             },
             {
               "suite": "webview",
-              "match": "a tap on a pill 50 ms after a row pan and its fling selects it"
+              "match": "and a tap 50 ms after its fling selects"
             },
             {
               "suite": "webview",
@@ -669,10 +653,6 @@
             {
               "suite": "webview",
               "match": "a quick swipe scrolls the row and reorders nothing"
-            },
-            {
-              "suite": "webview",
-              "match": "a tap selects the pill"
             },
             {
               "suite": "webview",
@@ -1008,11 +988,11 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "strip tiles are centre-cropped (desktop)"
+              "match": "a fine primary pointer keeps the desktop layout"
             },
             {
               "suite": "webview",
-              "match": "strip tiles are centre-cropped (touch)"
+              "match": "a coarse primary pointer gets touch-ui"
             }
           ]
         }
@@ -1099,19 +1079,15 @@
             },
             {
               "suite": "webview",
-              "match": "a finger drag on the open strip scrolls its rows and taps nothing"
+              "match": "a finger drag scrolls its rows and taps nothing"
             },
             {
               "suite": "webview",
-              "match": "a single-tuple comparison has no strip and shows no"
+              "match": "a single-tuple comparison (no ▦) has nothing before the pill row either"
             },
             {
               "suite": "webview",
               "match": "follows the strip class main.ts sets, and the shell CSS uses no :has()"
-            },
-            {
-              "suite": "webview",
-              "match": "a single-tuple comparison carries no strip class, and ▦ appears only with it"
             },
             {
               "suite": "webview",
@@ -1431,13 +1407,7 @@
             {
               "suite": "webview",
               "match": "the pill row is one scrollable strip"
-            }
-          ]
-        },
-        {
-          "id": "pills-no-lead-space",
-          "name": "Nothing before the pill row: no empty ▦ box, no gap",
-          "tests": [
+            },
             {
               "suite": "webview",
               "match": "nothing in the bar precedes the pill row: no empty ▦ box and no gap before the first pill"
@@ -1445,10 +1415,6 @@
             {
               "suite": "webview",
               "match": "a single-tuple comparison (no ▦) has nothing before the pill row either"
-            },
-            {
-              "suite": "webview",
-              "match": "with a strip, ▦ is shown before the pill row"
             }
           ]
         },

@@ -21,6 +21,8 @@ export interface FixtureSpec {
   deleteUnit?: 'tuple' | 'image';
   /** Slots ([tupleIndex, modalityIndex]) the fixture host flags `readOnly` on init; absent flags none, as the provider does. */
   readOnly?: Array<[number, number]>;
+  /** The init's `labelsExplicit`: true shows labels whole instead of truncated to 20 characters. */
+  labelsExplicit?: boolean;
 }
 
 export const DEFAULT_SPEC: FixtureSpec = {
@@ -63,7 +65,7 @@ export function initMessage(spec: FixtureSpec = DEFAULT_SPEC) {
     config: { thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false },
     winners: {} as Record<number, number>,
     votingEnabled: spec.votingEnabled,
-    labelsExplicit: false,
+    labelsExplicit: spec.labelsExplicit ?? false,
     capabilities: spec.capabilities ?? { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false },
     ...(spec.version ? { version: spec.version } : {}),
     ...(spec.deleteUnit ? { deleteUnit: spec.deleteUnit } : {}),

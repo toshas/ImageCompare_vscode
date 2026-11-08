@@ -15,6 +15,16 @@ export const BUNDLE_PATH = path.join(ROOT, 'dist', 'webview.js');
 export const HARNESS_DIR = path.join(ROOT, 'test', 'webview', 'harness');
 export const HARNESS_HTML_PATH = path.join(HARNESS_DIR, 'index.html');
 export const HARNESS_URL = 'file://' + HARNESS_HTML_PATH;
+/**
+ * Puts every pill's width and position off the whole-pixel grid whatever the runner's fonts. A short
+ * label takes a fractional min-width (exact in 1/64 px layout units), chosen so whole-pixel offsets
+ * draw the 4-pill row's lifted first pill ~1.3 px past the far end: the first pill's width rounds
+ * down, the fourth's rounds up and so does its left. A long label gains a fractional letter spacing.
+ * The lift-clamp spec applies it itself; `IC_FRACTIONAL_PILLS=1` bakes it into the harness for a run.
+ */
+export const FRACTIONAL_PILLS_CSS = `.modality-btn { box-sizing: border-box; min-width: 64.0625px; letter-spacing: 0.37px; }
+.modality-btn:nth-child(1) { min-width: 64.4375px; }
+.modality-btn:nth-child(4) { min-width: 64.5625px; }`;
 
 function harnessHtml(): string {
   const bundleUrl = 'file://' + BUNDLE_PATH;
@@ -24,6 +34,7 @@ function harnessHtml(): string {
 <meta charset="UTF-8">
 <style>
 ${WEBVIEW_STYLES}
+${process.env.IC_FRACTIONAL_PILLS ? FRACTIONAL_PILLS_CSS : ''}
 </style>
 <script>
   // Enable the read-only test hook inside the webview bundle.

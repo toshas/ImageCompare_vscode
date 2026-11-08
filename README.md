@@ -105,6 +105,7 @@ Tip: tab titles show the full filename; add this setting to display `session` in
 | `1-9` | Jump to modality N |
 | `Enter` | Toggle winner for current modality |
 | `[` `]` | Reorder modalities |
+| Drag a pill | Reorder modalities: move the pill anywhere along the row |
 | `Scroll` | Zoom in/out (over the film strip: scroll the list; over the modality row: scroll it sideways when it overflows) |
 | `Alt+Scroll` | The same, 5× faster — zoom, film strip, or modality row |
 | `Drag` | Pan image |
@@ -119,7 +120,8 @@ The modality row is a single scrollable strip: scroll it with the wheel when it 
 navigation — an arrow key, a digit jump, a reorder — scrolls it back to the selected pill. The film
 strip's columns follow the selection the same way.
 
-Hovering a modality pill shows its full path; clicking one selects that modality. Right-click a
+Hovering a modality pill shows its full path; clicking one selects that modality, and dragging it
+along the row moves that modality there. Right-click a
 pill to copy its path, reveal it in the Explorer file tree, or **hide the modality**: a hidden pill
 is grayed out and skipped by `←` `→` and `Space`, but still reachable by click or digit jump, and
 still takes part in reordering, voting and export. Right-click again to show it.
@@ -199,6 +201,21 @@ as a real file — local disk, Google Drive and FUSE mounts, and SSH/WSL/contain
 the extension runs next to the files — gets two extra fallbacks: a Node watcher and a periodic
 existence sweep. Virtual filesystems get only VS Code's watcher, so updates there are as reliable as
 it is.
+
+### Phones and Tablets
+
+The same viewer runs in a browser, which is how a comparison published as a web page is opened. On
+a device whose primary pointer is a finger it switches to a touch layout:
+
+- swipe sideways to switch modality, up or down to switch tuple (up is next);
+- touch and hold to flip to the previous modality until you lift, as holding `Space` does;
+- pinch to zoom and drag with two fingers to pan; tap the zoom readout to reset;
+- hold a pill until it lifts, then drag it to reorder;
+- **▦** opens the film strip as a full-width picker; tapping a tile jumps there and closes it.
+
+The Tools panel (crop, delete, PPTX), context menus, pill tooltips and vote circles are off there:
+voting takes a keyboard (`Enter`), and a crop rectangle can only be drawn with a mouse. A desktop,
+VS Code included, and a touchscreen laptop driven by its trackpad keep the desktop layout.
 
 ## Supported Formats
 

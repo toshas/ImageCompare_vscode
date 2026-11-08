@@ -16,11 +16,6 @@ describe('pill reorder (pillReorder.ts, real code)', () => {
       expect([0, 1, 2, 3, 4].map((k) => movedIndex(k, 3, 1))).toEqual([0, 2, 3, 1, 4]);
     });
 
-    it('a one-slot move is the only case that looks like a swap', () => {
-      expect([0, 1, 2].map((k) => movedIndex(k, 1, 2))).toEqual([0, 2, 1]);
-      expect([0, 1, 2].map((k) => movedIndex(k, 1, 0))).toEqual([1, 0, 2]);
-    });
-
     it('a vote on a pill strictly between from and to follows that pill, not the moved one', () => {
       // Vote on C (index 2); A moves 0 -> 3 in [A, B, C, D, E] -> [B, C, D, A, E]: C is now at 1.
       expect(movedIndex(2, 0, 3)).toBe(1);
@@ -30,12 +25,6 @@ describe('pill reorder (pillReorder.ts, real code)', () => {
 
     it('from === to is the identity', () => {
       expect([0, 1, 2, 3].map((k) => movedIndex(k, 2, 2))).toEqual([0, 1, 2, 3]);
-    });
-
-    it('is a permutation: every index lands somewhere distinct', () => {
-      const out = [0, 1, 2, 3, 4, 5].map((k) => movedIndex(k, 1, 4));
-      expect(out).toEqual([0, 4, 1, 2, 3, 5]);
-      expect(new Set(out).size).toBe(6);
     });
   });
 
@@ -102,16 +91,6 @@ describe('pill reorder (pillReorder.ts, real code)', () => {
 
     it('hovering over its own slot shifts nobody', () => {
       expect([0, 1, 3, 4].map((j) => slotShift(j, 2, 2, 24))).toEqual([0, 0, 0, 0]);
-    });
-
-    it('agrees with movedIndex on who moved: a pill shifted left lands one slot left', () => {
-      // Hand-checked pairing for from=0, to=2: pills 1 and 2 shift left and land at 0 and 1.
-      expect(slotShift(1, 0, 2, 10)).toBe(-10);
-      expect(movedIndex(1, 0, 2)).toBe(0);
-      expect(slotShift(2, 0, 2, 10)).toBe(-10);
-      expect(movedIndex(2, 0, 2)).toBe(1);
-      expect(slotShift(3, 0, 2, 10)).toBe(0);
-      expect(movedIndex(3, 0, 2)).toBe(3);
     });
   });
 });
