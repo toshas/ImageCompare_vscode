@@ -78,7 +78,8 @@ notices carry no reveal action, and its help modal has no **Ctrl/Cmd+S** row, be
 file tree to reveal into and no session file to copy. A published comparison states two more from
 its hosting regime (see "Publishing a comparison"): no **PPTX** button where the host blocks every
 download a page starts (`exportPptx`), and a **results.txt** button that copies the votes out
-(`copyResults`). One more difference is a fact neither host may
+(`copyResults`). It also keeps the viewer's view across a reload (`restoresView`, "The view survives
+a reload"), which the extension does not. One more difference is a fact neither host may
 invent: an emptied comparison reaches the same terminal notice here, through the same bundle
 (`docs/loading-architecture.md: empty-comparison-is-terminal`), but only the extension can also say
 *why* — a File System Access root handle cannot distinguish a deleted directory from an unreadable
@@ -274,6 +275,28 @@ viewer's own crops deletes as usual. The same flag greys Delete on the read-only
 where it used to do nothing silently. A published comparison never polls: nothing outside the page
 can change it.
 
+### The view survives a reload
+
+A published page is reloaded under the viewer more often than a desktop tab: a phone browser or an
+app's WebView discards a page in the background, and the Claude app reloads an artifact by itself.
+So the page keeps the view as well as the votes: the column order, the hidden pills, the tuple and
+modality on screen, and the zoom and pan, in `localStorage` under the viewer layer's namespace
+(`viewer-layer-per-comparison`). It is written as the view changes, because a discarded page gets no
+unload event to save on.
+
+The saved view names the tuple and the modalities; it holds no index (`view-restored-by-name`).
+Display and original indices both shift when a listing changes, and an index restored into a
+different listing shows the wrong image without any error. A restore reads the names against the
+comparison as it lists now: a name that is gone is skipped, a modality the save never saw keeps its
+default place after the saved ones, and an unmatched tuple or modality leaves the view at its default.
+Restoring is navigation: the order, hidden set, tuple, modality and zoom are applied through the
+actions keys and drags take, once, at the first `init`, so loading sees an ordinary navigation
+(`view-restore-is-navigation`).
+
+Only a host that states `restoresView` keeps a view (`view-kept-only-where-stated`). The published
+page states it. The extension does not, so a reloaded panel opens as it always has, and neither does
+a page opened through the folder picker, whose reload returns to the picker anyway.
+
 ### The sharing script
 
 `node scripts/share-comparison.mjs <folder | session.imagecompare> --out <dir> [--host claude-artifact|static] [--title <name>]`
@@ -445,11 +468,17 @@ Publishing through Claude's Artifact tool is then the recipe in the skill.
   and ignores Del for a target holding a `readOnly` image. Viewer-made files (crops, `results.txt`)
   are written and deleted normally. Breaking any one of the three sites either loses the viewer's
   own work, or offers a Delete that fails, or claims one that succeeded.
-- **`viewer-layer-per-comparison`** — a published comparison's viewer layer is namespaced by the
-  comparison's URL directory, so two comparisons served from one origin never read or overwrite
-  each other's votes or crops. Nothing in the layer leaves the browser except by the viewer's own
-  action: a copy to the clipboard (results.txt through `copyResults`, Copy Image), or a PPTX export
-  where the regime offers one. The page sends it nowhere.
+- **`viewer-layer-per-comparison`** — a published comparison's viewer layer and its saved view are
+  namespaced by the comparison's URL directory, so two comparisons served from one origin never read
+  or overwrite each other's votes, crops or view. Nothing in the layer leaves the browser except by
+  the viewer's own action: a copy to the clipboard (results.txt through `copyResults`, Copy Image),
+  or a PPTX export where the regime offers one. The page sends it nowhere.
+- **`view-restored-by-name`** — a saved view identifies the tuple and the modalities by name only,
+  never by index; a restore applies only names that still match and leaves the rest at its default.
+- **`view-restore-is-navigation`** — restoring a saved view calls the actions navigation calls; no
+  load, prefetch, sweep or column-report code knows that a view was restored.
+- **`view-kept-only-where-stated`** — a view is saved and restored only when the host's
+  `restoresView` capability says so; the extension never states it, so its behaviour is unchanged.
 - **`packed-thumbs-never-required`** — a packed thumbnail replaces the full-image fetch for a
   listed image's thumbnail and nothing else. A missing, malformed or unreachable thumbs file, or a
   missing entry, falls back to decoding the full image, never to a failed slot or a stalled sweep.

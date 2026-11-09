@@ -999,6 +999,10 @@ Rendering is "contain": `baseScale = min(vw/width, vh/height)`, and the drawn sc
 `baseScale * zoom`. Nothing is stretched, so images of different aspect ratios in the same tuple
 legitimately render at different sizes.
 
+Strip tiles are the exception: a square tile shows its thumbnail centre-cropped (`object-fit: cover`)
+rather than letterboxed, so a row reads as a wall of image content at any aspect ratio; only the tile
+crops it, never the generated thumbnail.
+
 `zoom` and `panX/panY` are session-global and are *not* reset when switching modality — that is the
 point, you are comparing the same region at the same magnification. But `baseScale` is per-image, so
 when the next modality has a different aspect ratio the same `zoom`/`pan` maps to a slightly

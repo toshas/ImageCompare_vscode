@@ -24,7 +24,7 @@ async function hoverTooltip(page: import('@playwright/test').Page, pillIndex: nu
 }
 
 test.describe('modality reorder keeps name and tooltip in sync', () => {
-  test('reorder-right swaps both the pill name and its path tooltip', async ({ page }) => {
+  test('a pill drag moves both the pill name and its path tooltip', async ({ page }) => {
     await loadInited(page);
     const pills = page.locator('#modality-selector .modality-btn');
 
@@ -33,8 +33,13 @@ test.describe('modality reorder keeps name and tooltip in sync', () => {
     expect(await hoverTooltip(page, 0)).toBe('/fixtures/GT');
     expect(await hoverTooltip(page, 1)).toBe('/fixtures/PRED');
 
-    // Move current modality (GT, index 0) to the right via the reorder button.
-    await page.locator('#reorder-right').click();
+    // Drag GT (index 0) past PRED's midpoint; the ← / → buttons this used to click are gone.
+    const a = (await pills.nth(0).boundingBox())!;
+    const b = (await pills.nth(1).boundingBox())!;
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2 + 3, a.y + a.height / 2, { steps: 8 });
+    await page.mouse.up();
 
     // Now display order is [PRED, GT]; tooltips must follow.
     await expect(pills.nth(0)).toHaveText(/PRED/);

@@ -119,6 +119,8 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `noticeChannel` | real source | What a finished host action says: the wordings pinned against the strings the provider used to hand `showInformationMessage`/`showErrorMessage`, the reveal action offered only to a host that can reveal (with the text unchanged either way), and a failure toned `error` with no action |
 | `columnWindow` | real source | The column axis's virtualization arithmetic: a pool bounded by the viewport rather than the modality count (and capped by the columns that exist), sized from the narrowest possible tile so a resize never remaps the ring, the visible range with its overscan and both clamps, and where a column sits given the row's padding — all against hand-computed geometry for the 265 x 136 field grid |
 | `axisScroll` | real source | The one rule every scrollable axis obeys: centring computed from hand-derived geometry, clamping at both ends and on a short axis, the pitch snap that makes consecutive items differ by exactly one pitch, and Alt — multiplying a linear scroll but *compounding* the zoom step (`1.03**5`, not `1 + 0.03*5`), which is the arithmetic that keeps "faster" meaning the same on every axis |
+| `pillReorder` | real source | What a pill move does, against hand-written permutations: the moved one lands at `to` and the pills between close up by one in both directions (not a swap — the shape that re-attributes votes), a vote strictly between `from` and `to` following its pill; the drop slot's binary search passing a neighbour only strictly beyond its midpoint, clamping beyond either end, from either end slot, over uneven widths; and each other pill's slide sign and range while one is lifted |
+| `viewState` | real source | A published page's saved view, against hand-worked listings: names saved, never indices; a saved order applied by name onto a listing whose original order differs, a gone name skipped, an unseen modality appended in listing order, a gone tuple or modality left at its default (the first tuple, the first visible modality), zoom clamped to 0.1-50, non-finite numbers ignored, and any malformed save restoring every default without throwing |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move — and a slow directory in the middle finishing last |
 | `tupleLoadScheduling` | real source | The same policy where it costs money — the real provider's message loop against the real pool: browsing six tuples leaves only the current one queued, a cancelled load never reaches the filesystem, `tail` requests queue in their own class, the sweep keeps every speculative slot, dispose leaves nothing queued |
@@ -403,6 +405,14 @@ the fix, the docs, and the CI check.
   manifest fields, the layer, the namespace, the packed-thumbs fallback and the sharing script's
   every refusal — are mutation-covered in the four suites above, and the `readOnly` payload in
   `test/unit/initPayload.test.ts`.
+- **The saved view's wiring, by mutation** (`docs/standalone.md`, "The view survives a reload"). That
+  the webview writes the view as it changes and on a hide, restores it once at the first `init`, and
+  never touches `getState`/`setState` without `restoresView`, and that the adapter keys
+  `localStorage` by the comparison's namespace and swallows a storage failure, is pinned only by the
+  three `standalone published comparison ...` view tests in `test/webview/standalone-build.spec.ts`
+  and the three `restoresView` tests in `test/webview/published-affordances.spec.ts`, each watched
+  failing against a deliberate break of its rule. The restore plan itself is mutation-covered, in
+  `test/unit/viewState.test.ts`.
 - **The carousel's DOM shape, by mutation.** `test/webview/column-virtualization.spec.ts` asserts
   tile counts and layout — that doubling the modalities adds no DOM, that the materialized columns
   are contiguous and correctly placed, and that scrolling releases the near end as it binds the far
@@ -433,6 +443,10 @@ the fix, the docs, and the CI check.
   scrollbar painting across the pills, a modality switch mutating class attributes and never the
   labels (the label rewrite on every render was the flicker), navigation sliding while a wheel lands
   inside its own event, and a wheel burst reaching the same offset in **one** apply rather than eight.
+  `test/webview/pill-bar.spec.ts` adds the bar's lead and the end pills' paint: nothing in `#info`
+  before the pill row (no empty ▦ box, no gap) on desktop and in a single-tuple touch layout, and a
+  hovered, current end pill over 200 px wide — whose 5% scale alone outgrows the row's padding —
+  painting inside the row's clip at either scroll end, a sole pill of that width included.
   None is Vitest-reachable — they are CSS geometry, a MutationObserver count and a rAF boundary. Each
   was watched failing against the pre-fix bundle; the apply-count one is the reason the burst test
   asserts a count at all, since summing correctly happens either way.
@@ -444,6 +458,32 @@ the fix, the docs, and the CI check.
   run showed it passing **vacuously**: containment of the active pill is satisfied trivially by a
   wrapped row, whose `scrollLeft` is pinned at 0. It now also asserts the strip *moved*, away from an
   extreme the selection is not at, and fails pre-change too.
+- **Pill drag and the touch layout, by mutation.** `test/webview/pill-drag.spec.ts`,
+  `test/webview/touch-layout.spec.ts` and `test/webview/pill-bar.spec.ts` pin everything in
+  `webview/pillDrag.ts`, `webview/touchInput.ts` and the `touch-ui` half of `webview/main.ts` and
+  `webviewShell.ts` (`docs/pointer-input.md`) — the drag's thresholds, the one commit and the
+  transform-only lift on a 40-pill row, the lift's clamp, the drop midpoints and the slide distance
+  under fractional pill widths, a press during a landed pill's glide, the row owning its touches,
+  only the row's capture ending a drag, the gate on `(pointer: coarse)`, the hover look gated on
+  `(hover: hover)`, every image and strip gesture, the suppressed menus and desktop chrome, the help
+  rows, the ▦ icon's painted shapes centred in its button, the centre-cropped tile. All of it is DOM
+  and pointer wiring, outside the Vitest-only harness; the permutation, the drop slot and the
+  per-pill shift ARE mutation-covered, in `test/unit/pillReorder.test.ts`. What stands in: every spec
+  was watched failing against a deliberate break of its own rule. Two limits, stated rather than
+  hidden: touch emulation fires no implicit-capture events and no Chrome long-press cancel, so the
+  `lostpointercapture` a real Android WebView sends is dispatched by hand, and the `touchstart`
+  cancel is pinned only by its `defaultPrevented` (the emulated drags pass without it). An emulated
+  tap leaves no `:hover` either, so the no-sticky-hover spec hovers with the mouse instead. The click
+  swallow is pinned through a hand-dispatched pill click (`detail` 1, as an engine's is), since
+  Chromium never clicks the pill: it sends no click after a drop that rebuilds the row, and one to
+  the capturing row after a drag dropped where it started (probed). The stylus engine that fires
+  touch events too is stood in for by hand-dispatched pen pointer events with no click; Chromium's
+  CDP pen sends its own. And the long-row test's scroll-position assertion is a regression guard —
+  the drop rebuilds the row synchronously, so Chromium never clamps its `scrollLeft` even without
+  the restore. Pill geometry depends on the runner's fonts, which is why the clamp, midpoint and
+  glide specs force fractional widths themselves (`FRACTIONAL_PILLS_CSS` in
+  `test/webview/harness.ts`); `IC_FRACTIONAL_PILLS=1 npm run test:webview` applies the same CSS to
+  every spec.
 - **The menu's and the notice's DOM rules, by mutation.** `test/webview/context-menu.spec.ts` and
   `test/webview/notice.spec.ts` pin rules that live in `webview/main.ts` and
   `webview/contextMenu.ts` — keys must not act behind an open menu (Del there is a permanent file
@@ -500,6 +540,27 @@ the fix, the docs, and the CI check.
   and silent.
 
 ## Findings (caught by this testbed)
+
+- **A lifted pill overshot the row's far end on CI only** *(fixed)* — `webview/pillDrag.ts` built the
+  lift's clamp, the drop midpoints and the slide shift from whole-pixel `offsetLeft`/`offsetWidth`
+  while the CI runners' fonts drew the pills at fractional widths, so the Playwright step failed on
+  all three OSes (the ubuntu log names the clamp test) and passed locally; it now reads the pills'
+  rects, and the spec forces fractional widths
+  so it fails on any runner against the old code (`docs/pointer-input.md`, "The drag").
+
+- **A press during a landed pill's glide snapped it** *(fixed)* — the lift cleared every pill's
+  transform to read the rects at rest, which also cut short the ~0.15 s glide of the pill just
+  dropped, so a quick second drag made the first pill jump home. `webview/pillDrag.ts` now undoes
+  the computed transform in arithmetic (`restingSpan`) and leaves the glide running; pinned by
+  `a press during a landed pill's glide leaves the glide running and measures the row at rest` in
+  `test/webview/pill-drag.spec.ts` (`docs/pointer-input.md`, "The drag").
+
+- **A tapped pill stayed enlarged on a phone** *(fixed)* — a touch tap leaves `:hover` on the pill
+  until the next tap elsewhere, so the hover scale and the sole pill's underline stuck on.
+  `src/webviewShell.ts` now applies them, and the end pills' outer-edge origin that serves the scale,
+  only under `@media (hover: hover)`; pinned by `a hovered pill keeps its resting look where the primary
+  pointer cannot hover` in `test/webview/pill-bar.spec.ts` (`docs/pointer-input.md`, the touch
+  layout's "Off in this layout").
 
 - **Three platform targets were never published, and VS Code blamed the engine range** *(fixed)* —
   a remote-session install failed with *"not compatible with the current version of Visual Studio
@@ -1349,6 +1410,12 @@ interactions run in the Playwright layer (`npm run test:webview`) — both on ev
    keeps the tile grid pixel-stationary at the ends too — only tile content and the highlight
    change, with the last column always clear of the scrollbar thumb — and wheel or thumb drag
    scroll freely.
+7. On a real phone (Android Chrome or an app's WebView; an iPhone too, if one is at hand), open a
+   published comparison: hold a pill until it lifts, drag it to either end of the row and drop it;
+   pan the row and tap a pill straight after; swipe both ways, hold to flip, pinch, tap the zoom
+   readout; open ▦ and tap a tile. Emulated touch is not evidence for any of it: the drag's worst
+   bug, a pill's `lostpointercapture` bubbling to the row, never fires under CDP touch emulation
+   (docs/pointer-input.md: only-row-capture-ends-drag).
 
 ## What changed in the app to enable testing
 

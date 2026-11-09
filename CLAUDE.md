@@ -124,6 +124,10 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`webview/contextMenu.ts`** - The menu's DOM only: positioning, dismissal, click routing — it renders what the model returns → `docs/standalone.md`
 - **`webview/noticeChannel.ts`** - Pure (no vscode/DOM): the wording of what the user is told after a host action, and whether a reveal action rides along → `docs/standalone.md`
 - **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
+- **`webview/pillReorder.ts`** - Pure (no vscode/DOM): what a pill move does to every display index (`movedIndex` — a move, not a swap), the slot a lifted pill drops into (`dropSlot`) and how far each other pill slides meanwhile (`slotShift`) → `docs/pointer-input.md`
+- **`webview/viewState.ts`** - Pure (no vscode/DOM): a published page's saved view — built by name from the current state, and planned back onto the comparison as it lists now (`planRestore`) → `docs/standalone.md`
+- **`webview/pillDrag.ts`** - The pill row's pointer gestures: mouse drag, touch hold-then-drag, the row's own pan and fling, the tap click, the one commit on the drop → `docs/pointer-input.md`
+- **`webview/touchInput.ts`** - The touch layout's image and strip gestures (swipe, hold-to-flip, pinch, strip drag) and its context-menu suppression; each gesture calls an action a key already takes → `docs/pointer-input.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 - **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
 - **`standalone/publishedPath.ts`** - Pure: the one rule for a published listing path, read by the page's manifest parser and by the sharing script's staging check → `docs/standalone.md`
@@ -146,6 +150,7 @@ has none). Read one on demand — don't load them preemptively.
 | `docs/tuple-matching.md` | Touching how files are grouped into tuples/modalities: the trie matcher, tie-breaks, crop deprioritization, modality naming/order, or the sparse-vs-dense and original-vs-display index traps. |
 | `docs/image-backends.md` | Touching Sharp/Jimp/PPMX, `loadFullImage`, webpack externalization, or packaging. Documents which fallback tiers *actually* exist (not the aspirational chain) and why the CPU workaround is there. |
 | `docs/crop-and-pptx.md` | Touching crop or PowerPoint export: the relative-coordinate contract, the dual EXIF+tEXt metadata write, the `_cropNN` filename contract, or parent/crop slide pairing. |
+| `docs/pointer-input.md` | Touching how a mouse or finger drives the view beyond keys: dragging a pill to reorder (and what a reorder remaps), or the touch layout — its gating, the phone strip, the image gestures. **Read before trusting an emulated touch test** — the drag's worst bug was invisible to emulation. |
 | `docs/standalone.md` | Touching the standalone browser build: `standalone/`, `scripts/build-standalone.mjs`, or any pure module the adapter shares with the provider (results format, crop plan, deck layout). |
 | `docs/testing.md` | Adding or changing a test, or trusting one: the three layers, what each suite pins, the copy-trap history, what nothing covers, and the manual checks. |
 

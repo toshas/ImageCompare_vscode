@@ -4,6 +4,26 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+### Added
+- **Drag a pill to reorder modalities**, with a mouse, a pen or a finger (hold the pill first): it
+  follows the pointer, the other pills slide aside, and the drop moves it into place. Votes, the
+  Space-flip target and the modality on screen follow their modality. This replaces the ← / →
+  reorder buttons; `[` / `]` still move the current modality one slot.
+- **A touch layout for phones and tablets**, chosen when the device's primary pointer is a finger:
+  swipe sideways to switch modality and up or down to switch tuple, touch and hold to flip back,
+  pinch to zoom, tap the zoom readout to reset, and ▦ opens the film strip as a full-width picker.
+  The Tools panel, context menus, pill tooltips and vote circles are off there. A desktop, VS Code
+  included, keeps its layout.
+- **A published comparison keeps its view across a reload**: the column order, hidden pills, the
+  row and column on screen, and the zoom and pan, kept in the viewer's browser per comparison. The
+  VS Code panel is unchanged.
+
+### Changed
+- **Film-strip tiles are centre-cropped** to fill their square instead of letterboxed; thumbnails
+  themselves are generated as before.
+- **The modality row starts flush**, with no empty gap before the first pill, and a hovered or
+  current pill at either end of the row is no longer clipped.
+
 ## [0.6.0] - 2026-10-29
 
 ### Added

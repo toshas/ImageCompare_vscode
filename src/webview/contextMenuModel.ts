@@ -12,6 +12,8 @@ export interface HostCapabilities {
   exportPptx: boolean;
   /** The host serves `copyResults`, putting results.txt's text on the clipboard. */
   copyResults: boolean;
+  /** The host keeps the view across a reload; absent means it does not (docs/standalone.md: view-kept-only-where-stated). */
+  restoresView?: boolean;
 }
 
 /** An `init` that names no capabilities claims none — an unstated capability is absent, never assumed. */

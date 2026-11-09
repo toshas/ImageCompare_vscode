@@ -15,6 +15,16 @@ export const BUNDLE_PATH = path.join(ROOT, 'dist', 'webview.js');
 export const HARNESS_DIR = path.join(ROOT, 'test', 'webview', 'harness');
 export const HARNESS_HTML_PATH = path.join(HARNESS_DIR, 'index.html');
 export const HARNESS_URL = 'file://' + HARNESS_HTML_PATH;
+/**
+ * Puts every pill's width and position off the whole-pixel grid whatever the runner's fonts. A short
+ * label takes a fractional min-width (exact in 1/64 px layout units), chosen so whole-pixel offsets
+ * draw the 4-pill row's lifted first pill ~1.3 px past the far end: the first pill's width rounds
+ * down, the fourth's rounds up and so does its left. A long label gains a fractional letter spacing.
+ * The lift-clamp, midpoint and glide specs apply it themselves; `IC_FRACTIONAL_PILLS=1` bakes it into the harness for a run.
+ */
+export const FRACTIONAL_PILLS_CSS = `.modality-btn { box-sizing: border-box; min-width: 64.0625px; letter-spacing: 0.37px; }
+.modality-btn:nth-child(1) { min-width: 64.4375px; }
+.modality-btn:nth-child(4) { min-width: 64.5625px; }`;
 
 function harnessHtml(): string {
   const bundleUrl = 'file://' + BUNDLE_PATH;
@@ -24,17 +34,20 @@ function harnessHtml(): string {
 <meta charset="UTF-8">
 <style>
 ${WEBVIEW_STYLES}
+${process.env.IC_FRACTIONAL_PILLS ? FRACTIONAL_PILLS_CSS : ''}
 </style>
 <script>
   // Enable the read-only test hook inside the webview bundle.
   window.__ic_test_enabled = true;
   // Capture everything the webview tries to post back to the extension.
   window.__ic_outbound = [];
+  window.__ic_stateCalls = [];
   window.acquireVsCodeApi = function () {
     return {
       postMessage: function (m) { window.__ic_outbound.push(m); },
-      getState: function () { return window.__ic_state; },
-      setState: function (s) { window.__ic_state = s; }
+      // Counted so a spec can prove a host that keeps no view is never asked to (docs/standalone.md: view-kept-only-where-stated).
+      getState: function () { window.__ic_stateCalls.push('get'); return window.__ic_state; },
+      setState: function (s) { window.__ic_stateCalls.push('set'); window.__ic_state = s; }
     };
   };
   // Inject an inbound extension->webview message. Image and thumbnail payloads

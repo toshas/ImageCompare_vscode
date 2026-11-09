@@ -549,6 +549,70 @@ const mutations = [
     killedBy: 'linear-speed test (an Alt notch travels ALT_SPEED times as far)'
   },
   {
+    name: 'pillReorder: a move becomes a swap (the pills between stop closing up; votes re-attributed)',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (from < k && k <= to) return k - 1;\n  if (to <= k && k < from) return k + 1;',
+    replace: '  if (k === to) return from;',
+    killedBy: 'movedIndex 0 -> 2 test ([A, B, C, D] -> [B, C, A, D], not [C, B, A, D])'
+  },
+  {
+    name: 'pillReorder: a rightward move shifts the pills between the wrong way',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (from < k && k <= to) return k - 1;',
+    replace: '  if (from < k && k <= to) return k + 1;',
+    killedBy: 'movedIndex 0 -> 2 test (B and C land at 0 and 1)'
+  },
+  {
+    name: 'pillReorder: a leftward move shifts the pills between the wrong way',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (to <= k && k < from) return k + 1;',
+    replace: '  if (to <= k && k < from) return k - 1;',
+    killedBy: 'movedIndex 3 -> 1 test (B and C land at 2 and 3)'
+  },
+  {
+    name: 'pillReorder: reaching a right neighbour\'s midpoint already passes it',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '(m) => m >= centre)',
+    replace: '(m) => m > centre)',
+    killedBy: 'dropSlot boundary test (centre exactly at the right neighbour midpoint stays in its slot)'
+  },
+  {
+    name: 'pillReorder: reaching a left neighbour\'s midpoint already passes it',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '(m) => m > centre)',
+    replace: '(m) => m >= centre)',
+    killedBy: 'dropSlot boundary test (centre exactly at the left neighbour midpoint stays in its slot)'
+  },
+  {
+    name: 'pillReorder: the drop slot counts from the lifted pill itself (off by one to the right)',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '- (from + 1);',
+    replace: '- from;',
+    killedBy: 'dropSlot unmoved test (a centre that has not moved stays in its own slot)'
+  },
+  {
+    name: 'pillReorder: the pills a rightward drag passes slide right instead of left',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (j > from && j <= to) return -shift;',
+    replace: '  if (j > from && j <= to) return shift;',
+    killedBy: 'slotShift moving-right test (passed pills shift by -24)'
+  },
+  {
+    name: 'pillReorder: a leftward drag leaves the pill at the target slot unshifted',
+    file: 'src/webview/pillReorder.ts',
+    suite: 'test/unit/pillReorder.test.ts',
+    find: '  if (j < from && j >= to) return shift;',
+    replace: '  if (j < from && j > to) return shift;',
+    killedBy: 'slotShift moving-left test (pill 1 shifts by +24 when 3 hovers over slot 1)'
+  },
+  {
     name: 'contextMenu: capability gate ignored (a host is offered an item it cannot serve)',
     file: 'src/webview/contextMenuModel.ts',
     suite: 'test/unit/contextMenuModel.test.ts',
@@ -3579,6 +3643,62 @@ const mutations = [
     find: "import { enumeratedImages } from '../src/cropPlan';",
     replace: "import { enumeratedImages } from '../src/cropPlan';\nimport '../src/fileService';",
     killedBy: "no-vscode bundle test (the script bundles with no vscode stand-in)"
+  },
+  {
+    name: "saved view: the order is applied by position instead of by name",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "names.map(n => modalityNames.indexOf(n))",
+    replace: "names.map((_, i) => i)",
+    killedBy: "order-by-name test (docs/standalone.md: view-restored-by-name)"
+  },
+  {
+    name: "saved view: a modality the save never saw is dropped instead of appended",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "  modalityNames.forEach((_, i) => { if (!order.includes(i)) order.push(i); });\n",
+    replace: "",
+    killedBy: "unseen-modality test (a column would vanish from the pill row)"
+  },
+  {
+    name: "saved view: a gone tuple name restores index -1",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "    tuple: Math.max(0, tuple),",
+    replace: "    tuple,",
+    killedBy: "gone-tuple test (the first tuple is the default)"
+  },
+  {
+    name: "saved view: a gone modality defaults to a hidden one",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "order.find(o => !hidden.includes(o)) ?? order[0] ?? 0",
+    replace: "order[0] ?? 0",
+    killedBy: "first-not-hidden test"
+  },
+  {
+    name: "saved view: zoom is restored unclamped",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "    zoom: Math.max(0.1, Math.min(50, finite(v.zoom, 1))),",
+    replace: "    zoom: finite(v.zoom, 1),",
+    killedBy: "zoom-clamp test (outside the viewer's 0.1-50 range)"
+  },
+  {
+    name: "saved view: an infinite number is restored",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "typeof x === 'number' && Number.isFinite(x)",
+    replace: "typeof x === 'number' && !Number.isNaN(x)",
+    killedBy: "non-finite test"
+  },
+  {
+    name: "saved view: a malformed save throws instead of defaulting",
+    file: "src/webview/viewState.ts",
+    suite: "test/unit/viewState.test.ts",
+    find: "saved !== null && typeof saved === 'object' ? saved as Record<string, unknown> : {}",
+    replace: "saved as Record<string, unknown>",
+    killedBy: "malformed-save test (a bad stored value must never break the page)"
   }
 ];
 
