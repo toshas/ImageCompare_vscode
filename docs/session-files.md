@@ -5,8 +5,9 @@ the entry point is a file at all, and where votes get written.
 
 Code: `sessionFile.ts` (`parseSessionFile`, `applyLabels`, `suggestSessionFileName`), `extension.ts`
 (`openSelectionAsSession`, `openCustomDocument`/`resolveCustomEditor`, pruning),
-`imageCompareProvider.ts` (`openCompare`, `getResultsTarget`), `fileService.ts` (`writeResultsFile`,
-`readResultsFile`). Pinned by `test/unit/sessionFile.test.ts` (Vitest), which imports the real source.
+`imageCompareProvider.ts` (`openCompare`, `getResultsTarget`), `resultsFile.ts` (`persistResults`),
+`fileService.ts` (`readResultsFile`). Pinned by `test/unit/sessionFile.test.ts` (Vitest), which
+imports the real source.
 
 Read this before adding an entry point, changing the file format, touching `getResultsTarget()`, or
 "simplifying" the explorer command into a direct panel creation.
@@ -40,28 +41,32 @@ paths are on disk.
 | 2+ image files | 3 | one tuple; modality names derived from the filename differences | both unset |
 | 1 directory of loose images (no image subdirs) | 3 | the same, on the images the directory holds | both unset |
 
-Mixing files and directories is rejected, as is a lone image file; a single *directory* is never a
-rejection for being one — it resolves to mode 1 or mode 3 by what it holds. A listed path that fails
-to stat is dropped before the mode is decided, so two
-listed directories of which one is missing resolve to mode 1 on the survivor — the mode follows what
-the scan found, not what the caller asked for.
+The scan rejects a mix of files and directories, and a lone image file. A single *directory* is
+never rejected for being one: it resolves to mode 1 or mode 3 by what it holds. A listed path that
+fails to stat is dropped before the mode is decided. If one of two listed directories is missing, the
+survivor opens as mode 1: the mode follows what the scan found, not what the caller asked for.
 
-The last two rows are the same mode reached two ways, which is the point: dropping a folder of
-images and selecting those same images produce one comparison, not two behaviours. `scanDirectory()`
+The last two rows are the same mode reached two ways, which is the point. Dropping a folder of images
+and selecting those same images produce one comparison, not two behaviours. `scanDirectory()`
 prefers structure where there is any and falls back to the loose images, so the mode a directory
-resolves to is a fact about its contents. Both directions of that fall-back used to be rejections —
-a directory of only files threw "no subdirectory structure", and a directory holding a single
-image subdir threw "must contain 2+ subdirectories". Neither refusal survived contact with what the
-viewer can actually display: a comparison runs at one column, and empties only at zero.
+resolves to is a fact about its contents.
+
+Both directions of that fall-back were once rejections. A directory of only files threw "no
+subdirectory structure". A directory with one image subdir threw "must contain 2+ subdirectories".
+Neither refusal matched what the viewer can display: a comparison runs at one column, and empties
+only at zero.
 
 The alternative considered and rejected was the **transpose**: a folder of images as N rows of one
-column, which would have been a fourth mode. It reads well on paper and badly in use — the carousel
-becomes the only way to see anything, `keepZoomOnTupleChange` has to be forced on for flipping
-between images to mean anything, and every "the three modes" claim in the repo becomes four. Mode 3
-already *is* "one row whose columns are unrelated files", which is what a folder of images is; the
-only thing that was missing was reaching it from a directory. Voting, crop, PPTX and delete then
-need no new answers — they get mode 3's, which is why `exports-land-beside-the-images` is a repair
-to an existing hole rather than a new rule.
+column, a fourth mode. It reads well on paper and badly in use:
+
+- the carousel becomes the only way to see anything;
+- `keepZoomOnTupleChange` has to be forced on for flipping between images to mean anything;
+- every "the three modes" claim in the repo becomes four.
+
+Mode 3 already *is* "one row whose columns are unrelated files", which is what a folder of images
+is; only reaching it from a directory was missing. Voting, crop, PPTX and delete then need no new
+answers: they get mode 3's. That is why `exports-land-beside-the-images` is a repair to an existing
+hole rather than a new rule.
 
 ## Format
 
@@ -69,39 +74,22 @@ to an existing hole rather than a new rule.
 { "version": 1, "paths": ["/abs/dir", "../rel/dir"], "labels": ["a", "b"], "colors": ["#0f0", "#ff6600"] }
 ```
 
-`parseSessionFile(text, baseDir)` in `sessionFile.ts` is pure (no `vscode` import) so it is
-unit-testable standalone — `test/unit/sessionFile.test.ts` needs no `vscode` stub at all. Keep it
-that way; that is why `applyLabels()` is structurally typed over `{ toString() }` instead of taking
-`vscode.Uri`.
+`applyLabels()` is structurally typed over `{ toString() }` instead of `vscode.Uri`, so that
+`sessionFile.ts` stays `vscode`-free.
 
 - `version` — optional, positive integer; absent means 1 (every pre-versioning file). The parser
-  rejects a version above `CURRENT_SESSION_VERSION` outright — an old build must fail loudly on a
+  rejects a version above `CURRENT_SESSION_VERSION` outright. An old build must fail loudly on a
   future file, not open it minus the fields it doesn't know. Bump only for semantic changes; a new
   optional field costs nothing (unknown keys are ignored).
 - `paths` — required, non-empty array of non-empty strings, **no two resolving to the same
-  location**. **Relative paths resolve against the
-  session file's directory** (`path.resolve(baseDir, p)`), so a session file can be committed
-  next to the data it describes and stay portable.
+  location**. **Relative paths resolve against the session file's directory**
+  (`path.resolve(baseDir, p)`), so a session file can be committed next to its data and stay
+  portable.
 - `labels` — optional, an array of non-empty strings, **aligned with `paths` (same length) and
-  unique**. Uniqueness is
-  not cosmetic: a modality name is the join key downstream (`findImageForModality()` looks up by
-  name), so duplicates would silently merge modalities.
+  unique**. Uniqueness is not cosmetic: a modality name is the join key downstream
+  (`findImageForModality()` looks up by name), so duplicates would silently merge modalities.
 - `colors` — optional, aligned with `paths`, `#rgb` or `#rrggbb`. Overrides the `MODALITY_COLORS`
   palette cycle in `resolveModalityColor()`.
-
-A modality pill shows that resolved path on hover; a plain click only selects the modality. Copying
-and revealing go through the comparison's own context menu, which the webview builds and renders
-(`webview/contextMenuModel.ts` decides the items, `webview/contextMenu.ts` draws them) — so the
-standalone offers the same menu minus whatever its `HostCapabilities` disclaim
-(`docs/standalone.md: affordances-rendered-by-the-webview`). Copy Image and Hide/Show Modality are
-performed in the webview; Copy Path and Reveal in Explorer post `menuAction`, which each host
-resolves back to a target its own way (the provider through `resolveMenuTarget`, the adapter inline
-over its scan). Path writes use `vscode.env.clipboard` in the
-extension, since a webview is not reliably granted `navigator.clipboard` for text, and
-`navigator.clipboard.writeText` in the standalone, which has no such host. The tooltip is a webview
-element, not a native `title=`: pill text is rewritten on every vote to restore win counts, and a
-native tooltip dismissed by that rewrite does not return until the pointer leaves and re-enters —
-which is what made it look intermittent.
 
 Both `labels` and `colors` are keyed **by the URI of the listed path**. That means they only take
 effect in mode 2, where the listed directories *are* the modalities. In mode 1 the listed path is
@@ -115,6 +103,24 @@ can always render into the panel. Generated sessions live in a pruned cache, so 
 normal, not exceptional. A session that parses but matches no images gets its own page
 (`getEmptyScanHtml`) for the same reason: anything that can end in an empty panel renders its
 explanation *into* the panel, because a toast fades and a blank tab does not.
+
+### Modality pills
+
+A modality pill shows its resolved path on hover; a plain click only selects the modality. Copying
+and revealing go through the comparison's own context menu, which the webview builds and renders:
+`webview/contextMenuModel.ts` decides the items, `webview/contextMenu.ts` draws them. The standalone
+offers the same menu minus whatever its `HostCapabilities` disclaim
+(`docs/standalone.md: affordances-rendered-by-the-webview`).
+
+Copy Image and Hide/Show Modality are performed in the webview. Copy Path and Reveal in Explorer
+post `menuAction`, which each host resolves back to a target its own way: the provider through
+`resolveMenuTarget`, the adapter inline over its scan. Path writes use `vscode.env.clipboard` in the
+extension, since a webview is not reliably granted `navigator.clipboard` for text. The standalone,
+which has no such host, uses `navigator.clipboard.writeText`.
+
+The tooltip is a webview element, not a native `title=`. Pill text is rewritten on every vote to
+restore win counts. A native tooltip dismissed by that rewrite does not return until the pointer
+leaves and re-enters, which made it look intermittent.
 
 ## Why `labels` exist
 
@@ -197,37 +203,45 @@ user saves again.
 
 ## Tab titles
 
-VSCode owns custom-editor tab titles (`filename-is-tab-title`), so the *filename* is the UI — which is
-why `suggestSessionFileName()` aims for a meaningful common prefix rather than a UUID. Users can hide
-the extension with `workbench.editor.customLabels.patterns`.
+Users can hide the extension with `workbench.editor.customLabels.patterns`.
 
 ## Winner voting persistence
 
-Voting is enabled iff the mode allows it (`votingAvailable()` in `modePolicy.ts` — mode 3 is one row
-of unrelated files, with nothing to rank) **and** the host has somewhere to put the answer (the
-provider: `baseUri !== undefined || modalityDirs.size > 0`; the standalone: a writable root, which
-a published comparison is, its votes landing in the browser-local viewer layer — `docs/standalone.md`). The
-mode half is read from `ScanResult.mode`, not inferred from `baseUri`/`modalityDirs` both being unset
-— which is the same thing, until it isn't (`mode-is-explicit`).
+Voting is enabled only when both hold:
 
-Votes are held in memory as `PanelState.winners: Map<tupleIndex, modalityIndex>` and persisted as
-a human-editable text file (`writeResultsFile()` / `readResultsFile()` in `fileService.ts`, both
-taking an optional filename). The on-disk key is `ImageTuple.name`; `mapWinnersToIndices()`
-resolves it back to indices on load. The name is an emergent common substring of the cluster's
-filenames, so changing cluster membership can change it and orphan votes
-(`docs/tuple-matching.md`, "Why a reference modality"). Indices are volatile, re-shifted when
-modalities are added or removed; nothing durable may depend on them.
+- the mode allows it (`MODES[mode].voting` in `modePolicy.ts`); mode 3 is one row of unrelated
+  files, with nothing to rank;
+- the host has somewhere to put the answer: for the provider,
+  `baseUri !== undefined || modalityDirs.size > 0`; for the standalone, a writable root. A published
+  comparison is one, its votes landing in the browser-local viewer layer (`docs/standalone.md`).
 
-Colliding names are de-duplicated with a ` (N)` suffix on **both** tuple-creation paths — the scan
-(`scanDirectoriesAsModalities`) and the arrival planner (`planArrival` in `arrivalPlan.ts`) — so two tuples never share a vote
-key. Both must keep doing it: `mapWinnersToIndices` looks the key up per tuple, so one duplicate name
-makes a single results line vote for every row that carries it. The line format still has holes: a name starting with `#` reads back as a
-comment, one containing `=` truncates at the first `=`, and the reader trims both the line and each
-field, so leading or trailing whitespace never round-trips — `findCommonSubstring()` strips it from
-scan-time names — except for its one raw return, a single-image tuple's basename, and for the
-caller's `findCommonSubstring(names) || matched.key` fall-through to the reference basename, which
-`findCommonSubstring()` never touches — and a watcher-created tuple takes the raw basename
-unfiltered. A newline inside a filename splits the record outright.
+The mode half is read from `ScanResult.mode`, not inferred from `baseUri`/`modalityDirs` both being
+unset — which is the same thing, until it isn't (`mode-is-explicit`).
+
+Votes live in memory as `PanelState.winners: Map<tupleIndex, modalityIndex>` and persist as a
+human-editable text file (written by `persistResults()` in `resultsFile.ts`, read by
+`readResultsFile()` in `fileService.ts`). The on-disk key is `ImageTuple.name`;
+`mapWinnersToIndices()` resolves it back to indices on load.
+
+The name is an emergent common substring of the cluster's filenames, so changing cluster membership
+can change it and orphan votes (`docs/tuple-matching.md`, "Why a reference modality"). Indices are
+volatile, re-shifted when modalities are added or removed; nothing durable may depend on them.
+
+Colliding names get a ` (N)` suffix on **both** tuple-creation paths, the scan
+(`scanDirectoriesAsModalities`) and the arrival planner (`planArrival` in `arrivalPlan.ts`), so two
+tuples never share a vote key. Both must keep doing it. `mapWinnersToIndices` looks the key up per
+tuple, so one duplicate name makes a single results line vote for every row that carries it.
+
+The line format still has holes:
+
+- A name starting with `#` reads back as a comment.
+- A name containing `=` truncates at the first `=`.
+- The reader trims both the line and each field, so leading or trailing whitespace never
+  round-trips. `findCommonSubstring()` strips it from scan-time names, except for its one raw
+  return, a single-image tuple's basename. It also never touches the caller's
+  `findCommonSubstring(names) || matched.key` fall-through to the reference basename. A
+  watcher-created tuple takes the raw basename unfiltered.
+- A newline inside a filename splits the record.
 
 ### `getResultsTarget()` — where the file goes
 
@@ -251,33 +265,30 @@ Writing zero winners deletes the file rather than leaving an empty stub.
 
 A pill can be **hidden** from its context menu (Hide/Show Modality): grayed out, still clickable and
 digit-jumpable, but skipped by arrow-key cycling and as a Space-flip target. The state is a webview
-`Set` keyed by original modality index, and the menu label flips because `buildContextMenu` is
-handed that state as `MenuContext.hidden`.
+`Set` keyed by original modality index.
 
 ## Invariants
 
 - **`tiny-tiles-never-vote`** — when carousel tiles are smaller than 3x the winner circle
   (`isVoteClickable`, pure and suite-pinned), the circle stops taking mouse clicks
-  (`pointer-events: none` via the `tiny-tiles` class): at that size a tile click is a coin-flip
+  (`pointer-events: none` via the `tiny-tiles` class). At that size a tile click is a coin-flip
   between navigate and vote, and a mis-vote silently corrupts `results.txt`. Enter-voting is
-  unaffected. All three sites — the rule, the class toggle, and the CSS guard — carry the citation.
-  Note what changed under it: the tile floor used to be 12 px, below the 21 px threshold, so a grid
-  dense enough to hit the floor was *always* unvotable by mouse. At the 24 px floor
-  (`docs/loading-architecture.md: columns-virtualize-like-rows`) it no longer is, so a scrolled
-  column window and a clickable vote circle now co-occur — which the rule allows, being about size
-  and not about density, but nothing had exercised that combination before.
+  unaffected. All three sites carry the citation: the rule, the class toggle, and the CSS guard.
+  The tile floor was once 12 px, below the 21 px threshold, so a grid at that floor was *always*
+  unvotable by mouse. At the 24 px floor (`docs/loading-architecture.md: columns-virtualize-like-rows`)
+  a scrolled column window and a clickable vote circle co-occur. The rule allows it, being about
+  size, not density; nothing had exercised that combination before.
 - **`hidden-is-presentation-only`** — hiding a modality changes pill styling, the context-menu label
-  (`buildContextMenu` reads it as `MenuContext.hidden`),
-  keyboard cycling, and the *order and scope of speculation* — nothing else. The carousel keeps
-  showing the column, so nothing the user can still reach may be dropped for it: speculative work
-  skips hidden columns (sibling loads and prefetch waves,
-  `docs/loading-architecture.md: sibling-order-by-display-distance`) because a click or digit jump
-  re-requests them on demand, while the open-time sweep only ranks them **last** and still sweeps
-  every one (`docs/loading-architecture.md: sweep-cross-then-row-major`) — a skipped sweep slot would
-  be a blank tile in a column that is still on screen. Voting, PPTX export,
-  matching and reordering are oblivious, and the state dies with the panel — it is not persisted to
-  the session file. The cycling itself is `nextVisibleModality` (`webview/modalityVisibility.ts`,
-  pure, suite-pinned), non-wrapping like the arrow keys it serves.
+  (`buildContextMenu` reads it as `MenuContext.hidden`), keyboard cycling, and the *order and scope
+  of speculation*, nothing else. The carousel keeps showing the column, so nothing the user can
+  still reach may be dropped for it. Speculative work skips hidden columns (sibling loads and
+  prefetch waves, `docs/loading-architecture.md: sibling-order-by-display-distance`): a click or
+  digit jump re-requests them on demand. The open-time sweep only ranks them **last** and still
+  sweeps every one (`docs/loading-architecture.md: sweep-cross-then-row-major`); a skipped sweep
+  slot would be a blank tile in a column still on screen. Voting, PPTX export, matching and
+  reordering are oblivious. The state dies with the panel; it is not persisted to the session file.
+  The cycling itself is `nextVisibleModality` (`webview/modalityVisibility.ts`, pure, suite-pinned),
+  non-wrapping like the arrow keys it serves.
 
 - **`custom-editor-entry`** — every comparison opens through a `.imagecompare` custom editor.
   `openCompare()` receives a panel; it must never create one. A new entry point writes a session file.
@@ -288,20 +299,20 @@ handed that state as `MenuContext.hidden`.
 - **`relative-to-session-dir`** — relative paths resolve against the session file's directory, never
   the workspace root or cwd.
 - **`version-gate-forward`** — a session file declaring a version above `CURRENT_SESSION_VERSION` is
-  rejected with an "update the extension" error, never half-opened with unknown fields dropped; the
+  rejected with an "update the extension" error, never half-opened with unknown fields dropped. The
   version bumps only on semantic changes, since unknown keys are ignored anyway.
 - **`saveas-relative-only-inside`** — Save Session As relativizes paths only when every compared
   root lies inside the destination directory; one path outside keeps all of them absolute. A saved
   file containing `..` would silently re-target if the user later moves it.
 - **`unique-modality-names`** — no two modalities ever share a name or a URI. `paths` rejects a
-  repeated location (two modalities on one URI would make every URI-keyed lookup resolve both to the
-  first), and `disambiguateDirectoryNames` suffixes any tail collision its widening loop cannot
-  separate. A duplicate name silently merges two columns downstream.
+  repeated location: two modalities on one URI would make every URI-keyed lookup resolve both to the
+  first. `disambiguateDirectoryNames` suffixes any tail collision its widening loop cannot separate.
+  A duplicate name silently merges two columns downstream.
 - **`aligned-unique-labels`** — `labels` and `colors` are aligned with `paths`, and `labels` are
   unique; duplicate modality names silently merge modalities.
 - **`labels-all-or-none`** — labels are applied at every naming site or none:
-  `applyLabels(disambiguateDirectoryNames(…))` in both `scanForImages()` and `openCompare()`, so
-  watchers, `modalityDirs`, `results.txt`, and the pill labels all see the same names.
+  `applyLabels(disambiguateDirectoryNames(…))` in both `scanForImages()` and `openCompare()`.
+  Watchers, `modalityDirs`, `results.txt`, and the pill labels all see the same names.
 - **`resolve-never-throws`** — `resolveCustomEditor()` never throws and an empty panel is never left
   unexplained: configure the webview first, then render the error or empty-scan page into it.
 - **`prune-double-guard`** — prune skips both open tabs and `openSessionUris`, and stays deferred.
@@ -309,58 +320,58 @@ handed that state as `MenuContext.hidden`.
 - **`filename-is-tab-title`** — generated session filenames come from `suggestSessionFileName()`. VS
   Code takes a custom editor's tab title from the document filename and ignores `panel.title`, so
   UUID names make tabs unreadable. Nothing sets the *panel's* title, so don't hunt for an enforcement
-  site; the `.title` writes that do exist are on unrelated objects (the PPTX export, static button
+  site. The `.title` writes that do exist are on unrelated objects (the PPTX export, static button
   hints in the markup).
 - **`single-results-target`** — reads and writes of results go through `getResultsTarget()`; a new
   placement rule is added there once, not duplicated at a call site.
 - **`durable-vote-key`** — the durable vote key is `ImageTuple.name`, not the tuple key and never an
   index.
 - **`mode-is-explicit`** — code asking "which selection shape is this?" reads `ScanResult.mode`, and
-  what the scan *used* from `ScanResult.roots` — never the caller's raw URI list, which still holds
-  paths that failed to stat. `isMultiTupleMode` means only "more than one row"; the `ScanResult`
-  field has exactly one sanctioned reader, `findMatchingDeletedFile()`, where the row count is
-  genuinely the question (sibling-directory rename matching means nothing in single-tuple mode). The
-  webview's same-named module-local in `src/webview/main.ts` is not this field — it is recomputed
-  there from `tuples.length > 1` as a row-count convenience for the UI, so a grep for the identifier
-  finds readers this invariant does not cover. Using it as a mode test silently disabled voting and new-file
-  pickup for any *single-tuple* multi-directory comparison; the deleted-path case broke separately,
-  from reading the caller's raw URI list instead of `roots`.
+  what the scan *used* from `ScanResult.roots`. It never reads the caller's raw URI list, which still
+  holds paths that failed to stat. `isMultiTupleMode` means only "more than one row". The
+  `ScanResult` field has exactly one sanctioned reader, `findMatchingDeletedFile()`, where the row
+  count is genuinely the question: sibling-directory rename matching means nothing in single-tuple
+  mode. The webview's same-named module-local in `src/webview/main.ts` is not this field. It is
+  recomputed there from `tuples.length > 1` as a row-count convenience for the UI, so a grep for the
+  identifier finds readers this invariant does not cover. Using it as a mode test silently disabled
+  voting and new-file pickup for any *single-tuple* multi-directory comparison. The deleted-path case
+  broke separately, from reading the caller's raw URI list instead of `roots`.
 - **`modality-path-always-real`** — every reachable path through the provider's `resolveModalityPath`
-  and the adapter's `modalityPath` returns a real
-  filesystem path, never the modality name standing in for one (the trailing `return modality` is a
-  total-function fallback no caller can reach). Modes 1 and 2 have a directory to
-  name; a file list does not, so it falls back to the first file carrying that modality. Every
-  producer of that string — the init payload and `modalityAdded` — goes through its host's one
-  resolver. Both hosts need marking: the adapter reached mode 3 only once a directory of loose
-  images started resolving to it, and until then `<root>/<modality>` was true there by construction.
+  and the adapter's `modalityPath` returns a real filesystem path, never the modality name standing
+  in for one. The trailing `return modality` is a total-function fallback no caller can reach.
+  Modes 1 and 2 have a directory to name. A file list does not, so it falls back to the first file
+  carrying that modality. Every producer of that string, the init payload and `modalityAdded`, goes
+  through its host's one resolver. Both hosts need marking: the adapter reached mode 3 only once a
+  directory of loose images started resolving to it. Until then `<root>/<modality>` was true there
+  by construction.
 
 - **`subdir-structure-wins`** — a directory that holds any subdirectory with images opens on those
-  subdirectories as columns, and only a directory with none falls back to its loose images. One
-  subdir is enough: mode 1 *discovers* its columns, so finding one is an answer, not a user error.
-  Mode 2 keeps the floor of two, because there the caller named the directories and one of them
-  yielding nothing is worth reporting — which is why the floor is a function of the mode
+  subdirectories as columns. Only a directory with none falls back to its loose images. One subdir
+  is enough: mode 1 *discovers* its columns, so finding one is an answer, not a user error. Mode 2
+  keeps the floor of two, because there the caller named the directories and one of them yielding
+  nothing is worth reporting. That is why the floor is a function of the mode
   (`scanDirectoriesAsModalities`) rather than a constant.
 - **`folder-of-images-is-a-file-list`** — a directory of loose images opens as mode 3 on exactly
   those images: the same comparison the user would get by selecting them. Enumeration drops
   `_cropNN` outputs, which are this app's own writes and would otherwise interleave with the
-  parents they were cut from — unless dropping them would leave fewer than two images, in which case
-  the unfiltered set opens, so a folder someone moved their crops into is not a dead end. The filter
-  is enumeration-only: a hand-picked selection of files is respected as picked.
+  parents they were cut from. If dropping them would leave fewer than two images, the unfiltered
+  set opens, so a folder someone moved their crops into is not a dead end. The filter is
+  enumeration-only: a hand-picked selection of files is respected as picked.
 - **`mode-behaviour-is-a-table`** — everything the selection shape implies lives in one table,
-  `MODES` in `modePolicy.ts`, and every site reads the **field** whose name is the question it is
-  asking — `columnIsFile`, `grows`, `voting`, `cropsJoin` — never the mode number. The table is the
-  executable form of the mode table above; adding a mode is a compile error at every site rather
-  than a silent default, and a new consequence is a new field rather than another `mode === 3`
-  scattered somewhere. This was not the original shape: the same questions were asked with a magic
-  number at fourteen sites across five files, twice in two hosts that then answered them
-  differently — the standalone grew a row per crop where the extension grew none, and resolved a
-  column's path its own way. Two of those fields cross the wire: `deleteUnit` reaches the webview on
-  `init`, so the webview never asks which mode it is in and the help modal cannot promise the wrong
-  unit — the same host-states-data rule as `HostCapabilities`
-  (`docs/standalone.md: affordances-rendered-by-the-webview`). A host may still add its own
-  conjunct: voting also needs somewhere to write, which is the host's fact, not the shape's.
+  `MODES` in `modePolicy.ts`. Every site reads the **field** whose name is the question it is asking
+  (`columnIsFile`, `grows`, `voting`, `cropsJoin`), never the mode number. The table is the
+  executable form of the mode table above. Adding a mode is a compile error at every site rather
+  than a silent default. A new consequence is a new field rather than another scattered
+  `mode === 3`. This was not the original shape. The same questions were asked with a magic number
+  at fourteen sites across five files, twice in two hosts that then answered them differently. The
+  standalone grew a row per crop where the extension grew none, and resolved a column's path its own
+  way. Two of those fields cross the wire. `deleteUnit` reaches the webview on `init`, so the webview
+  never asks which mode it is in and the help modal cannot promise the wrong unit. That is the same
+  host-states-data rule as `HostCapabilities` (`docs/standalone.md: affordances-rendered-by-the-webview`).
+  A host may still add its own conjunct: voting also needs somewhere to write, which is the host's
+  fact, not the shape's.
 - **`exports-land-beside-the-images`** — a PPTX export writes into the base dir (mode 1), the
   modality dirs' parent (mode 2), or the first image's own directory (mode 3). Mode 3 had no third
   branch and `listExistingNames` threw "Cannot determine output directory", so export was broken
-  for every file-list comparison; a directory opened as mode 3 makes that the common case, since the
+  for every file-list comparison. A directory opened as mode 3 makes that the common case, since the
   first image's directory *is* the directory the user opened.
