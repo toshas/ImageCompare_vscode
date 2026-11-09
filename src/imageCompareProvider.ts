@@ -26,7 +26,7 @@ import { nextPanelKey, poolWidth, Priority, TaskCancelled, usableParallelism, Wo
 import { TransportBudget, reindexSlotKeyedPosts, resolveTransportBudgetBytes } from './transportBudget';
 import { beginOpenMarks, debug, debugEnabled, debugVerbose, diffPackLoadStat, diffTierStats, formatBytes, formatOpenRollup, formatPackLoad, formatTierStats, itemsPerSecond, OpenMarks } from './debugLog';
 import { THUMBNAIL_MIME, ThumbnailService } from './thumbnailService';
-import { renderWebviewHtml } from './webviewShell';
+import { escapeHtml, renderWebviewHtml } from './webviewShell';
 import { parsePpmx } from './ppmxParser';
 import {
   ScanResult,
@@ -59,9 +59,7 @@ const TRANSPORT_ACK_TIMEOUT_MS = 30000;
 /** Idle, not total: a sweep that has settled no slot for this long is presumed stuck and gives the wire back (docs/loading-architecture.md: speculation-yields-the-wire). */
 const TRANSPORT_SWEEP_IDLE_TIMEOUT_MS = 30000;
 
-/**
- * Info about a recently deleted file (for rename detection)
- */
+/** A pending delete, kept for rename detection. */
 interface DeletedFileInfo {
   uri: vscode.Uri;
   tupleIndex: TupleIndex;
@@ -69,9 +67,6 @@ interface DeletedFileInfo {
   timestamp: number;
 }
 
-/**
- * State associated with a single panel instance
- */
 interface PanelState {
   panel: vscode.WebviewPanel;
   scanResult: ScanResult;
@@ -158,13 +153,9 @@ export function newSweepAimPolicy(): SweepAimPolicy {
   });
 }
 
-/**
- * Provider for the ImageCompare WebView panel
- */
 export class ImageCompareProvider {
   private thumbnailService: ThumbnailService;
   private readonly pool: WorkPool = sharedWorkPool();
-  private disposables: vscode.Disposable[] = [];
   // Track all open panels (for cleanup on deactivate)
   private panels: Set<PanelState> = new Set();
 
@@ -213,9 +204,6 @@ export class ImageCompareProvider {
     return vscode.Uri.file(this.resolveModalityPath(state, modality));
   }
 
-  /**
-   * Initialize the provider
-   */
   async initialize(): Promise<void> {
     await this.thumbnailService.initialize();
   }
@@ -340,7 +328,7 @@ export class ImageCompareProvider {
       }
       this.panels.add(panelState);
 
-      // Per-panel, not the provider-wide `disposables` array: those would accumulate across open/close.
+      // Per-panel, so subscriptions never accumulate across open/close.
       const panelSubscriptions: vscode.Disposable[] = [earlyDispose];
 
       // Listener must be attached BEFORE setting HTML, which starts the webview's 'ready' post.
@@ -408,9 +396,6 @@ export class ImageCompareProvider {
     this.panels.delete(state);
   }
 
-  /**
-   * Handle messages from the webview (panel-specific)
-   */
   private async handlePanelMessage(state: PanelState, message: WebViewMessage): Promise<void> {
     switch (message.type) {
       case 'ready':
@@ -459,7 +444,7 @@ export class ImageCompareProvider {
         break;
 
       case 'tupleFullyLoaded': {
-        // The strip as displayed is also the sweep's column aim — the one report that carries it (docs/loading-architecture.md: thumbnails-centre-out).
+        // The strip as displayed is also the sweep's column aim (docs/loading-architecture.md: thumbnails-centre-out).
         state.sweepAim.noteStrip(message);
         if (message.tupleIndex === state.currentTupleIndex) {
           const hidden = new Set<number>(message.hiddenModalities);
@@ -503,9 +488,6 @@ export class ImageCompareProvider {
 
       case 'revealPath':
         await this.revealPath(vscode.Uri.file(message.path));
-        break;
-
-      case 'log':
         break;
     }
   }
@@ -643,7 +625,6 @@ export class ImageCompareProvider {
       }
     };
 
-    let saveUri: vscode.Uri | undefined;
     // Name, build, save and the exactly-one answer are sequenced by the shared flow (docs/crop-and-pptx.md: export-always-answers) (docs/standalone.md: deck-layout-shared).
     await exportDeck(state.scanResult.tuples, state.scanResult.modalities, { tupleIndices, winnerModalityIndices, modalityOrder }, {
       getPptx: async () => PptxGenJS,
@@ -662,7 +643,7 @@ export class ImageCompareProvider {
         // One buffer, one write: a streamed write racing the completion notification is how a half-flushed deck gets opened.
         const buffer = (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
         if (state.disposed) throw new TaskCancelled();
-        saveUri = vscode.Uri.file(path.join(this.pptxOutputDir(state)!, name));
+        const saveUri = vscode.Uri.file(path.join(this.pptxOutputDir(state)!, name));
         await vscode.workspace.fs.writeFile(saveUri, buffer);
         if (state.disposed) throw new TaskCancelled();
         return saveUri.fsPath;
@@ -670,7 +651,6 @@ export class ImageCompareProvider {
       post: msg => { state.panel.webview.postMessage(msg); },
       // A closed panel is not a failure: every other pooled await filters this the same way.
       isCancelled: err => err instanceof TaskCancelled || state.disposed,
-      // `pptxComplete`/`pptxError` already carry the answer; the webview words it for both products.
     });
   }
 
@@ -895,12 +875,10 @@ export class ImageCompareProvider {
    * over a permanently blank tab would leave the user with nothing to read.
    */
   private getEmptyScanHtml(uris: vscode.Uri[], errorMessage?: string): string {
-    const esc = (s: string) => s.replace(/[&<>"']/g, c =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-    const list = uris.map(u => `<li><code>${esc(u.fsPath)}</code></li>`).join('');
+    const list = uris.map(u => `<li><code>${escapeHtml(u.fsPath)}</code></li>`).join('');
     const heading = errorMessage ? 'Could not compare these paths' : 'No images to compare';
     const lead = errorMessage
-      ? `<p>${esc(errorMessage)}</p><p>ImageCompare was given:</p>`
+      ? `<p>${escapeHtml(errorMessage)}</p><p>ImageCompare was given:</p>`
       : '<p>ImageCompare found no matching images in:</p>';
     const trailer = errorMessage
       ? 'Close this tab and reopen with a valid selection.'
@@ -914,9 +892,6 @@ ${lead}
 </body></html>`;
   }
 
-  /**
-   * Send initialization data to webview
-   */
   private async sendInitData(state: PanelState): Promise<void> {
     const marks = state.openMarks;
     if (marks) marks.initAt = Date.now();
@@ -1115,7 +1090,7 @@ ${lead}
     void sweep.finally(endSweep);
   }
 
-  /** Running outbound totals for this panel — what Round 2 needs to see prefetch crowd out the sweep (docs/testing.md). */
+  /** Running outbound totals for this panel, so the debug channel shows prefetch crowding out the sweep (docs/testing.md). */
   private formatWire(state: PanelState): string {
     const w = state.wire;
     return `wire thumbs=${w.thumbnails}/${formatBytes(w.thumbBytes)} images=${w.images}/${formatBytes(w.imageBytes)}`;
@@ -1558,9 +1533,6 @@ ${lead}
     }
   }
 
-  /**
-   * Send thumbnail message to webview
-   */
   private sendThumbnailMessage(state: PanelState, tupleIndex: number, modalityIndex: number, bytes: Uint8Array, mime: string): void {
     if (state.disposed) return;
     // A pack hit is a slice of the whole packfile buffer, so skipping this ships the pack per thumbnail (docs/loading-architecture.md: image-payload-normalized).
@@ -1574,27 +1546,18 @@ ${lead}
     state.panel.webview.postMessage(msg);
   }
 
-  /**
-   * Send thumbnail error message to webview
-   */
   private sendThumbnailErrorMessage(state: PanelState, tupleIndex: number, modalityIndex: number, error: string): void {
     if (state.disposed) return;
     const msg: ExtensionMessage = { type: 'thumbnailError', tupleIndex: asTuple(tupleIndex), modalityIndex: asOriginal(modalityIndex), error };
     state.panel.webview.postMessage(msg);
   }
 
-  /**
-   * Send progress message to webview
-   */
   private sendProgressMessage(state: PanelState, current: number, total: number): void {
     if (state.disposed) return;
     const msg: ExtensionMessage = { type: 'thumbnailProgress', current, total };
     state.panel.webview.postMessage(msg);
   }
 
-  /**
-   * Get HTML content for the webview
-   */
   private getHtmlContent(webview: vscode.Webview): string {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
@@ -1609,9 +1572,6 @@ ${lead}
     });
   }
 
-  /**
-   * Generate a nonce for Content Security Policy
-   */
   private getNonce(): string {
     let text = '';
     const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -1748,9 +1708,7 @@ ${lead}
   private unwatchModalityDir(state: PanelState, modality: string): void {
     // Mode 2 has no adoption path to re-watch a directory that comes back, so keep watching it.
     if (!state.baseUri) return;
-    const dirUri = state.modalityDirs.get(modality)
-      ?? (state.baseUri ? vscode.Uri.joinPath(state.baseUri, modality) : undefined);
-    if (!dirUri) return;
+    const dirUri = vscode.Uri.joinPath(state.baseUri, modality);
 
     // Keyed in URI space like watchedDirs, so the two agree on every platform (docs/file-watching.md: watched-dirs-are-uri-paths).
     const dir = dirUri.path;
@@ -1839,9 +1797,6 @@ ${lead}
     }
   }
 
-  /**
-   * Start polling for file deletions. Checks all known image URIs periodically.
-   */
   /**
    * Mode 1: finds a modality directory added while the comparison is open. Neither watcher reports a
    * directory create on a network or FUSE mount, so the sweep is the only detector that always works
@@ -2266,9 +2221,6 @@ ${lead}
     void this.handleNewFile(state, uri, filename).catch(e => this.debugMsg(state, `handleNewFile ERROR: ${e?.message ?? e}`));
   }
 
-  /**
-   * Find an existing slot in tuples that matches this URI exactly
-   */
   private findExistingSlotByUri(state: PanelState, uri: vscode.Uri): { tupleIndex: TupleIndex; modalityIndex: number } | undefined {
     if (state.disposed) return undefined;
     const uriStr = uri.toString();
@@ -2440,9 +2392,6 @@ ${lead}
     return insertIndex;
   }
 
-  /**
-   * Reload the image and thumbnail for a changed file.
-   */
   private handleFileChanged(state: PanelState, uri: vscode.Uri): void {
     if (state.disposed) return;
     const uriStr = uri.toString();
@@ -2523,13 +2472,6 @@ ${lead}
     this.panels.clear();
     this.thumbnailService.dispose();
     this.thumbnailService.clearMemoryCache();
-
-    while (this.disposables.length) {
-      const disposable = this.disposables.pop();
-      if (disposable) {
-        disposable.dispose();
-      }
-    }
   }
 
 }

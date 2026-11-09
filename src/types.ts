@@ -23,17 +23,9 @@ export type OriginalModalityIndex = number & { readonly __brand: 'OriginalModali
 export type DisplayModalityIndex = number & { readonly __brand: 'DisplayModalityIndex' };
 // Tuple index is a single space (no display/original split); the brand guards it against modality indices.
 export type TupleIndex = number & { readonly __brand: 'TupleIndex' };
-// Mint a brand at a real boundary (a scan position, or a wire value known to be original/display/a tuple).
+// Mint a brand at a real boundary (a scan position, or a wire value known to be original or a tuple).
 export const asOriginal = (n: number): OriginalModalityIndex => n as OriginalModalityIndex;
-export const asDisplay = (n: number): DisplayModalityIndex => n as DisplayModalityIndex;
 export const asTuple = (n: number): TupleIndex => n as TupleIndex;
-// The only sanctioned conversions: modalityOrder is the one bridge (order[display] = original).
-export function toOriginal(display: DisplayModalityIndex, order: readonly OriginalModalityIndex[]): OriginalModalityIndex {
-  return order[display];
-}
-export function toDisplay(original: OriginalModalityIndex, order: readonly OriginalModalityIndex[]): DisplayModalityIndex {
-  return asDisplay(order.indexOf(original));
-}
 
 // Represents a single image file
 export interface ImageFile {
@@ -107,8 +99,7 @@ export type WebViewMessage =
   // A context-menu item the host must serve; the local ones never reach the wire (docs/standalone.md: affordances-rendered-by-the-webview).
   | { type: 'menuAction'; action: MenuActionId; ctx: MenuContext }
   | { type: 'revealPath'; path: string } // a notice's reveal action, whose target is a literal path rather than a slot
-  | { type: 'copyResults' } // the results.txt button; only a host stating `copyResults` is sent it
-  | { type: 'log'; message: string };
+  | { type: 'copyResults' }; // the results.txt button; only a host stating `copyResults` is sent it
 
 // Messages from Extension to WebView
 export type ExtensionMessage =

@@ -1,9 +1,6 @@
 name: Standalone
 
-# Regenerates the single-file standalone comparer from the extension's own code on every main push
-# and publishes it to toshas/ImageCompare_standalone (docs/standalone.md). The push step is a no-op
-# until the STANDALONE_DEPLOY_KEY secret (a deploy key with write access on the artifact repo) is
-# configured; the built page is always uploaded as a run artifact regardless.
+# Rebuild and publish the standalone page (docs/standalone.md, "Publication").
 
 on:
   push:
@@ -41,10 +38,8 @@ jobs:
           git clone --depth 1 git@github.com:toshas/ImageCompare_standalone.git artifact-repo
           cp dist/standalone/image_compare.html artifact-repo/image_compare.html
           cp standalone/README.artifact.md artifact-repo/README.md
-          # Copied, not maintained there: a second copy that can drift is worse than no copy.
           cp LICENSE artifact-repo/LICENSE
           cp CHANGELOG.md artifact-repo/CHANGELOG.md
-          # Development instructions in a repo whose README forbids development are actively misleading.
           rm -f artifact-repo/CLAUDE.md
           VERSION=$(node -p "require('./package.json').version")
           sed -i "s|__VERSION__|${VERSION}|g; s|__COMMIT__|${GITHUB_SHA}|g" artifact-repo/README.md

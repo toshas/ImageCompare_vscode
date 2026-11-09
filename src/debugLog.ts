@@ -121,11 +121,6 @@ export function debugEnabled(): boolean {
   return enabled;
 }
 
-/** Per-item detail (one line per thumbnail, per message); rollups log at `debugEnabled` instead. */
-export function debugVerboseEnabled(): boolean {
-  return verbose;
-}
-
 /** `+12345ms` — ms since the clock was reset, the prefix on every debug line. */
 export function formatElapsed(ms: number): string {
   return `+${Math.max(0, Math.round(ms))}ms`;

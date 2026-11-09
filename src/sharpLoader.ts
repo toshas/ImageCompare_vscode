@@ -38,7 +38,6 @@ function loadSharp(): void {
       msg.includes('Could not load the "sharp" module');
 
     if (!isUnsupportedCpu) {
-      // Unexpected error — don't retry.
       loadError = msg;
       console.error('[ImageCompare] Sharp failed to load:', msg);
       return;

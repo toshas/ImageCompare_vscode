@@ -1,12 +1,5 @@
 // Builds dist/standalone/image_compare.html — the single-file browser build (docs/standalone.md).
-//
-// Pipeline: tsc type-checks standalone/ (tsconfig.standalone.json), esbuild bundles
-// standalone/adapter.ts with 'vscode' and 'path' aliased to the browser shims, node's Buffer
-// global injected from standalone/shims/buffer.ts (a minimal hand-rolled subset — exactly what
-// pngText/ppmxParser use — chosen over a full polyfill package), and process.platform defined
-// to 'linux' for sessionFile. The real dist/webview.js is built via `npm run compile` when
-// missing (rerun `npm run compile` yourself if it is stale), then standalone/compose.mjs inlines
-// shell + both bundles into one page. Run: npm run build:standalone
+// Run: npm run build:standalone. Pipeline and shims: docs/standalone.md, "Build".
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

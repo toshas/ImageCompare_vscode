@@ -1,24 +1,7 @@
 #!/usr/bin/env node
 /**
  * Fails if running a generator writes anywhere git would notice, or if it did not run at all.
- *
- * The acceptance criterion for "no generated file ever gets committed" is not a text
- * pattern: it is that a generator's output lands only inside an ignored directory. So:
- * snapshot `git status --porcelain -uall`, run each generator, snapshot again, and require
- * the set difference to be empty — ignored paths never appear in that listing, so anything
- * that shows up is by definition an un-ignored write.
- *
- * That check passes vacuously when a generator dies before writing a byte, so each one also
- * declares the artifact it must produce, and the run must leave that exact absolute path
- * existing and newer than the run's start. A *failing suite* still emits its report and stays
- * green here — only a generator that never ran is rejected.
- *
- * Both halves catch the leak this was written for: re-arm Playwright's `_OUTPUT_NAME` (which
- * re-anchors against the config directory) and the report lands, 49 KB of absolute machine
- * paths, at test/webview/test/dashboard/results/webview.json — a path nothing ignores any more,
- * and not the absolute path the checker handed the runner. See docs/testing.md.
- *
- * Run: node scripts/check-generated-output.mjs
+ * Placement and liveness, and the leak this was written for: docs/testing.md, "The generated-output rule".
  */
 import { execFileSync, execSync } from 'node:child_process';
 import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';

@@ -97,7 +97,7 @@ configureDebugLog({
   sink: line => console.log(line)
 });
 
-// Same config the provider reads from settings; the standalone has no settings UI, so these are the extension's defaults (THUMBNAIL_SIZE is packedThumbs.ts's, shared with the sharing script).
+// The extension's default prefetchCount; the standalone has no settings UI.
 const PREFETCH_COUNT = 3;
 
 // The stub must exist before the webview bundle's top-level `acquireVsCodeApi()` call runs.
@@ -240,14 +240,7 @@ async function sendThumbnails(s: StandaloneState, tupleIndices: TupleIndex[]): P
         post({ type: 'thumbnailError', tupleIndex, modalityIndex: asOriginal(modalityIndex), error: 'Image not available' });
         continue;
       }
-      try {
-        // On-demand priority, ranked above the open-time bulk sweep — the provider's class for these re-requests.
-        const thumb = await thumbnailBytes(s, img, { priority: Priority.THUMBNAIL, key: s.poolKey });
-        post({ type: 'thumbnail', tupleIndex, modalityIndex: asOriginal(modalityIndex), bytes: thumb.bytes, mime: thumb.mime });
-      } catch (err) {
-        if (err instanceof TaskCancelled) continue;
-        post({ type: 'thumbnailError', tupleIndex, modalityIndex: asOriginal(modalityIndex), error: err instanceof Error ? err.message : 'Unknown error' });
-      }
+      await postSlotThumbnail(s, tupleIndex, asOriginal(modalityIndex));
     }
   }
 }
@@ -454,20 +447,8 @@ async function handleCropImages(
     },
     post,
     postCropThumbnails: async saved => {
-      const newTuple: ImageTuple | undefined = s.scan.tuples[newTupleIndex];
-      for (const f of saved) {
-        const modalityIndex = s.scan.modalities.indexOf(f.modality);
-        const img = newTuple ? findImageForModality(newTuple, f.modality) : undefined;
-        if (!img || modalityIndex < 0) continue;
-        try {
-          // Post-crop thumbnails at on-demand priority, the provider's class for a regenerated slot.
-          const thumb = await thumbnailBytes(s, img, { priority: Priority.THUMBNAIL, key: s.poolKey });
-          post({ type: 'thumbnail', tupleIndex: asTuple(newTupleIndex), modalityIndex: asOriginal(modalityIndex), bytes: thumb.bytes, mime: thumb.mime });
-        } catch (err) {
-          if (err instanceof TaskCancelled) continue;
-          post({ type: 'thumbnailError', tupleIndex: asTuple(newTupleIndex), modalityIndex: asOriginal(modalityIndex), error: err instanceof Error ? err.message : 'Unknown error' });
-        }
-      }
+      // Post-crop thumbnails at on-demand priority, the provider's class for a regenerated slot.
+      for (const f of saved) await postSlotThumbnail(s, asTuple(newTupleIndex), asOriginal(s.scan.modalities.indexOf(f.modality)));
     },
   });
 }
@@ -712,7 +693,6 @@ async function handleWebviewMessage(message: WebViewMessage): Promise<void> {
       break;
     case 'saveSessionAs':
     case 'revealPath':
-    case 'log':
       break;
   }
 }
@@ -983,7 +963,7 @@ function stopPolling(s: StandaloneState): void {
 
 /** Arm the interval poll (plus the FileSystemObserver accelerator when the browser has one) for a writable root. */
 function startPolling(s: StandaloneState, root: OpenedRoot): void {
-  // Read-only roots are static File lists, and a published one changes only by the viewer's own writes — neither has anything to re-list (docs/standalone.md, "The viewer layer").
+  // Read-only roots are static File lists, and a published one changes only by the viewer's own writes — neither has anything to re-list (docs/standalone.md, "Build").
   if (!s.fs.writable || s.published) return;
   // The cycle lists `<root>/<column>`, which only this shape has; elsewhere every cycle would re-read a `results.txt` the comparison does not own (docs/file-watching.md, "Events by mode") (docs/session-files.md: mode-behaviour-is-a-table).
   if (!MODES[s.scan.mode].rootSubdirsAreColumns) return;
@@ -1068,12 +1048,8 @@ const LANDING_CSS = `
 #ic-error { margin-top: 16px; margin-left: auto; margin-right: auto; max-width: 560px; color: #f66; white-space: pre-wrap; }
 `;
 
-function landingEl(): HTMLElement | null {
-  return document.getElementById('ic-landing');
-}
-
 function hideLanding(): void {
-  landingEl()?.classList.add('hidden');
+  document.getElementById('ic-landing')?.classList.add('hidden');
 }
 
 function showLandingError(err: unknown): void {

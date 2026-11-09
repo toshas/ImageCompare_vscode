@@ -16,10 +16,8 @@ export function parseResults(text: string): Map<string, string> {
 
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
-    // Skip empty lines and comments
     if (!trimmed || trimmed.startsWith('#')) continue;
 
-    // Parse format: tuple_key = winner_modality
     const eqIndex = trimmed.indexOf('=');
     if (eqIndex > 0) {
       const tupleKey = trimmed.substring(0, eqIndex).trim();

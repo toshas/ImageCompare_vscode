@@ -29,7 +29,7 @@ export interface CropFlowIo<TImage, TSaved extends { path: string }> {
   renderCrop(image: TImage, rect: CropRect, cropMeta: string): Promise<Uint8Array>;
   /** Write the finished bytes as `outputName` beside the image, returning the product's saved-file record. */
   writeCrop(image: TImage, outputName: string, bytes: Uint8Array): Promise<TSaved>;
-  /** Wrap one modality's work unit for scheduling (provider: the EXPORT pool; adapter: a serial chain); default is a direct call. */
+  /** Wrap one modality's work unit for scheduling (both products: the EXPORT pool); default is a direct call. */
   schedule?<R>(work: () => Promise<R>): Promise<R>;
   /** True for a scheduling-cancelled throw: it silences the whole batch instead of counting as a failure. */
   isCancelled?(err: unknown): boolean;

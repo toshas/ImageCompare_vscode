@@ -29,7 +29,7 @@ function memoryLayerStore(): LayerStore {
 const backendsModule = '../../standalone/fsBackends';
 const { createPublishedBackend } = await import(backendsModule) as {
   createPublishedBackend(files: readonly string[], fetchFile: (path: string) => Promise<ArrayBuffer>): {
-    fs: import('../../standalone/shims/vscode').StandaloneFs; rootPath: string; rootName: string;
+    fs: import('../../standalone/shims/vscode').StandaloneFs; rootPath: string;
   };
 };
 

@@ -7,7 +7,7 @@ import { enumeratedImages } from '../src/cropPlan';
 import { MODES } from '../src/modePolicy';
 import { isPublishedPath } from './publishedPath';
 import { hostRegime, HostRegimeName, PublishLimits } from './hostRegimes';
-import { PackedThumbMime, packThumbFiles, THUMBNAIL_JPEG_QUALITY, THUMBNAIL_SIZE, thumbnailMimeFor } from './packedThumbs';
+import { PackedThumbMime, packThumbFiles, THUMBNAIL_JPEG_QUALITY, THUMBNAIL_SIZE, thumbnailMimeFor, utf8Length } from './packedThumbs';
 
 export type EntryKind = 'file' | 'dir' | undefined;
 
@@ -289,7 +289,6 @@ export interface ShareOptions {
   title?: string;
   /** The built standalone page's text. */
   pageHtml: string;
-  base64(bytes: Uint8Array): string;
 }
 
 export interface ShareSummary {
@@ -304,10 +303,8 @@ export interface ShareSummary {
   totalBytes: number;
 }
 
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
-
 /** Thumbnails for the listed images, a few at a time. */
-async function makeThumbs(images: readonly LayoutImage[], io: ShareIo, base64: (b: Uint8Array) => string): Promise<{ entries: Array<{ path: string; mime: PackedThumbMime; data: string }>; thumbless: string[] }> {
+async function makeThumbs(images: readonly LayoutImage[], io: ShareIo): Promise<{ entries: Array<{ path: string; mime: PackedThumbMime; data: string }>; thumbless: string[] }> {
   const results: Array<{ path: string; mime: PackedThumbMime; data: string } | null> = new Array(images.length).fill(null);
   let next = 0;
   const worker = async () => {
@@ -315,7 +312,7 @@ async function makeThumbs(images: readonly LayoutImage[], io: ShareIo, base64: (
       const mime = thumbnailMimeFor(images[i].path);
       // The strip's own decode target, single-sourced with the page (docs/standalone.md: packed-thumbs-never-required).
       const bytes = await io.thumbnail(images[i].source, THUMBNAIL_SIZE * 2, mime, THUMBNAIL_JPEG_QUALITY).catch(() => null);
-      if (bytes) results[i] = { path: images[i].path, mime, data: base64(bytes) };
+      if (bytes) results[i] = { path: images[i].path, mime, data: Buffer.from(bytes).toString('base64') };
     }
   };
   await Promise.all(Array.from({ length: Math.min(8, images.length) }, worker));
@@ -345,21 +342,21 @@ export async function shareComparison(options: ShareOptions, io: ShareIo): Promi
   const page = setPageTitle(options.pageHtml, options.title ?? layout.name);
   const manifestFor = (thumbsNames: readonly string[]) =>
     `${JSON.stringify({ files: layout.images.map(img => img.path), host: options.host, ...(thumbsNames.length > 0 ? { thumbs: thumbsNames } : {}) }, null, 1)}\n`;
-  const pageFile: StagedFile = { path: PAGE_NAME, bytes: utf8Bytes(page), kind: 'page' };
+  const pageFile: StagedFile = { path: PAGE_NAME, bytes: utf8Length(page), kind: 'page' };
   const imageFiles = layout.images.map((img, i): StagedFile => ({ path: img.path, bytes: sizes[i], kind: 'image' }));
 
   // Every type, count, size and name check runs before any thumbnail is built, so a refusal is immediate.
-  const before = [...early, ...limitViolations([pageFile, { path: MANIFEST_NAME, bytes: utf8Bytes(manifestFor([])), kind: 'manifest' }, ...imageFiles], limits)];
+  const before = [...early, ...limitViolations([pageFile, { path: MANIFEST_NAME, bytes: utf8Length(manifestFor([])), kind: 'manifest' }, ...imageFiles], limits)];
   if (before.length > 0) throw new ShareRefusal(before);
 
-  const thumbs = await makeThumbs(layout.images, io, options.base64);
+  const thumbs = await makeThumbs(layout.images, io);
   const packed = packThumbFiles(thumbs.entries, limits ? limits.maxBytesPerTextFile : null);
   const thumbsNames = packed.texts.map((_, i) => thumbsFileName(i));
   const manifest = manifestFor(thumbsNames);
   const staged: StagedFile[] = [
     pageFile,
-    { path: MANIFEST_NAME, bytes: utf8Bytes(manifest), kind: 'manifest' },
-    ...packed.texts.map((text, i) => ({ path: thumbsNames[i], bytes: utf8Bytes(text), kind: 'thumbs' as const })),
+    { path: MANIFEST_NAME, bytes: utf8Length(manifest), kind: 'manifest' },
+    ...packed.texts.map((text, i) => ({ path: thumbsNames[i], bytes: utf8Length(text), kind: 'thumbs' as const })),
     ...imageFiles,
   ];
   // Thumbs files count and weigh too: the same limits again, now with them in.

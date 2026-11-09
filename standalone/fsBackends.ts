@@ -1,4 +1,4 @@
-/** The two StandaloneFs backends: FSA directory handle (writable) and webkitdirectory FileList (read-only) — IO only, no decisions (docs/standalone.md). */
+/** The StandaloneFs backends (FSA handle, FileList, dropped entries, published listing) and the imagecompare.json parser — IO only, no decisions (docs/standalone.md). */
 import { FileType, StandaloneFs } from './shims/vscode';
 import { DEFAULT_HOST_REGIME, HostRegimeName, isHostRegimeName } from './hostRegimes';
 import { isPublishedPath } from './publishedPath';
@@ -6,7 +6,6 @@ import { isPublishedPath } from './publishedPath';
 export interface OpenedRoot {
   fs: StandaloneFs;
   rootPath: string;
-  rootName: string;
   /** Present only for FSA roots — the observer/poll accelerator needs the raw handle. */
   handle?: FileSystemDirectoryHandle;
   /** True for a path this root can never delete; the webview greys Delete for it (docs/standalone.md: published-originals-never-written). */
@@ -91,7 +90,7 @@ export function createFsaBackend(root: FileSystemDirectoryHandle): OpenedRoot {
     },
   };
 
-  return { fs, rootPath, rootName: root.name || 'folder', handle: root, isReadOnly: () => false };
+  return { fs, rootPath, handle: root, isReadOnly: () => false };
 }
 
 /** The webkitGetAsEntry file/reader callbacks, promisified. */
@@ -226,5 +225,5 @@ export function createFileListBackend(files: readonly File[]): OpenedRoot {
     },
   };
 
-  return { fs, rootPath, rootName, isReadOnly: () => true };
+  return { fs, rootPath, isReadOnly: () => true };
 }

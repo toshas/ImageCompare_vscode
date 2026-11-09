@@ -1,12 +1,5 @@
 #!/usr/bin/env node
 // Stages a comparison ready to publish next to the standalone page (docs/standalone.md, "The sharing script").
-//
-//   node scripts/share-comparison.mjs <folder | session.imagecompare> --out <dir> [--host claude-artifact|static] [--title <name>]
-//
-// Every decision (layout, the regime's limits, thumbs packing, publish batches) is standalone/sharePlan.ts's,
-// bundled here in memory with esbuild exactly as scripts/build-standalone.mjs bundles the page; this file only
-// parses arguments, builds the page from this checkout, and prints. A refusal prints every violation and exits 1
-// with nothing staged (docs/standalone.md: pack-refuses-never-alters).
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -53,7 +46,7 @@ const bundle = await esbuild.build({
 });
 const mod = { exports: {} };
 new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(mod, mod.exports, createRequire(join(ROOT, 'package.json')));
-const { shareComparison, nodeShareIo, nodeBase64, ShareRefusal, isHostRegimeName, HOST_REGIMES } = mod.exports;
+const { shareComparison, nodeShareIo, ShareRefusal, isHostRegimeName, HOST_REGIMES } = mod.exports;
 
 if (!isHostRegimeName(opts.host)) usage(`unknown --host ${opts.host} (known: ${Object.keys(HOST_REGIMES).join(', ')})`);
 
@@ -78,7 +71,6 @@ try {
     host: opts.host,
     title: opts.title,
     pageHtml: readFileSync(PAGE, 'utf8'),
-    base64: nodeBase64,
   }, nodeShareIo);
   console.log(`Staged "${summary.name}" for ${summary.host} in ${out}`);
   console.log(`  ${summary.images} images (${(summary.imageBytes / 1e6).toFixed(1)} MB), ${summary.thumbsFiles} thumbs file(s), ${(summary.totalBytes / 1e6).toFixed(1)} MB in total`);

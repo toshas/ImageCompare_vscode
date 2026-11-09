@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { ImageCompareProvider } from './imageCompareProvider';
 import { initDebugLog } from './debugChannel';
 import { parseSessionFile, suggestSessionFileName } from './sessionFile';
+import { escapeHtml } from './webviewShell';
 
 let provider: ImageCompareProvider | undefined;
 
@@ -112,11 +113,6 @@ class SessionFileEditorProvider implements vscode.CustomReadonlyEditorProvider {
       webviewPanel.webview.html = sessionErrorHtml(document.uri.fsPath, message);
     }
   }
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
 function sessionErrorHtml(filePath: string, message: string): string {

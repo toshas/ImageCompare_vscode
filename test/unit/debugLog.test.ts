@@ -8,7 +8,6 @@ import {
   debug,
   debugEnabled,
   debugVerbose,
-  debugVerboseEnabled,
   debugWrite,
   configureDebugLog,
   diffTierStats,
@@ -75,7 +74,6 @@ describe('debugLog — the shared debug sink', () => {
       debugVerbose('[IC-THUMB]', () => { perItem++; return 'per-item'; });
       debug('[IC-SWEEP]', () => 'rollup');
       expect(perItem).toBe(0);
-      expect(debugVerboseEnabled()).toBe(false);
       expect(lines().map(l => l.replace(/^\+\d+ms /, ''))).toEqual(['[IC-SWEEP] rollup']);
       sub.dispose();
     });
@@ -106,7 +104,6 @@ describe('debugLog — the shared debug sink', () => {
       __setConfig('debugVerbose', true);
       const sub = initDebugLog();
       debugVerbose('[IC-THUMB]', () => 'pack 3ms 4.3KB /a/b.png');
-      expect(debugVerboseEnabled()).toBe(true);
       expect(lines()[0]).toContain('[IC-THUMB] pack 3ms 4.3KB /a/b.png');
       sub.dispose();
     });

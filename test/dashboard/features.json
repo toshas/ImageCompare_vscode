@@ -723,10 +723,6 @@
           "name": "Persistence to results.txt",
           "tests": [
             {
-              "suite": "integration",
-              "match": "write then read round-trips"
-            },
-            {
               "suite": "unit",
               "match": "maps winner indices to durable modality names"
             },

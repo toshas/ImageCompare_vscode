@@ -12,7 +12,6 @@ export interface LayerStore {
 export interface LayerBase {
   fs: StandaloneFs;
   rootPath: string;
-  rootName: string;
 }
 
 export interface LayeredRoot extends LayerBase {
@@ -146,5 +145,5 @@ export async function createViewerLayer(base: LayerBase, listedPaths: ReadonlySe
     },
   };
 
-  return { fs, rootPath: base.rootPath, rootName: base.rootName, isReadOnly: path => listedPaths.has(path) };
+  return { fs, rootPath: base.rootPath, isReadOnly: path => listedPaths.has(path) };
 }
