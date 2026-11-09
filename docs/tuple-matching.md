@@ -5,18 +5,16 @@ rules that keep the resulting indices honest.
 
 Code: `fileService.ts` (`scanForImages` → `scanDirectoriesAsModalities` → `matchTuplesWithTrie`).
 
-Scan-time matcher only. A file appearing *after* open is placed by a separate heuristic —
+Scan-time matcher only. A file appearing *after* open is placed by a separate heuristic:
 `planArrival` (`arrivalPlan.ts`), driven by `handleNewFile` (`imageCompareProvider.ts`) and by the
-standalone's crop writes — the trie matcher is a batch algorithm over a complete
-scan and never runs for watcher events (`docs/file-watching.md`, "Watcher-added files use a second,
-separate matcher"). They do *not* share a filename contract: the trie matcher knows `_cropNN` (tie-break
-rule 1 tests `/_crop\d+$/`, `docs/crop-and-pptx.md: cropnn-writer-reader-match`), while `planArrival`
-matches by generic substring containment (`baseFilename.includes(tuple.name)`) and treats a crop as an
-ordinary name. The other `_crop\d+` readers are `nextCropName` in `cropPlan.ts` and `findCropTuples`/
-`findParentTuple` in `pptxDeck.ts`, all bound to the writer in `nextCropName` itself.
+standalone's crop writes. The trie matcher is a batch algorithm over a complete scan and never runs
+for watcher events (`docs/file-watching.md`, "Watcher-added files use a second, separate matcher").
+They do *not* share a filename contract. The trie matcher knows `_cropNN`: tie-break rule 1 tests
+`/_crop\d+$/` (`docs/crop-and-pptx.md: cropnn-writer-reader-match`). `planArrival` matches by generic
+substring containment (`baseFilename.includes(tuple.name)`) and treats a crop as an ordinary name.
 
 Pinned by `test/unit/tupleMatching.test.ts` (Vitest), which imports the real `matchTuplesWithTrie`
-and `scanForImages` from `fileService.ts` through the `vscode` mock alias — the suite once held pure
+and `scanForImages` from `fileService.ts` through the `vscode` mock alias. The suite once held pure
 copies that could silently drift; the copy is gone (`docs/testing.md`, "The copy trap (historical)").
 
 ## The problem
@@ -35,32 +33,35 @@ simpler rule.
 
 ## Why a reference modality
 
-Pairwise all-to-all matching has no anchor and no stable identity for a row. Instead one
-modality is elected reference and *its* files define the rows: each file of every other modality is
-attached to the reference file it best matches. `MatchedTuple.key` (the reference basename) is what
-the row is keyed on. The matcher's sort by key is intermediate — it fixes the tuple order the
-collision suffixes below follow — and the displayed order is a final `naturalSort` by tuple *name*
-(`rows-keyed-by-reference`).
+Pairwise all-to-all matching has no anchor and no stable identity for a row. Instead one modality is
+elected reference and *its* files define the rows. Each file of every other modality is attached to
+the reference file it best matches. The row is keyed on `MatchedTuple.key` (the reference basename).
+The matcher's sort by key is intermediate: it fixes the tuple order the collision suffixes below
+follow. The displayed order is a final `naturalSort` by tuple *name* (`rows-keyed-by-reference`).
 
-The key is not what `results.txt` persists. Votes are written against `ImageTuple.name`
-(`writeResultsFile`, resolved back by `mapWinnersToIndices`), which is
-`findCommonSubstring(names) || matched.key`, plus a ` (2)`, ` (3)`… suffix from `uniquify` when that
-name repeats — the longest common substring of *the matched cluster's* filenames, falling back to the
-key only when there is none, then de-duplicated. So the durable vote key is *emergent*: adding or
-removing a modality's file changes the cluster, the common substring can shift, and an existing vote is
-orphaned (`docs/session-files.md: durable-vote-key`; this section is why it is fragile).
+`results.txt` does not persist the key. Votes are written against `ImageTuple.name`
+(`persistResults`, resolved back by `mapWinnersToIndices`), which is
+`findCommonSubstring(names) || matched.key`:
 
-The collision suffix is a second, quieter version of the same hazard. `takenTupleNames` fills in tuple
-order, so which colliding row gets the bare name and which gets ` (2)` depends on position: a change
-that alters an *earlier* tuple's common substring can move the suffix onto a different row, and a
-saved vote then re-targets silently — it still resolves, just to the wrong tuple. The suite pins that
+- the longest common substring of *the matched cluster's* filenames;
+- the key, only when there is none;
+- then a ` (2)`, ` (3)`… suffix from `uniquify` when that name repeats.
+
+So the durable vote key is *emergent*. Adding or removing a modality's file changes the cluster, the
+common substring can shift, and an existing vote is orphaned
+(`docs/session-files.md: durable-vote-key`; this section is why it is fragile).
+
+The collision suffix is a second, quieter version of the same hazard. `takenTupleNames` fills in
+tuple order, so position decides which colliding row gets the bare name and which gets ` (2)`. A
+change that alters an *earlier* tuple's common substring can move the suffix onto a different row. A
+saved vote then re-targets silently: it still resolves, just to the wrong tuple. The suite pins that
 colliding names are made unique, not which row keeps the bare one.
 
-The reference is the modality with the most files — maximal coverage, since a non-reference file with
-no matching reference file creates no row and is merely absorbed. The election uses strict `>`, so a
+The reference is the modality with the most files, for maximal coverage: a non-reference file with no
+matching reference file creates no row and is merely absorbed. The election uses strict `>`, so a
 tie goes to whichever modality is first in the `modalities` array (caller order, see below). Ties are
-common (all modalities complete), and benign only because with equal counts the choice rarely changes
-the outcome.
+common (all modalities complete), and benign only because with equal counts the choice rarely
+changes the outcome.
 
 ## Two passes: exact, then fuzzy
 
@@ -92,62 +93,66 @@ Applied among candidates sharing the LCP:
 **Why crop deprioritization is rule 1, not a tiebreak among equals.** A crop's name is the
 original's plus a suffix, and both live side by side. A query with its own long suffix
 (`img_00001_prediction.png`) can be *closer in length* to `img_00001_gt_crop01.png` than to
-`img_00001_gt.png` — so length alone hands the original's row to the crop: the original tuple loses
+`img_00001_gt.png`. Length alone then hands the original's row to the crop: the original tuple loses
 that modality and the crop tuple gains a non-crop image, both wrong. Crops already pair in pass 1
 (identical names), so excluding them from pass 2 costs nothing and closes the class regardless of
-suffix lengths. Tests 4 and 5 pin it (a `_pred` or `_longmodality` query lands on `_gt`, not `_crop01`).
+suffix lengths. `tupleMatching.test.ts` pins it ("_pred matches _gt, not _crop01, when lenDiff ties"
+and "a long modality name still matches _gt"): a `_pred` or `_longmodality` query lands on `_gt`,
+not `_crop01`.
 
-**Why LCS is last.** LCP (the trie) sees only a shared *prefix* and length-difference only size —
-neither notices an identifier surviving in the *middle* while the surroundings differ. LCS does, but
-it is the O(L²) rule and order-insensitive enough to reward coincidental overlap, so it *decides* only among
-what the cheaper, sharper rules could not separate: candidates already tied on crop-ness *and*
-length, never overriding a length verdict — though `lcsLength` is computed for every candidate,
-which is where the O(C·L²) below comes from. It is the last resort that *sometimes* catches a middle
-identifier, not the mechanism that does.
+**Why LCS is last.** LCP (the trie) sees only a shared *prefix*, and length-difference only size.
+Neither notices an identifier surviving in the *middle* while the surroundings differ. LCS does. But
+it is the O(L²) rule, and order-insensitive enough to reward coincidental overlap.
 
-The comparator is greedy from `bestIdx = candidates[0]`, seeded `bestIsCrop = true` /
-`bestLenDiff = Infinity` / `bestLcs = -1` only so the first *comparison* can't reject that default —
+So it *decides* only among what the cheaper, sharper rules could not separate: candidates already
+tied on crop-ness *and* length. It never overrides a length verdict, though `lcsLength` is computed
+for every candidate, the source of the O(C·L²) below. It is the last resort that *sometimes* catches
+a middle identifier, not the mechanism that does.
+
+The comparator is greedy from `bestIdx = candidates[0]`. It is seeded `bestIsCrop = true` /
+`bestLenDiff = Infinity` / `bestLcs = -1` only so the first *comparison* can't reject that default;
 no seed is a claim about candidate 0. A lone candidate is taken as-is, with the crop rule not applied.
 
 ## Complexity
 
-- Trie build: O(R·L) time and O(R·L) memory (every node stores an index list; total entries =
-  R + the sum of reference name lengths — the root push contributes one per file).
+- Trie build: O(R·L) time and O(R·L) memory. Every node stores an index list; total entries =
+  R + the sum of reference name lengths (the root push contributes one per file).
 - Matching walk: O(N·L) over all files.
-- Tie-breaking: O(C·L²) time per fuzzy query but O(L) space — `lcsLength` keeps two rows, not the
+- Tie-breaking: O(C·L²) time per fuzzy query but O(L) space: `lcsLength` keeps two rows, not the
   full DP table. C is the candidate count, small when names share long prefixes (the intended case)
-  but degrading to C = R for a query sharing no prefix — worst case O(N·R·L²). It has not mattered
+  but degrading to C = R for a query sharing no prefix: worst case O(N·R·L²). It has not mattered
   because directories that compare have names that look alike.
 
 ## The scan's real cost is round trips, not files
 
-Matching is CPU work on strings and is measured in tens of milliseconds; **listing the directories is
-IO**, and over a network filesystem one listing is a cold round trip of a few hundred milliseconds
-regardless of how many files come back. Field evidence from three opens in one remote/NFS session:
-7398 files over 11 dirs took 2431 ms of `scan=`, while 984 files over 10 dirs took 3640 ms — 7x fewer
-files, 50% *more* time. Per directory that is 221 ms warm against 364 ms cold: the spread tracks the
-cache, not the file count, which is the point. Serialized, a few hundred ms x a column count is the
-whole open: a blank window measured in seconds, growing with the number of *columns*,
-which is the one dimension a user adds casually.
+Matching is CPU work on strings, measured in tens of milliseconds. **Listing the directories is
+IO**: over a network filesystem one listing is a cold round trip of a few hundred milliseconds,
+regardless of how many files come back.
+
+Field evidence from three opens in one remote/NFS session: 7398 files over 11 dirs took 2431 ms of
+`scan=`. 984 files over 10 dirs took 3640 ms: 7x fewer files, 50% *more* time. Per directory that is
+221 ms warm against 364 ms cold. The spread tracks the cache, not the file count, which is the point.
+Serialized, a few hundred ms x a column count is the whole open: a blank window measured in seconds,
+growing with the number of *columns*, the one dimension a user adds casually.
 
 So the listings overlap (`listModalityDirectories`), and only they: the matcher stays sequential
-because it is not what costs. The fan-out is capped at `DIR_LISTING_CONCURRENCY = 16` — enough that
-every realistic session (2–12 modalities) is one wave, i.e. one round trip, while a session naming
-dozens of directories still cannot open with an unbounded herd of simultaneous listings at the exact
-moment the user is waiting. A cap also keeps the memory transient bounded: each listing materializes
-its directory's whole entry array.
+because it is not what costs. The fan-out is capped at `DIR_LISTING_CONCURRENCY = 16`. That makes
+every realistic session (2–12 modalities) one wave, i.e. one round trip. A session naming dozens of
+directories still cannot open with an unbounded herd of simultaneous listings at the exact moment the
+user is waiting. A cap also keeps the memory transient bounded: each listing materializes its
+directory's whole entry array.
 
 Two things about the overlap are load-bearing and invisible in a green build:
 
-- **Assembly is in the input `dirs` order, never completion order.** `modalityFiles` is a `Map` and
-  its *insertion* order is the modality order of the session (below), so filling it as listings land
-  would reorder every column by network latency — a different column order on every open, and with it
+- **Assembly is in the input `dirs` order, never completion order.** `modalityFiles` is a `Map`, and
+  its *insertion* order is the modality order of the session (below). Filling it as listings land
+  would reorder every column by network latency: a different column order on every open, and with it
   different names, colors and possibly a different elected reference. Each listing therefore carries
-  its own `dir` and the Map is filled by walking the results array. `classifyUris` does the same thing
-  for the same reason ("Stat in parallel, assemble in input order").
+  its own `dir`, and the Map is filled by walking the results array. `classifyUris` does the same
+  thing for the same reason ("Stat in parallel, assemble in input order").
 - **A failed listing still rejects the scan, with the first failure in input order.** Serially, an
-  unreadable directory threw before the later ones were read; concurrently every listing runs, so the
-  failures are collected and the earliest *in input order* is rethrown — otherwise which error the
+  unreadable directory threw before the later ones were read. Concurrently every listing runs, so the
+  failures are collected and the earliest *in input order* is rethrown. Otherwise which error the
   user sees would depend on which directory was slowest.
 
 Measured against the model this fix targets (11 dirs, 350 ms injected per-listing latency, real
@@ -218,139 +223,148 @@ The same tuple has two shapes, and confusing them is the recurring index bug:
 | Webview (`TupleInfo.images`) | **dense** | exactly `modalities.length` | placeholder with `name: ''` |
 
 `scanDirectoriesAsModalities` only pushes images for modalities the tuple has, so
-`tuple.images[i].modality !== modalities[i]` in general — an offset into `tuple.images` is not a
+`tuple.images[i].modality !== modalities[i]` in general. An offset into `tuple.images` is not a
 modality index; use `findImageForModality(tuple, modality)`. `sendInitData` re-densifies over
 `allModalities`, emitting a placeholder per gap, so webview-side position *is* the global modality
-index (`modalityAdded` splices a placeholder into every tuple to keep it so) — but a webview image
+index (`modalityAdded` splices a placeholder into every tuple to keep it so). But a webview image
 with an empty `name` has no bytes behind it.
 
 ## Trap 2: original vs display modality index
 
 The webview lets the user reorder modality columns. `modalityOrder[displayIdx] = originalIdx`
 is the only mapping, and it lives in the webview: the extension's `modalities` array is *always* in
-original order. The extension does see display order in one place — `exportPptx` carries
-`modalityOrder` on the wire and `pptxDeck.ts`'s `buildDeck` iterates it so slides come out in the user's column
-order — but it only reads it through, never stores it.
+original order. The extension does see display order in one place: `exportPptx` carries
+`modalityOrder` on the wire, and `pptxDeck.ts`'s `buildDeck` iterates it so slides come out in the
+user's column order. It only reads it through, never stores it.
 
-Which space each value lives in — the wire is original; `winners` is *display* in the webview
-(`main.ts`) and *original* in the extension (`PanelState.winners`), so the same field name means a
-different space on each side — is now encoded by the branded index types in `types.ts`. The brand is
+The branded index types in `types.ts` now encode which space each value lives in. The wire is
+original. `winners` is *display* in the webview (`main.ts`) and *original* in the extension
+(`PanelState.winners`), so the same field name means a different space on each side. The brand is
 not uniform coverage; the main classes it does not reach:
 
 - **String keys.** The thumbnail cache key `${tupleIndex}-${originalModIdx}` is a string.
 - **`Record<number, …>` keys.** `init.winners` and `winnersReset.winners` are keyed by plain `number`
   (TS index signatures cannot take a branded key), so only their *values* are branded.
-- **`postMessage({...})` object literals**, which take `unknown` — the wire brand is not enforced at
+- **`postMessage({...})` object literals**, which take `unknown`. The wire brand is not enforced at
   the boundary itself (`wire-index-is-original`).
-- **Extension-side index parameters and fields.** About a dozen are still plain `number` —
+- **Extension-side index parameters and fields.** About a dozen are still plain `number`:
   `slotMatchesUri`, `loadImageToCache`, `sendThumbnailMessage`/`sendThumbnailErrorMessage`,
-  `removeModality`, `regenerateThumbnail`, `DeletedFileInfo.modalityIndex` — so the extension's
-  internal plumbing is largely unbranded even though the wire types are not.
+  `removeModality`, `regenerateThumbnail`, `DeletedFileInfo.modalityIndex`. The extension's internal
+  plumbing is largely unbranded even though the wire types are not.
 
-And the sanctioned conversions are the exception rather than the rule: `toDisplay`/`toOriginal` are
-used at four sites in `main.ts`, while raw `modalityOrder[displayIdx]` indexing appears at roughly
-twice as many. The brand documents intent at the boundaries; it does not police every hop.
+The sanctioned conversions are the exception rather than the rule. `toDisplay`/`toOriginal` are used
+at seven sites in `main.ts`, and raw `modalityOrder[…]` indexing appears at about twice as many. The
+brand documents intent at the boundaries; it does not police every hop.
 
-`results.txt` sidesteps the whole question by persisting modality *names* and tuple *names*;
-`mapWinnersToIndices` re-resolves them to original indices at load. That is deliberate — indices
-are not durable across a rescan, names are.
+`results.txt` sidesteps the whole question by persisting modality *names* and tuple *names*.
+`mapWinnersToIndices` re-resolves them to original indices at load. That is deliberate: indices are
+not durable across a rescan, names are.
 
 ### Mutating a display-ordered array with a wire index (`unpermute-before-splice`)
 
 Trap 2 above is about *lookup*; mutation is where this broke. `modalities`, `modalityColors` and
-`modalityPaths` are **display**-ordered arrays, and TS cannot brand-restrict `T[]` index access — so a
+`modalityPaths` are **display**-ordered arrays, and TS cannot brand-restrict `T[]` index access. A
 handler splicing them at a wire (original) index corrupts a permuted array, correct only until the
-first reorder. The two handlers resolve this differently. `handleModalityRemoved` un-permutes all
-three through the *previous* `modalityOrder` (`restoreOriginalOrder`), splices at the wire index,
-and resets the order to identity. `handleModalityAdded` never un-permutes: it converts the wire
-index to a *display* position (`displayOrderAfterInsert`) and splices the display arrays there,
-because the user's arrangement must survive the insert (`rearrangement-survives-insert` below);
-`modalityColors` is instead rebuilt by permuting the wire payload (original-order over the
-post-insert set) through the preserved order. (`images` is display-ordered too but needs no
-un-permute: both handlers reset it to `[]` and reload, never splice it.)
+first reorder. The two handlers resolve this differently:
+
+- `handleModalityRemoved` un-permutes all three through the *previous* `modalityOrder`
+  (`restoreOriginalOrder`), splices at the wire index, and resets the order to identity.
+- `handleModalityAdded` never un-permutes. It converts the wire index to a *display* position
+  (`displayOrderAfterInsert`) and splices the display arrays there, because the user's arrangement
+  must survive the insert (`rearrangement-survives-insert` below). `modalityColors` is instead
+  rebuilt by permuting the wire payload (original-order over the post-insert set) through the
+  preserved order.
+
+(`images` is display-ordered too but needs no un-permute: both handlers reset it to `[]` and reload,
+never splice it.)
 
 The second half is carrying display-space *values* across each handler's order change: they were
 indices into the old permutation. `winners`, `currentModalityIndex` and `previousModalityIndex` are
-mapped through `prevOrder` on remove (`carryIndex`), and on add merely shift at the insertion's
+mapped through `prevOrder` on remove (`carryIndex`). On add they merely shift at the insertion's
 display position, since the permutation itself is preserved. A value carried across a space change
 *unmapped* is the bug.
 
-**Neither half is caught by the compiler**, and this is the thing to be clear about before deleting
-anything here. A stale display index and a fresh one are both `DisplayModalityIndex`, so carrying one
-straight across the reset is a same-type assignment; deleting the `restoreOriginalOrder` calls just
-splices a `string[]`. The brand rejects *mixing spaces* (assigning an `OriginalModalityIndex` where a
-`DisplayModalityIndex` is expected is a TS2322/TS2345), which is a different mistake from the one this
-section is about. Nothing but the code comments and this doc keeps the un-permute and the carry alive
+**Neither half is caught by the compiler**; be clear about this before deleting anything here. A
+stale display index and a fresh one are both `DisplayModalityIndex`, so carrying one straight across
+the reset is a same-type assignment. Deleting the `restoreOriginalOrder` calls just splices a
+`string[]`. The brand rejects *mixing spaces*: assigning an `OriginalModalityIndex` where a
+`DisplayModalityIndex` is expected is a TS2322/TS2345, a different mistake from this section's.
+Nothing but the code comments and this doc keeps the un-permute and the carry alive
 (`unpermute-before-splice`).
 
 ## Invariants
 
-- **`rows-keyed-by-reference`** — rows are keyed by the reference file's basename; the *displayed*
+- **`rows-keyed-by-reference`** — rows are keyed by the reference file's basename. The *displayed*
   order is a final `naturalSort` by tuple **name**, the same rule watcher-time insertion maintains
-  (`docs/file-watching.md: rows-insert-in-order`) — sorting by key put `X_crop01` ahead of a parent
-  keyed `X_gt`. Modality order can still *change which modality is elected reference* (the election
-  tie-breaks on array position), which changes the keys and, through naming, can change the names —
-  so row order is not modality-order-independent in general.
+  (`docs/file-watching.md: rows-insert-in-order`); sorting by key put `X_crop01` ahead of a parent
+  keyed `X_gt`. Modality order can still *change which modality is elected reference*, since the
+  election tie-breaks on array position. That changes the keys and, through naming, can change the
+  names, so row order is not modality-order-independent in general.
 - **`entry-type-is-a-bitmask`** — every `FileType` test is a bit test (`(type & FileType.File) !== 0`),
-  never `===`, in all four modules that classify an entry: the open-time scan (`fileService.ts` — `classifyUris`,
-  `scanDirectory`, `scanDirectoriesAsModalities`), the modality-adoption and poll paths
-  (`imageCompareProvider.ts`), session-file pruning (`extension.ts`) and thumbnail-cache cleanup
-  (`thumbnailService.ts`). Symlinks are followed everywhere and broken links (`64`, neither bit set)
-  are skipped everywhere, so whether a user's file is visible never depends on which code path found
-  it — equality at some sites and masking at others is what made a symlinked column appear only if it
-  arrived after open.
+  never `===`, in all four modules that classify an entry:
+
+  - the open-time scan (`fileService.ts`: `classifyUris`, `scanDirectory`, `scanDirectoriesAsModalities`);
+  - the modality-adoption and poll paths (`imageCompareProvider.ts`);
+  - session-file pruning (`extension.ts`);
+  - thumbnail-cache cleanup (`thumbnailService.ts`).
+
+  Symlinks are followed everywhere and broken links (`64`, neither bit set) are skipped everywhere,
+  so whether a user's file is visible never depends on which code path found it. Equality at some
+  sites and masking at others made a symlinked column appear only if it arrived after open.
 - **`reference-seeds-one-tuple`** — every reference file yields exactly one tuple; nothing else
   creates tuples.
 - **`one-file-per-modality`** — a modality contributes at most one file per tuple. Matching is
-  many-to-one, not an assignment: if two files of one modality choose the same reference, the later one
-  overwrites the earlier in the tuple's map and the earlier is dropped from the view.
+  many-to-one, not an assignment. If two files of one modality choose the same reference, the later
+  one overwrites the earlier in the tuple's map, and the earlier is dropped from the view.
 - **`exact-before-fuzzy`** — pass 1 is total before pass 2 begins, and pass 2 skips anything pass 1
   matched.
 - **`crop-never-beats-noncrop`** — a crop reference never beats a non-crop reference when both are
   candidates.
 - **`modality-order-is-callers`** — modality order is the caller's; sorting is the caller's job
   (`scanDirectory` sorts its subfolders before calling). Both parallel steps of the scan preserve the
-  input order despite completing out of order: `classifyUris` assembles its files/directories by
-  walking the stat results in input order, and `scanDirectoriesAsModalities` fills `modalityFiles` by
-  walking the directory listings in input order — the Map's insertion order *is* the session's
+  input order despite completing out of order. `classifyUris` assembles its files/directories by
+  walking the stat results in input order. `scanDirectoriesAsModalities` fills `modalityFiles` by
+  walking the directory listings in input order. The Map's insertion order *is* the session's
   modality order, so completion-order assembly would re-shuffle every column by network latency.
 - **`dir-listings-overlap`** — the modality directories are listed **concurrently**, capped at
-  `DIR_LISTING_CONCURRENCY`: the scan's cost is one network round trip per directory (see "The scan's
-  real cost is round trips, not files"), so a serial loop makes the open scale with the column count,
-  and an uncapped fan-out makes a large session open with a thundering herd. Overlapping must not
-  change what the user sees when a directory cannot be listed: the scan still rejects, with the
-  earliest failure **in input order** — the one the serial loop reached first.
+  `DIR_LISTING_CONCURRENCY`. The scan's cost is one network round trip per directory (see "The
+  scan's real cost is round trips, not files"). A serial loop makes the open scale with the column
+  count, and an uncapped fan-out makes a large session open with a thundering herd. Overlapping must
+  not change what the user sees when a directory cannot be listed: the scan still rejects, with the
+  earliest failure **in input order**, the one the serial loop reached first.
 - **`names-are-join-key`** — modality names are unique, and are the join key — position is not.
 - **`sparse-vs-dense-tuples`** — extension-side tuples are sparse; webview tuples are dense with
   `name: ''` placeholders, and the two must not be indexed the same way.
 - **`wire-index-is-original`** — `modalityIndex` on the wire is always the original/global index.
 - **`revalidate-slot-before-write`** — async loads re-validate `(tupleIndex, modalityIndex) → uri` via
   `slotMatchesUri` before writing a cache entry, because watcher events re-index tuples underneath
-  in-flight work. Whether a stale slot also suppresses the *message* depends on who is waiting: on the
-  requested image path it guards the cache write only — both the image and the error reply are
-  re-addressed rather than suppressed, falling back to the enqueued slot when that slot is empty
-  (`docs/loading-architecture.md`: `reply-exactly-once`); on prefetch — nobody is waiting,
-  so a stale slot drops the post along with the cache write. Thumbnails used to be the asymmetric case: a successful post
-  was dropped on a stale slot while `thumbnailError` went out unguarded, blanking a slot that was
-  actually fine. Every delivery — the requested image, the bulk sweep, on-demand
-  thumbnails and single-slot regeneration — therefore resolves its slot through `resolveSlotForUri`
-  on both the success and the
-  error path: the index it was enqueued at is checked first and is almost always still correct, and
-  only when a splice actually moved the row does it fall back to finding the file by URI. A splice
-  moves the row rather than voiding the work, so nothing has to be re-requested to repair it: a modality
-  add/remove still asks for every thumbnail, tuple add asks only for the new row, and tuple removal
-  asks for none.
-  `watcherLogic.ts` declines a rename it cannot prove unique for the same reason
-  (`docs/file-watching.md`: `rename-never-guessed`).
+  in-flight work. Whether a stale slot also suppresses the *message* depends on who is waiting:
+
+  - on the requested image path it guards the cache write only. Both the image and the error reply
+    are re-addressed rather than suppressed, falling back to the enqueued slot when that slot is
+    empty (`docs/loading-architecture.md`: `reply-exactly-once`);
+  - on prefetch nobody is waiting, so a stale slot drops the post along with the cache write.
+
+  Thumbnails were once the exception. On a stale slot a successful post was dropped, but
+  `thumbnailError` went out unguarded and blanked a slot that was fine. Every delivery (the
+  requested image, the bulk sweep, on-demand thumbnails and single-slot regeneration) therefore
+  resolves its slot through `resolveSlotForUri` on both the success and the
+  error path. The index it was enqueued at is checked first and is almost always still correct. Only
+  when a splice actually moved the row does it fall back to finding the file by URI.
+
+  A splice moves the row rather than voiding the work, so nothing has to be re-requested to repair
+  it. A modality add/remove still asks for every thumbnail, tuple add asks only for the new row, and
+  tuple removal asks for none. `watcherLogic.ts` declines a rename it cannot prove unique for the same
+  reason (`docs/file-watching.md`: `rename-never-guessed`).
 - **`rearrangement-survives-insert`** — a watcher-inserted modality must not reset the user's pill
-  arrangement, the focused modality, or display-space state: the new column lands beside its
+  arrangement, the focused modality, or display-space state. The new column lands beside its
   original-order predecessor (`displayOrderAfterInsert`, pure and suite-pinned), and existing
   display indices only shift at the insertion point. Resetting to identity order was the old
   behavior and reads as data loss to a user who curated an order.
 - **`unpermute-before-splice`** — a handler holding an original (wire) index must un-permute a
-  display-ordered array (`modalities[wireIndex]` and friends) before splicing it, and must carry
+  display-ordered array (`modalities[wireIndex]` and friends) before splicing it. It must carry
   display-space values through the *previous* `modalityOrder` before resetting it. **Both halves are
-  invisible to the type system** — TS can't brand-restrict `T[]` index access, and a stale
-  `DisplayModalityIndex` is type-identical to a fresh one — so deleting either produces a clean build
-  and a bug that appears only after the first column reorder. See "Mutating a display-ordered array
-  with a wire index".
+  invisible to the type system**: TS can't brand-restrict `T[]` index access, and a stale
+  `DisplayModalityIndex` is type-identical to a fresh one. Deleting either produces a clean build and
+  a bug that appears only after the first column reorder. See "Mutating a display-ordered array with
+  a wire index".
