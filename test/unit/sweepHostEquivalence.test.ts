@@ -3,10 +3,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Uri, workspace, __resetConfig, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
-import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { poolWidth, WorkPool } from '../../src/workPool';
 import { AIM_DWELL_MS } from '../../src/sweepAimPolicy';
+import { panelState, thumbnailServiceStub } from './providerRig';
 
 // The leak this file exists to make impossible: commit ff11b92 dwell-gated the sweep's centre in the
 // PROVIDER's wiring, so the extension stopped chasing a held key and the standalone kept chasing it.
@@ -74,54 +74,12 @@ async function providerHost(): Promise<Host> {
   const resolvers: Array<() => void> = [];
 
   const provider = new ImageCompareProvider({ globalStorageUri: Uri.file(root) } as never);
-  (provider as never as { thumbnailService: unknown }).thumbnailService = {
-    getThumbnail: (uri: Uri) =>
-      new Promise<Buffer>(resolve => {
-        asked.push(rowOf(uri.path));
-        askedSlots.push(`${/imgs\/([^/]+)\//.exec(uri.path)![1]}-${rowOf(uri.path)}`);
-        resolvers.push(() => resolve(Buffer.alloc(4)));
-      }),
-    loadFullImage: async () => ({ bytes: new Uint8Array(10), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
-  };
+  (provider as never as { thumbnailService: unknown }).thumbnailService = thumbnailServiceStub(resolvers, uri => {
+    asked.push(rowOf(uri.path));
+    askedSlots.push(`${/imgs\/([^/]+)\//.exec(uri.path)![1]}-${rowOf(uri.path)}`);
+  });
 
-  const tuples = Array.from({ length: TUPLES }, (_, t) => ({
-    name: fileName(t).replace('.png', ''),
-    images: MODS.map(m => ({ uri: Uri.file(`/imgs/${m}/${fileName(t)}`), name: fileName(t), modality: m }))
-  }));
-  const state: Record<string, unknown> = {
-    panel: { webview: { postMessage: () => Promise.resolve(true) } },
-    scanResult: { modalities: [...MODS], tuples, mode: 2, roots: [], isMultiTupleMode: true },
-    loadedImages: new Map(),
-    modalityDirs: new Map(MODS.map(m => [m, Uri.file(`/imgs/${m}`)])),
-    recentlyDeleted: [],
-    winners: new Map(),
-    votingEnabled: false,
-    currentTupleIndex: OPEN_AT,
-    sweepAim: newSweepAimPolicy(),
-    disposed: false,
-    visible: true,
-    poolKey: `equiv-${Math.random().toString(36).slice(2)}`,
-    prefetchWaveKey: 'unset',
-    prefetchWaveCounter: 0,
-    imageLoadKeys: new Set<string>(),
-    webviewReady: true,
-    pendingDebugMessages: [],
-    lastTupleSwitchAt: 0,
-    heldImagePosts: new Map(),
-    watchedDirs: new Set<string>(),
-    fileWatchers: [],
-    nodeWatchers: [],
-    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
-    prefetchWaves: new Map(),
-    transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(8, 'ssh-remote'))
-  };
+  const state: Record<string, unknown> = panelState({ modalities: MODS, tuples: TUPLES, openAt: OPEN_AT, poolKeyPrefix: 'equiv' });
 
   vi.useFakeTimers();
   (provider as never as { generateAllThumbnails(s: unknown): void }).generateAllThumbnails(state);

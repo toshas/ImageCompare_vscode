@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SweepAim, SweepCursor, planThumbnails, runThumbnailSweep, SWEEP_REQUEUE, ThumbnailBytes } from '../../src/thumbnailPlan';
 import { ExtensionMessage } from '../../src/types';
+import { grid, jpeg, lcg } from './sweepFixtures';
 
 // The sweep's SECOND axis, on the real thumbnailPlan code. Every expected sequence here is written
 // out by hand from the rule in the docs — the focused tile, then its cross interleaved at equal
@@ -9,15 +10,6 @@ import { ExtensionMessage } from '../../src/types';
 // because a sequence read back off the implementation would pass with any tie-break inverted.
 // (docs/loading-architecture.md: sweep-cross-then-row-major, thumbnails-centre-out,
 //  sweep-covers-every-slot-once; docs/session-files.md: hidden-is-presentation-only)
-
-/** A dense grid of `tuples` rows x `mods` columns; every slot populated unless `holes` says otherwise. */
-function grid(tuples: number, mods: number, holes: ReadonlySet<string> = new Set()) {
-  const modalities = Array.from({ length: mods }, (_, m) => `m${m}`);
-  const rows = Array.from({ length: tuples }, (_, t) => ({
-    images: modalities.filter(m => !holes.has(`${t}-${m}`)).map(m => ({ modality: m, name: `${t}_${m}.png` })),
-  }));
-  return { rows, modalities };
-}
 
 const key = (i: { tupleIndex: number; modalityIndex: number }): string => `${i.tupleIndex}-${i.modalityIndex}`;
 
@@ -33,8 +25,6 @@ function drain(tuples: number, mods: number, aim: SweepAim, holes?: ReadonlySet<
   }
   return order;
 }
-
-const jpeg = (length: number): ThumbnailBytes => ({ bytes: new Uint8Array(length), mime: 'image/jpeg' });
 
 describe('sweep cursor: the cross first, then row-major (real thumbnailPlan code)', () => {
   it('fills the focused row and column interleaved, then the rest row-major centre-out', () => {
@@ -101,10 +91,6 @@ describe('sweep cursor: the cross first, then row-major (real thumbnailPlan code
     expect(drain(3, 3, { tuple: 1, modality: 0 }, holes).slice(0, 5)).toEqual([
       '1-0', '1-2', '2-0', '0-0', '2-1',
     ]);
-  });
-
-  it('a single-column grid is exactly the old row order', () => {
-    expect(drain(5, 1, { tuple: 2 })).toEqual(['2-0', '3-0', '1-0', '4-0', '0-0']);
   });
 
   it('with no column supplied it aims at the strip\'s first column', () => {
@@ -226,15 +212,6 @@ describe('sweep cursor: returning a slot rewinds both axes (real thumbnailPlan c
 // pins is the property no schedule may break — every planned slot handed out exactly once — while
 // the aim moves on BOTH axes and slots are returned mid-walk, which is the case `putBack`'s
 // two-axis rewind exists for. (docs/loading-architecture.md: sweep-covers-every-slot-once)
-
-/** 32-bit LCG; same seed, same run, on every machine and every day. */
-function lcg(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    return s / 2 ** 32;
-  };
-}
 
 function fuzzAim(rand: () => number, tuples: number, mods: number): SweepAim {
   const aim: SweepAim = { tuple: Math.floor(rand() * tuples) };

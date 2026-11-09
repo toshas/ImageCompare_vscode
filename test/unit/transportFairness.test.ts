@@ -6,6 +6,7 @@ import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, __set
 import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { emptyPackLoadStat, emptyTierStats } from '../../src/debugLog';
 
 // The head-of-line blocking a Chrome renderer trace of a remote-SSH session showed, reproduced on
 // the REAL provider: an open-time thumbnail sweep (120 tiles, ~700KB) draining while one prefetch
@@ -130,14 +131,9 @@ async function runScenario(remote: boolean): Promise<Scenario> {
       const size = `${tupleIndex}-${modality}` === WHALE_SLOT ? WHALE_BYTES : IMAGE_BYTES[modality];
       return { bytes: new Uint8Array(size), mime: 'image/png', width: 4, height: 4 };
     },
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
+    thumbTierStats: emptyTierStats,
     // This bed never loads a pack; the sweep rollup still asks for the shared-read snapshot.
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
+    thumbPackLoadStat: emptyPackLoadStat
   };
 
   const tuples = Array.from({ length: TUPLES }, (_, t) => ({
@@ -161,7 +157,7 @@ async function runScenario(remote: boolean): Promise<Scenario> {
     pendingDebugMessages: [],
     lastTupleSwitchAt: 0,
     heldImagePosts: new Map(),
-    wire: { thumbnails: 0, thumbB64Bytes: 0, images: 0, imageBytes: 0 },
+    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
     prefetchWaves: new Map(),
     transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(BUDGET_MB, remote ? 'ssh-remote' : undefined))
   };

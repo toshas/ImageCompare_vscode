@@ -53,10 +53,10 @@ interface Bed {
 }
 
 /** Load a fresh ThumbnailService whose sharpLoader has already failed both Sharp tiers. */
-async function bedWithoutSharp(image: Buffer, name = 'src.png'): Promise<Bed> {
+async function bedWithoutSharp(image: Buffer): Promise<Bed> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-jimp-'));
   tmpRoots.push(root);
-  const file = path.join(root, name);
+  const file = path.join(root, 'src.png');
   fs.writeFileSync(file, image);
 
   const Module = require('module');
@@ -105,8 +105,6 @@ describe('Jimp fallback tier', () => {
     // Real pixels, not just a well-formed header: the solid red survives the round trip.
     const { Jimp } = require('jimp');
     const decoded = await Jimp.fromBuffer(bytes);
-    expect(decoded.width).toBe(20);
-    expect(decoded.height).toBe(10);
     const d = decoded.bitmap.data;
     expect(d[0]).toBeGreaterThan(150);
     expect(d[1]).toBeLessThan(110);

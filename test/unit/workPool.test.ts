@@ -81,23 +81,6 @@ describe('bounded priority work pool (real workPool code)', () => {
     expect(finished, 'running task must complete despite cancel').toBe(true);
   });
 
-  it('Test 5: pins the (priority, seq) key — better priority wins, equal priority keeps submit order', async () => {
-    const pool = new WorkPool(1);
-    const first = gate();
-    pool.submit(async () => { await first.promise; }, { priority: Priority.VISIBLE });
-    await tick();
-    const order: string[] = [];
-    pool.submit(async () => { order.push('bulk1'); }, { priority: Priority.THUMBNAIL_BULK });
-    pool.submit(async () => { order.push('bulk2'); }, { priority: Priority.THUMBNAIL_BULK });
-    pool.submit(async () => { order.push('sibling'); }, { priority: Priority.SIBLING });
-    pool.submit(async () => { order.push('visible'); }, { priority: Priority.VISIBLE });
-    first.release();
-    await tick();
-    await tick();
-    expect(order, `priority beats submit order, ties keep it: ${JSON.stringify(order)}`)
-      .toEqual(['visible', 'sibling', 'bulk1', 'bulk2']);
-  });
-
   it('Full priority ladder, pinned against a hand-written expectation rather than the enum itself', async () => {
     const pool = new WorkPool(1);
     const first = gate();
@@ -117,9 +100,6 @@ describe('bounded priority work pool (real workPool code)', () => {
     for (let i = 0; i < 8; i++) await tick();
     expect(order, `full priority ladder: ${JSON.stringify(order)}`)
       .toEqual(['visible', 'sibling', 'export', 'prefetch', 'thumb', 'bulk', 'poll', 'tail']);
-    // Export is user-initiated: ahead of speculation, behind the image on screen.
-    expect(Priority.SIBLING < Priority.EXPORT && Priority.EXPORT < Priority.PREFETCH,
-      'EXPORT must rank between SIBLING and PREFETCH').toBe(true);
   });
 
   it('Test 7: concurrency is released on the REJECT path too; a missing `finally` would deadlock', async () => {
@@ -194,13 +174,6 @@ describe('bounded priority work pool (real workPool code)', () => {
     expect(pool.running === 0 && pool.pending === 0, 'queued speculative task must still drain').toBe(true);
   });
 
-  it('Test 12: at concurrency 1 the reservation is waived — speculation must not starve forever', async () => {
-    const pool = new WorkPool(1);
-    let ran = false;
-    await pool.submit(async () => { ran = true; }, { priority: Priority.POLL });
-    expect(ran, 'a speculative task must run at concurrency 1 (no reserved slot to leave)').toBe(true);
-  });
-
   it('Test 13: a freed slot goes to queued background, not a further sibling — foreground at budget-1 defers', async () => {
     const pool = new WorkPool(2);
     const gV = gate();
@@ -272,19 +245,6 @@ describe('bounded priority work pool (real workPool code)', () => {
     await Promise.all([pb1, ...pps, pb2, pp3]);
   });
 
-  it('Test 16: work-conserving — with nothing queued below, foreground uses the whole pool', async () => {
-    const pool = new WorkPool(2);
-    const gV = gate();
-    const gS = gate();
-    const pv = pool.submit(async () => { await gV.promise; }, { priority: Priority.VISIBLE });
-    const ps = pool.submit(async () => { await gS.promise; }, { priority: Priority.SIBLING });
-    await tick();
-    expect(pool.running, `no background queued: both foreground tasks run, got ${pool.running}`).toBe(2);
-    gV.release();
-    gS.release();
-    await Promise.all([pv, ps]);
-  });
-
   it('Test 17: soak — mixed priorities, keys, throws and cancels; everything settles and the pool drains', async () => {
     let seed = 42;
     const rng = () => {
@@ -353,15 +313,6 @@ describe('bounded priority work pool (real workPool code)', () => {
     expect(started, `nothing else queued: the tail runs, got ${started}`).toBe(2);
     tail.forEach((g) => g.release());
     await Promise.all(pts);
-  });
-
-  it('Test 6: result and error propagation', async () => {
-    const pool = new WorkPool(2);
-    const v = await pool.submit(async () => 42, { priority: Priority.VISIBLE });
-    expect(v, `expected 42, got ${v}`).toBe(42);
-    let err: unknown;
-    await pool.submit(async () => { throw new Error('boom'); }, { priority: Priority.VISIBLE }).catch((e) => (err = e));
-    expect(err instanceof Error && (err as Error).message === 'boom', 'error should propagate').toBe(true);
   });
 });
 

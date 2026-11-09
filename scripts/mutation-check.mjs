@@ -256,7 +256,7 @@ const mutations = [
     suite: 'test/unit/workPool.test.ts',
     find: 'for (let p = Priority.VISIBLE; p < Priority.PREFETCH; p++) {',
     replace: 'for (let p = Priority.PREFETCH - 1; p >= Priority.VISIBLE; p--) {',
-    killedBy: 'Test 2/5 (strict priority ordering)'
+    killedBy: 'Full priority ladder test (strict priority ordering)'
   },
   {
     name: 'workPool: EXPORT demoted below speculation',
@@ -1173,10 +1173,10 @@ const mutations = [
   {
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
-    suite: 'test/unit/sweepProviderCentre.test.ts',
+    suite: 'test/unit/sweepCentreDwell.test.ts',
     find: '          centre: () => state.sweepAim.aim(),',
     replace: '          centre: (pinned => () => pinned)(state.sweepAim.aim()),',
-    killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
+    killedBy: 'dwell test (the sweep re-aims at the settled row)'
   },
   {
     name: 'sweep aim: the centre follows the raw keystroke (a held key re-aims on every completed thumbnail)',

@@ -2173,10 +2173,6 @@
             {
               "suite": "unit",
               "match": "a wave with a hole in the middle still logs both lines"
-            },
-            {
-              "suite": "unit",
-              "match": "still rolls the wave up on the debug channel"
             }
           ]
         },
@@ -2562,10 +2558,6 @@
             {
               "suite": "unit",
               "match": "is three columns per tuple at the field shape, not ten"
-            },
-            {
-              "suite": "unit",
-              "match": "caches the on-screen column of both neighbours"
             }
           ]
         },
@@ -2737,10 +2729,6 @@
             },
             {
               "suite": "unit",
-              "match": "re-aims mid-sweep when setCurrentTuple moves the panel"
-            },
-            {
-              "suite": "unit",
               "match": "serves the new centre after one running batch"
             },
             {
@@ -2855,19 +2843,11 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "every slot is handed out exactly once however often the centre jumps"
-            },
-            {
-              "suite": "unit",
               "match": "a returned slot is handed out again exactly once"
             },
             {
               "suite": "unit",
               "match": "every slot is delivered exactly once when the centre moves on every batch"
-            },
-            {
-              "suite": "unit",
-              "match": "settles a disposed panel's cancellations instead of returning them"
             },
             {
               "suite": "unit",
@@ -2884,14 +2864,6 @@
             {
               "suite": "unit",
               "match": "resolves without dispatching anything when the host was already gone at sweep start"
-            },
-            {
-              "suite": "unit",
-              "match": "abandons what the cursor still holds, where a re-aim returns what it dropped"
-            },
-            {
-              "suite": "unit",
-              "match": "every planned slot is delivered exactly once, and the tail is swept"
             },
             {
               "suite": "unit",

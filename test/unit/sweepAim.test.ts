@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SWEEP_CHUNK, SWEEP_REQUEUE, planThumbnails, runThumbnailSweep, ThumbnailBytes } from '../../src/thumbnailPlan';
 import { Priority, TaskCancelled, WorkPool } from '../../src/workPool';
 import { ExtensionMessage } from '../../src/types';
+import { flush, grid, jpeg } from './sweepFixtures';
 
 // Where the pump reads the centre. A centre computed on read (viewport offset -> row) returns a
 // different value every call, and the pump must survive that: one pass aims at one centre, and the
@@ -16,17 +17,6 @@ const TUPLES = 60;
 const MODS = 4;
 /** Drops a healthy run cannot approach: one per delivered settle is ~TUPLES*MODS, this is 20x that. */
 const DROP_BREAKER = 5000;
-
-function grid(tuples: number, mods: number) {
-  const modalities = Array.from({ length: mods }, (_, m) => `m${m}`);
-  const rows = Array.from({ length: tuples }, (_, t) => ({
-    images: modalities.map(m => ({ modality: m, name: `${t}_${m}.png` })),
-  }));
-  return { rows, modalities };
-}
-
-const flush = () => new Promise<void>(r => setTimeout(r, 0));
-const jpeg = (length: number): ThumbnailBytes => ({ bytes: new Uint8Array(length), mime: 'image/jpeg' });
 
 interface Rig {
   io: { makeThumbnail: (item: { tupleIndex: number; modalityIndex: number }) => Promise<ThumbnailBytes | null | typeof SWEEP_REQUEUE>; dropQueued: () => void };

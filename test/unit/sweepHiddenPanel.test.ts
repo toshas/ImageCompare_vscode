@@ -3,11 +3,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
-import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { planThumbnails, runThumbnailSweep, SWEEP_CHUNK, SWEEP_REQUEUE, ThumbnailBytes } from '../../src/thumbnailPlan';
 import { Priority, TaskCancelled, WorkPool } from '../../src/workPool';
 import { ExtensionMessage } from '../../src/types';
+import { panelState, thumbnailServiceStub } from './providerRig';
+import { grid, jpeg, withDeadline } from './sweepFixtures';
 
 // A tab the user switched away from used to keep sweeping at full rate, competing for the same 4 bulk
 // slots as the tab in focus. Pausing is a DEFERRAL, never a cancellation: every slot the paused sweep
@@ -23,16 +24,6 @@ async function settle(rounds = 4): Promise<void> {
 
 /** Bulk slots the pool grants at width 5: speculation collectively leaves one slot free. */
 const BULK_SLOTS = 4;
-
-function grid(tuples: number, mods: number) {
-  const modalities = Array.from({ length: mods }, (_, m) => `m${m}`);
-  const rows = Array.from({ length: tuples }, (_, t) => ({
-    images: modalities.map(m => ({ modality: m, name: `${t}_${m}.png` })),
-  }));
-  return { rows, modalities };
-}
-
-const jpeg = (): ThumbnailBytes => ({ bytes: new Uint8Array(4), mime: 'image/jpeg' });
 
 interface SweepRig {
   io: { makeThumbnail: (item: { tupleIndex: number; modalityIndex: number }) => Promise<ThumbnailBytes | null | typeof SWEEP_REQUEUE>; dropQueued: () => void };
@@ -59,7 +50,7 @@ function sweepRig(pool: WorkPool, name: string, started: string[], release: Arra
             () =>
               new Promise<ThumbnailBytes>(resolve => {
                 started.push(name);
-                release.push(() => resolve(jpeg()));
+                release.push(() => resolve(jpeg(4)));
               }),
             { priority: Priority.THUMBNAIL_BULK, key: `${name}-sweep`, group: name }
           )
@@ -92,14 +83,6 @@ async function drain(release: Array<() => void>, rounds = 2000): Promise<void> {
     }
     for (const r of release.splice(0)) r();
   }
-}
-
-function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`sweep did not settle in ${ms}ms`)), ms);
-  });
-  return Promise.race([p, deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 describe('sweep runner: a hidden panel yields the pool to the tab in focus', () => {
@@ -260,56 +243,10 @@ function makeProviderRig(): ProviderRig {
   rigs.push(rig);
 
   const provider = new ImageCompareProvider({ globalStorageUri: Uri.file(root) } as any);
-  (provider as any).thumbnailService = {
-    getThumbnail: (uri: Uri) =>
-      new Promise<Buffer>(resolve => {
-        asked.push(uri.path);
-        resolvers.push(() => resolve(Buffer.alloc(4)));
-      }),
-    loadFullImage: async () => ({ bytes: new Uint8Array(10), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
-  };
-
-  const name = (t: number) => `frame${String(t).padStart(2, '0')}`;
-  const tuples = Array.from({ length: TUPLES }, (_, t) => ({
-    name: name(t),
-    images: MODALITIES.map(m => ({ uri: Uri.file(`/${root.replace(/\W/g, '')}/${m}/${name(t)}.png`), name: `${name(t)}.png`, modality: m }))
-  }));
+  (provider as any).thumbnailService = thumbnailServiceStub(resolvers, uri => asked.push(uri.path));
 
   rig.provider = provider;
-  rig.state = {
-    panel: { webview: { postMessage: (msg: any) => { posts.push(msg); return Promise.resolve(true); } } },
-    scanResult: { modalities: [...MODALITIES], tuples, mode: 2, roots: [], isMultiTupleMode: true },
-    loadedImages: new Map(),
-    modalityDirs: new Map(MODALITIES.map(m => [m, Uri.file(`/imgs/${m}`)])),
-    recentlyDeleted: [],
-    winners: new Map(),
-    votingEnabled: false,
-    currentTupleIndex: 0,
-    sweepAim: newSweepAimPolicy(),
-    disposed: false,
-    visible: true,
-    poolKey: `hidden-${Math.random().toString(36).slice(2)}`,
-    prefetchWaveKey: 'unset',
-    prefetchWaveCounter: 0,
-    imageLoadKeys: new Set<string>(),
-    webviewReady: true,
-    pendingDebugMessages: [],
-    lastTupleSwitchAt: 0,
-    heldImagePosts: new Map(),
-    watchedDirs: new Set<string>(),
-    fileWatchers: [],
-    nodeWatchers: [],
-    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
-    prefetchWaves: new Map(),
-    transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(8, 'ssh-remote'))
-  };
+  rig.state = panelState({ modalities: MODALITIES, tuples: TUPLES, openAt: 0, poolKeyPrefix: 'hidden', posts, imageRoot: `/${root.replace(/\W/g, '')}` });
   return rig;
 }
 

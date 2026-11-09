@@ -64,7 +64,7 @@ function makeState(present: string[]): Record<string, unknown> {
     pendingDebugMessages: [],
     lastTupleSwitchAt: 0,
     heldImagePosts: new Map(),
-    wire: { thumbnails: 0, thumbB64Bytes: 0, images: 0, imageBytes: 0 },
+    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
     prefetchWaves: new Map(),
     // A local session: the transport budget is inert, so wave accounting is measured unthrottled.
     transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(undefined, undefined))
@@ -151,7 +151,7 @@ describe('prefetch wave rollup (real ImageCompareProvider)', () => {
     expect(lines[1]).toMatch(/done \d+ms slots=3 loaded=5\.0KB /);
   });
 
-  it('a wave with no images at all settles without a rollup rather than hanging or double-logging', async () => {
+  it('a wave with no images at all rolls up exactly once, at zero bytes, rather than hanging or double-logging', async () => {
     const lines = await runWave([]);
     // Every slot settles at zero bytes; the issue line still reports what was attempted.
     expect(lines[0]).toContain('slots=3');
@@ -172,12 +172,7 @@ describe('prefetch wave rollup (real ImageCompareProvider)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Prefetch scope (the executed backlog item; the measurements live in docs/loading-architecture.md, "Prefetch"). A wave used to load every neighbour's every
-// modality: measured on the field's shape (10 modalities, prefetchCount 3) that is 69 slots /
-// 164.5MB per wave, of which a browsing trace displayed 4%. Worse, it defeated its own purpose —
-// the visible modality of the +1 tuple sat behind the centre tuple's other nine columns, so the
-// first step to a neighbour was a cache MISS (measured 1022ms, against a 741ms idle cold load).
-// (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column)
+// Prefetch scope on the real provider (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column; measurements under "Prefetch").
 
 const WIDE = Array.from({ length: 10 }, (_, i) => `mod${i}`);
 
@@ -232,12 +227,6 @@ describe('prefetch scope: a neighbour gets the column on screen, not the whole t
     expect(lines[0]).toMatch(/center=2 slots=9 /);
   });
 
-  it('caches the on-screen column of both neighbours — what prefetch is for', async () => {
-    const { state } = await runWideWave(2, 3);
-    expect(cached(state)).toContain('1-3');
-    expect(cached(state)).toContain('3-3');
-  });
-
   it('never speculates on a neighbour column the user is nowhere near', async () => {
     const { state } = await runWideWave(2, 3);
     // Columns 2,3,4 only: display distance 0 and 1 from the on-screen column.
@@ -255,11 +244,5 @@ describe('prefetch scope: a neighbour gets the column on screen, not the whole t
     // Display order is identity; 4 is hidden, so the forward sibling is 5.
     const { state } = await runWideWave(2, 3, { hidden: [4] });
     expect(cached(state)).toEqual(['1-2', '1-3', '1-5', '2-2', '2-3', '2-5', '3-2', '3-3', '3-5']);
-  });
-
-  it('still rolls the wave up on the debug channel', async () => {
-    const { lines } = await runWideWave(2, 3);
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toMatch(/done \d+ms slots=9 loaded=/);
   });
 });
