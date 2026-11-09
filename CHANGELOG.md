@@ -4,6 +4,8 @@ All notable changes to the ImageCompare extension will be documented in this fil
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-09
+
 ### Added
 - **Drag a pill to reorder modalities**, with a mouse, a pen or a finger (hold the pill first): it
   follows the pointer, the other pills slide aside, and the drop moves it into place. Votes, the
@@ -15,8 +17,9 @@ All notable changes to the ImageCompare extension will be documented in this fil
   The Tools panel, context menus, pill tooltips and vote circles are off there. A desktop, VS Code
   included, keeps its layout.
 - **A published comparison keeps its view across a reload**: the column order, hidden pills, the
-  row and column on screen, and the zoom and pan, kept in the viewer's browser per comparison. The
-  VS Code panel is unchanged.
+  row and column on screen, and the zoom and pan, kept in the viewer's browser per comparison, so a
+  Claude artifact the app refreshes, or a phone tab the browser discards, comes back where it was.
+  The VS Code panel is unchanged.
 
 ### Changed
 - **Film-strip tiles are centre-cropped** to fill their square instead of letterboxed; thumbnails
