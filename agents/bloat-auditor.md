@@ -61,6 +61,9 @@ names are STE "technical names".
 - Do not use a noun cluster of more than three words.
 - Keep the articles and small words. Text made short by omission is not clear text.
 - Use a list for three or more parallel items.
+- A rewrite has fewer words than the text it replaces. Shorten a sentence by cutting words, not by
+  adding connectives ("Thus", "So") or repeating its subject. If no shorter text meets the rules,
+  keep the original.
 
 Code blocks, quoted UI strings and quoted messages are product text, not prose; they are exempt.
 
