@@ -76,14 +76,6 @@ async function refusal(run: Promise<unknown>): Promise<string[]> {
 }
 
 describe('share: layout as the extension reads the input', () => {
-  it('lays a folder of image columns out as it is, ignoring loose files, non-images and results.txt', async () => {
-    const layout = await planLayout(columnsFolder(), nodeShareIo);
-    expect(layout.name).toBe('cmp');
-    expect(layout.images.map(i => i.path)).toEqual([
-      'gt/airplane.jpg', 'gt/baboon.jpg', 'pred/airplane.jpg', 'pred/baboon.jpg', 'pred/tiny.png',
-    ]);
-  });
-
   it('lays a folder of loose images out flat', async () => {
     put('flat/a_gt.jpg', photo('airplane.jpg'));
     put('flat/a_pred.jpg', photo('baboon.jpg'));

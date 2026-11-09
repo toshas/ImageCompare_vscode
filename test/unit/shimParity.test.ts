@@ -17,19 +17,12 @@ type Saved = { path: string };
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('standalone Buffer shim surface', () => {
-  it('provides every Buffer static the shared modules call, including isBuffer', () => {
-    for (const name of ['from', 'alloc', 'concat', 'isBuffer']) {
-      expect(typeof (BufferShim as unknown as Record<string, unknown>)[name], `Buffer.${name}`).toBe('function');
-    }
-  });
-
   it('isBuffer discriminates shim buffers from plain Uint8Array', () => {
     expect(BufferShim.isBuffer(BufferShim.from([1, 2, 3]))).toBe(true);
     expect(BufferShim.isBuffer(new Uint8Array([1, 2, 3]))).toBe(false);
     expect(BufferShim.isBuffer('not bytes')).toBe(false);
     // The false answer is what matters: plain bytes must get wrapped, or pngText's readUInt32BE is missing.
     const wrapped = BufferShim.from(new Uint8Array([0, 0, 0, 7]));
-    expect(typeof wrapped.readUInt32BE).toBe('function');
     expect(wrapped.readUInt32BE(0)).toBe(7);
   });
 });
@@ -70,7 +63,6 @@ describe('crop flow on the browser Buffer shim', () => {
 
     expect(log).toEqual(['arrive:/root/a/shot_crop01.png', 'post:cropComplete:1']);
     const bytes = written.get('/root/a/shot_crop01.png');
-    expect(bytes).toBeDefined();
     expect(pngReadText(Buffer.from(bytes!), CROP_RECT_KEYWORD)).toBe('10,20,30,40,100,100');
   });
 });

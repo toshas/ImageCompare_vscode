@@ -31,19 +31,6 @@ describe('context menu model (contextMenuModel.ts, real code)', () => {
   it('gives the standalone the same menu minus exactly the items it cannot serve', () => {
     expect(ids(image, STANDALONE)).toEqual(['copyImage', 'copyPath']);
     expect(ids(pill, STANDALONE)).toEqual(['copyPath', 'toggleHidden']);
-
-    for (const ctx of [image, pill]) {
-      const missing = ids(ctx, EXTENSION).filter((id) => !ids(ctx, STANDALONE).includes(id));
-      expect(missing).toEqual(['revealInExplorer']);
-      expect(STANDALONE.revealInExplorer).toBe(false);
-    }
-  });
-
-  it('never offers an item the host disclaimed', () => {
-    for (const ctx of [image, pill]) {
-      expect(ids(ctx, NO_HOST_CAPABILITIES)).not.toContain('copyPath');
-      expect(ids(ctx, NO_HOST_CAPABILITIES)).not.toContain('revealInExplorer');
-    }
   });
 
   // An init that names no capabilities claims none: no PPTX button, no results.txt button

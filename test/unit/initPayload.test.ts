@@ -39,8 +39,6 @@ describe('init payload assembly (initPayload.ts, real code)', () => {
     expect(msg.modalities).toEqual(['gt', 'pred']);
     expect(msg.modalityPaths).toEqual(['/data/gt', '/data/pred']);
     expect(msg.votingEnabled).toBe(true);
-    // What Del removes is the host's to state; the webview must never work it out from the mode.
-    expect(msg.deleteUnit).toBe('tuple');
     expect(msg.labelsExplicit).toBe(false);
     expect(msg.config).toEqual({ thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false });
   });

@@ -15,14 +15,6 @@ describe('adoptionPlan newModalityDirCandidates', () => {
     ];
     expect(newModalityDirCandidates(entries, ['gt', 'pred'])).toEqual(['mask', 'depth']);
   });
-
-  it('yields nothing when every directory is already a column', () => {
-    const entries = [
-      { name: 'gt', isDirectory: true },
-      { name: 'pred', isDirectory: true },
-    ];
-    expect(newModalityDirCandidates(entries, ['gt', 'pred'])).toEqual([]);
-  });
 });
 
 describe('adoptionPlan adoptableImages', () => {

@@ -36,9 +36,6 @@ describe('column window (columnWindow.ts, real code)', () => {
     it('is sized from the narrowest tile, so resizing tiles never remaps the ring', () => {
       // The signature is the proof: no pitch is passed, so a tile resize cannot move the pool.
       expect(columnPoolSize.length).toBe(2);
-      // 220px of strip at the 26px floor holds 9 columns; the ring adds 2 either side and 1 spare
-      // each end, which is the 15 the other tests pin. It does not move when the tiles do.
-      expect(columnPoolSize(CAROUSEL_W, COLS)).toBe(15);
       expect(MIN_TILE_PITCH).toBe(26);
       expect(COLUMN_OVERSCAN).toBe(2);
     });

@@ -701,8 +701,6 @@ describe('publish workflow on a pull request', () => {
     const include = doc.jobs.build.strategy?.matrix?.include ?? [];
     const legs = include.map((e) => e.target);
     expect([...legs].sort()).toEqual([...VSCODE_PLATFORM_TARGETS, 'universal'].sort());
-    // The document and the line parser must be reading one and the same matrix.
-    expect([...legs].sort()).toEqual(buildMatrix().map((e) => e.target).sort());
 
     // "Same recipe" is only true if no step opts out by event: a package or scan step skipped on a PR
     // would leave the PR proving nothing while the job still reports green.

@@ -25,18 +25,7 @@ import { dirname, join } from 'node:path';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, '..');
 
-/**
- * Each mutation names the file it edits and the suite that must kill it. Every
- * suite imports the real source, so a mutation hits src/* (or standalone/*, which the sandbox now
- * carries too: the host-equivalence suite drives the real adapter) — except the rules at the end that
- * are not source at all: test infrastructure (test/webview/standaloneArtifact.ts,
- * test/webview/playwright.config.ts) — whether the webview layer serves a current, complete page, and
- * how that layer sizes itself and lays out its reports on a host CI never runs on — and the publish
- * workflow (.github/workflows/publish.yml), whose platform-target matrix decides which hosts can
- * install the extension at all and which nothing else in the tree checks. All suites live
- * under test/unit/ and are run through Vitest (the tuple-matching and pngText
- * mutations are killed there; the old in-test copies are gone).
- */
+/** Each mutation names the file it edits and the Vitest suite under test/unit/ that must kill it. The file is source (src/, standalone/) or a non-source rule a suite pins (test/ helpers and config, .github/workflows/). */
 const mutations = [
   // ── Tuple matching: the Vitest suite imports the real fileService.ts ──
   {
@@ -474,7 +463,7 @@ const mutations = [
     suite: 'test/unit/columnWindow.test.ts',
     find: 'const to = Math.floor((scrollLeft + Math.max(0, viewportWidth) - pad) / pitch) + COLUMN_OVERSCAN;',
     replace: 'const to = Math.floor((scrollLeft + Math.max(0, viewportWidth) - pad) / pitch);',
-    killedBy: 'left-edge test (last = floor((220-6)/14) + 2 = 17)'
+    killedBy: 'left-edge test (last = floor((220-6)/26) + 2 = 10)'
   },
   {
     name: 'columnWindow: right clamp removed (the ring binds slots past the last column)',
@@ -685,7 +674,7 @@ const mutations = [
     killedBy: 'rearrangement test (new column lands beside its original predecessor)'
   },
   {
-    name: 'modalityVisibility: tiny-tile vote guard inverted (12px tiles vote again)',
+    name: 'modalityVisibility: tiny-tile vote guard inverted (tiles below the vote threshold vote again)',
     file: 'src/webview/modalityVisibility.ts',
     suite: 'test/unit/modalityVisibility.test.ts',
     find: 'return tileSize >= 3 * WINNER_CIRCLE_PX;',
@@ -1386,7 +1375,7 @@ const mutations = [
     suite: 'test/unit/removalPlan.test.ts',
     find: '  io.post({ type: \'tupleDeleted\', tupleIndex: asTuple(tupleIndex) });\n  io.refreshCurrentTuple(current);',
     replace: '  io.refreshCurrentTuple(current);\n  io.post({ type: \'tupleDeleted\', tupleIndex: asTuple(tupleIndex) });',
-    killedBy: 'Test 4/8 (transcript must read tupleDeleted, then refresh)'
+    killedBy: 'Test 4 (transcript must read tupleDeleted, then refresh)'
   },
   {
     name: 'removal: re-save after the tuple step dropped',
@@ -1394,7 +1383,7 @@ const mutations = [
     suite: 'test/unit/removalPlan.test.ts',
     find: '  io.refreshCurrentTuple(current);\n  io.saveResults();',
     replace: '  io.refreshCurrentTuple(current);',
-    killedBy: 'Test 4/8 (a save must follow the tuple step, not only the end of the plan)'
+    killedBy: 'Test 4 (a save must follow the tuple step, not only the end of the plan)'
   },
   {
     name: 'removal: re-save after a modality step dropped',
@@ -1402,7 +1391,7 @@ const mutations = [
     suite: 'test/unit/removalPlan.test.ts',
     find: '  io.post({ type: \'modalityRemoved\', modalityIndex: asOriginal(modalityIndex) });\n  io.saveResults();',
     replace: '  io.post({ type: \'modalityRemoved\', modalityIndex: asOriginal(modalityIndex) });',
-    killedBy: 'Test 6/8 (each modality removal must be followed by its own save)'
+    killedBy: 'Test 6 (each modality removal must be followed by its own save)'
   },
   {
     name: 'removal: current-index clamp dropped when the last row goes',
@@ -3338,7 +3327,7 @@ const mutations = [
     suite: "test/unit/shareComparison.test.ts",
     find: "  if (columns.length > 0) return columns;",
     replace: "  if (false) return columns;",
-    killedBy: "column-folder layout test (the extension reads a folder of columns as columns)"
+    killedBy: "byte-for-byte staging test (the extension reads a folder of columns as columns)"
   },
   {
     name: "sharing script: session labels ignored",
@@ -3891,14 +3880,6 @@ function runSuite(suite) {
   return spawnSync('npx', args, { cwd: sandbox, encoding: 'utf8' });
 }
 
-function fail(msg, res) {
-  console.error(`\n${msg}`);
-  if (res) {
-    if (res.stdout) console.error(res.stdout);
-    if (res.stderr) console.error(res.stderr);
-  }
-}
-
 // ── Baseline: every referenced suite must be green before we trust a kill ──
 const suites = [...new Set(selected.map((m) => m.suite))];
 console.log('Baseline (no mutation) — every suite must be green:');
@@ -3910,7 +3891,9 @@ for (const suite of suites) {
     console.log(`  green  ${suite}`);
   } else {
     baselineGreen = false;
-    fail(`  RED    ${suite}  (exit ${res.status}${res.error ? `, ${res.error.message}` : ''})`, res);
+    console.error(`\n  RED    ${suite}  (exit ${res.status}${res.error ? `, ${res.error.message}` : ''})`);
+    if (res.stdout) console.error(res.stdout);
+    if (res.stderr) console.error(res.stderr);
   }
 }
 if (!baselineGreen) {

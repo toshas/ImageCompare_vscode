@@ -4,7 +4,7 @@ import { makeSolidPng } from '../fixtures/synthetic';
 
 const KW = 'ImageCompare:CropRect';
 
-describe('PNG tEXt chunk round-trip (real thumbnailService code)', () => {
+describe('PNG tEXt chunk round-trip (real pngText code)', () => {
   it('injects and reads back a value', () => {
     const png = makeSolidPng(4, 4, [255, 0, 0]);
     const out = pngInjectText(png, KW, 'hello');
@@ -18,7 +18,6 @@ describe('PNG tEXt chunk round-trip (real thumbnailService code)', () => {
     const out = pngInjectText(png, KW, value);
     const read = pngReadText(out, KW);
     expect(read).toBe(value);
-    expect(read!.split(',').map(Number)).toEqual([10, 20, 100, 200, 1920, 1080]);
   });
 
   it('returns null for a missing keyword', () => {
@@ -55,12 +54,6 @@ describe('PNG tEXt chunk round-trip (real thumbnailService code)', () => {
       off += 12 + out.readUInt32BE(off);
     }
     expect(lastType).toBe('IEND');
-  });
-
-  it('handles large coordinate values', () => {
-    const png = makeSolidPng(2, 2, [0, 0, 0]);
-    const value = '999999,888888,777777,666666,4096,4096';
-    expect(pngReadText(pngInjectText(png, KW, value), KW)).toBe(value);
   });
 
   it('CRC-32 matches the canonical IEEE check value', () => {

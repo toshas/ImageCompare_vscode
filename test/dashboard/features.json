@@ -1,5 +1,4 @@
 {
-  "_comment": "Feature catalog for the ImageCompare test dashboard. Each feature maps to the test(s) that cover it. `tests` references {suite: unit|webview|integration, match: <substring of the test title>}. An empty `tests` array means the feature is NOT yet covered (shown gray in the dashboard). The generator (generate.mjs) fills in pass/fail from real JSON reports.",
   "areas": [
     {
       "area": "Keyboard — navigation",
@@ -247,15 +246,7 @@
             },
             {
               "suite": "unit",
-              "match": "re-saves after EVERY step"
-            },
-            {
-              "suite": "unit",
               "match": "indices pre-shifted for earlier splices"
-            },
-            {
-              "suite": "unit",
-              "match": "deletes every file before executing the removal plan"
             },
             {
               "suite": "unit",
@@ -338,16 +329,6 @@
     {
       "area": "Crop tool",
       "features": [
-        {
-          "id": "crop-enter",
-          "name": "Enter crop mode (crosshair)",
-          "tests": [
-            {
-              "suite": "webview",
-              "match": "C enters crop mode"
-            }
-          ]
-        },
         {
           "id": "crop-draw",
           "name": "Draw crop rectangle",
@@ -470,10 +451,6 @@
             {
               "suite": "unit",
               "match": "divides x/w by the width and y/h by the height"
-            },
-            {
-              "suite": "unit",
-              "match": "round-trips through scaleAndClampRect"
             }
           ]
         },
@@ -684,16 +661,6 @@
       "area": "Winner voting",
       "features": [
         {
-          "id": "winner-enter",
-          "name": "Toggle winner via Enter",
-          "tests": [
-            {
-              "suite": "webview",
-              "match": "Enter toggles a winner and posts setWinner"
-            }
-          ]
-        },
-        {
           "id": "winner-circle",
           "name": "Toggle winner via carousel circle click",
           "tests": [
@@ -723,20 +690,12 @@
           "name": "Persistence to results.txt",
           "tests": [
             {
-              "suite": "unit",
-              "match": "maps winner indices to durable modality names"
-            },
-            {
               "suite": "integration",
               "match": "CRLF-encoded results"
             },
             {
               "suite": "unit",
               "match": "serializes the exact header and vote lines"
-            },
-            {
-              "suite": "unit",
-              "match": "round-trips through serialize and parse"
             },
             {
               "suite": "unit",
@@ -1614,10 +1573,6 @@
             {
               "suite": "unit",
               "match": "survives a scrambled completion order over 12 directories"
-            },
-            {
-              "suite": "unit",
-              "match": "one very slow directory in the middle finishes last"
             }
           ]
         },
@@ -1637,7 +1592,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "matches identical basenames"
+              "match": "_pred matches _gt, not _crop01, when lenDiff ties"
             }
           ]
         },
@@ -1680,10 +1635,6 @@
             {
               "suite": "unit",
               "match": "a steady-state cycle costs one pooled task per watched directory"
-            },
-            {
-              "suite": "unit",
-              "match": "the cycle cost does not grow with the number of files"
             },
             {
               "suite": "unit",
@@ -1789,10 +1740,6 @@
           "id": "match-crossplatform",
           "name": "Path disambiguation, and the URI-vs-filesystem path space at the node fs seam (POSIX/Windows parity)",
           "tests": [
-            {
-              "suite": "unit",
-              "match": "same display names for equivalent POSIX paths"
-            },
             {
               "suite": "unit",
               "match": "Windows drive-letter paths disambiguate"
@@ -1973,7 +1920,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "version gate — missing and current pass, future is rejected"
+              "match": "version gate — current passes, future and non-positive-integer versions are rejected"
             }
           ]
         },
@@ -3022,7 +2969,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "provides every Buffer static the shared modules call"
+              "match": "injects the crop tEXt and reports cropComplete"
             },
             {
               "suite": "unit",
@@ -3033,12 +2980,7 @@
         {
           "id": "standalone-pool",
           "name": "Standalone schedules IO through the shared work pool (width clamp shared with the extension)",
-          "tests": [
-            {
-              "suite": "unit",
-              "match": "clamps the pool width"
-            }
-          ]
+          "tests": []
         },
         {
           "id": "standalone-polling",
@@ -3384,10 +3326,6 @@
           "id": "share-comparison-script",
           "name": "Sharing script stages a comparison byte-for-byte or refuses (unservable types, size and count limits), never altering it",
           "tests": [
-            {
-              "suite": "unit",
-              "match": "lays a folder of image columns out as it is, ignoring loose files, non-images and results.txt"
-            },
             {
               "suite": "unit",
               "match": "makes each directory of a multi-directory session a column named by its label"

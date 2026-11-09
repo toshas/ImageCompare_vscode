@@ -2,14 +2,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
-// The webview suite's own worker sizing is the one rule CI structurally cannot pin: on a GitHub
-// runner os.cpus().length === os.availableParallelism(), so rewriting the config back to the
-// cpus() count computes the identical number there and stays green forever — while on a
-// cgroup/SLURM/container host it starts dozens of Chromiums on a handful of cores until specs
-// time out for reasons unrelated to the change under test. This suite mocks node:os to that
-// host's shape (many cores reported, few usable) and imports the REAL config module, never a
-// copy. Same for the report layout: Playwright refuses an HTML report folder nested inside the
-// test output folder, which is what the default outputDir produced. See docs/testing.md, Findings.
+// Imports the REAL config against a mocked node:os; CI cannot pin this, because a runner reports equal counts (docs/testing.md, Findings).
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const configDir = path.resolve(here, '..', 'webview');
@@ -56,7 +49,6 @@ describe('webview suite worker sizing (test/webview/playwright.config.ts)', () =
   it('sizes workers from usable parallelism, never the reported core count', async () => {
     const constrained = await loadConfig(256, 4);
     expect(constrained.workers).toBe(2);
-    expect(constrained.workers).not.toBe(128);
 
     expect((await loadConfig(256, 1)).workers).toBe(1);
     expect((await loadConfig(64, 3)).workers).toBe(1);

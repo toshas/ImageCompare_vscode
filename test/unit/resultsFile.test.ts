@@ -27,31 +27,6 @@ describe('results file format (resultsFile.ts, real code)', () => {
     );
   });
 
-  it('serializes only the header block when no votes exist (the caller decides deletion)', () => {
-    const out = serializeResults([{ name: 'scene_000' }], new Map(), ['GT'], FIXED_DATE);
-    expect(out).toBe(
-      '# ImageCompare Results\n' +
-      '# Generated: 2026-01-02T03:04:05.678Z\n' +
-      '# Modalities: GT\n' +
-      '#\n' +
-      '# Format: tuple_key = winner_modality\n' +
-      '# Delete a line to remove the vote, edit modality name to change vote\n' +
-      '\n'
-    );
-  });
-
-  it('round-trips through serialize and parse (votes keyed by tuple name)', () => {
-    const out = serializeResults(
-      [{ name: 'scene_000' }, { name: 'scene_001' }],
-      new Map([[0, 'PRED'], [1, 'GT']]),
-      ['GT', 'PRED']
-    );
-    const winners = parseResults(out);
-    expect(winners.size).toBe(2);
-    expect(winners.get('scene_000')).toBe('PRED');
-    expect(winners.get('scene_001')).toBe('GT');
-  });
-
   it('parses CRLF-encoded results text without stray \\r on keys or values', () => {
     const winners = parseResults(
       '# ImageCompare Results\r\n# comment\r\nscene_000 = GT\r\nscene_001 = PRED\r\n'

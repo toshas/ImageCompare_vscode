@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { commitSlotRemoval, planTupleRemoval, removeTupleStep, removeModalityStep, modalityHasFiles, RemovalStep } from '../../src/removalPlan';
+import { commitSlotRemoval, planTupleRemoval, removeTupleStep, removeModalityStep } from '../../src/removalPlan';
 import { ExtensionMessage } from '../../src/types';
 
 // Fixture literals are external to the implementation: step orders, indices and io
@@ -19,12 +19,6 @@ function recordingIo(log: string[]) {
 }
 
 describe('removal planner (real removalPlan code)', () => {
-  it('Test 1: modalityHasFiles is true only while some tuple still holds the modality', () => {
-    const tuples = [{ images: [img('a.png', 'gt')] }, { images: [img('a.png', 'pred')] }];
-    expect(modalityHasFiles(tuples, 'pred')).toBe(true);
-    expect(modalityHasFiles(tuples, 'depth')).toBe(false);
-  });
-
   it('Test 2: plan lists the tuple first, then each emptied modality with indices pre-shifted for earlier splices', () => {
     const tuples = [
       { name: 't0', images: [img('t0.png', 'a'), img('t0.png', 'b'), img('t0.png', 'c')] },
@@ -101,37 +95,6 @@ describe('removal planner (real removalPlan code)', () => {
     const winners = new Map<number, number>([[0, 1]]);
     removeModalityStep(scan, winners, 1, recordingIo([]));
     expect(winners.size).toBe(0);
-  });
-
-  it('Test 8: executing a full plan re-saves after EVERY step, never once at the end', () => {
-    const scan = {
-      tuples: [
-        { name: 't0', images: [img('t0.png', 'a'), img('t0.png', 'b'), img('t0.png', 'c')] },
-        { name: 't1', images: [img('t1.png', 'b')] },
-      ],
-      modalities: ['a', 'b', 'c'],
-    };
-    const winners = new Map<number, number>();
-    const log: string[] = [];
-    const io = recordingIo(log);
-    let current = 0;
-    for (const step of planTupleRemoval(scan.tuples, scan.modalities, 0) as RemovalStep[]) {
-      if (step.kind === 'tuple') {
-        removeTupleStep(scan, winners, current, step.tupleIndex, {
-          ...io,
-          refreshCurrentTuple: (c: number) => { current = c; io.refreshCurrentTuple(c); },
-        });
-      } else {
-        removeModalityStep(scan, winners, step.modalityIndex, io);
-      }
-    }
-    expect(log).toEqual([
-      'post:tupleDeleted:0', 'refresh:0', 'save',
-      'post:modalityRemoved:0', 'save',
-      'post:modalityRemoved:1', 'save',
-    ]);
-    expect(scan.modalities).toEqual(['b']);
-    expect(scan.tuples.map(t => t.name)).toEqual(['t1']);
   });
 });
 

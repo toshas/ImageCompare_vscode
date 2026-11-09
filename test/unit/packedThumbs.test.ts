@@ -6,7 +6,6 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  PACKED_THUMBS_FORMAT,
   decodePackedThumb,
   loadPackedThumbs,
   packThumbFiles,
@@ -18,10 +17,6 @@ const b64 = (bytes: number[]) => Buffer.from(bytes).toString('base64');
 const file = (entries: Record<string, unknown>, format: unknown = 'imagecompare-thumbs-1') => JSON.stringify({ format, entries });
 
 describe('packed thumbs format', () => {
-  it('is the documented format name', () => {
-    expect(PACKED_THUMBS_FORMAT).toBe('imagecompare-thumbs-1');
-  });
-
   it('parses entries keyed by listed path', () => {
     const parsed = parsePackedThumbs(file({
       'gt/a.png': { mime: 'image/png', data: b64([1, 2]) },

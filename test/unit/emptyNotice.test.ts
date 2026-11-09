@@ -11,7 +11,6 @@ describe('emptyNotice (the terminal state of an emptied comparison)', () => {
   // The per-file sweep path: the last row's removal takes the row, then its columns.
   it('speaks at zero rows, whatever the columns say', () => {
     expect(emptyNotice({ ...BASE, tupleCount: 0 })).not.toBeNull();
-    expect(emptyNotice({ ...BASE, tupleCount: 0, modalityCount: 0 })).not.toBeNull();
   });
 
   // The modality-dir path: removeModalityStep strips every column but leaves the emptied rows behind.
