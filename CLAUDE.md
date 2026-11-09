@@ -26,6 +26,9 @@ Document **invariants and non-obvious "why"** — not mechanics the code already
 message types or keyboard shortcuts rots and adds nothing; "the poll must never be synchronous" or
 "crop refs are deprioritized so they never steal matches" is what saves the next person.
 
+- **Write prose in Simplified Technical English** (the ASD-STE100 writing rules, as
+  `agents/bloat-auditor.md` → "The prose standard" lists them). The `bloat-auditor` rewrites what
+  breaks them, in each change and in a `/prune` sweep.
 - **Plans are disposable, decisions are durable.** Delete an implementation plan once executed —
   it describes intent, some of which always changes, and a reader can't tell intent from truth.
   Fold anything durable (the diagnosis, the invariants) into the relevant `docs/` file. Plans
@@ -161,9 +164,10 @@ belongs in `docs/`, not here.
 
 The two canonical loops, in order — each step is a procedure below:
 - **New feature** → `/implement-feature` (contract → docs/invariants + gray dashboard row *first* →
-  adversarial implementer/verifier build) → verification battery → (demo clip only if a new
-  user-visible flow is worth showing).
-- **Bug** → `/fix-issue` (formalize → adversarial build: failing test → minimal fix → docs) → the
+  implementer → bloat audit → adversarial verifier) → verification battery → (demo clip only if a
+  new user-visible flow is worth showing).
+- **Bug** → `/fix-issue` (formalize → adversarial build: failing test → minimal fix → docs → bloat
+  audit when it is not tiny) → the
   new test joins the feature's existing `features.json` row (a new row only if the bug exposed an
   untracked feature) → verification battery.
 
@@ -185,6 +189,7 @@ verification steps.
 | Audit docs against code | `/verify-docs` skill |
 | Fix a reported bug end-to-end | `/fix-issue` skill |
 | Implement a new feature end-to-end | `/implement-feature` skill |
+| Cut the bloat the repo has accumulated | `/prune` skill |
 | Open image comparisons programmatically | `/imagecompare` skill |
 | Publish a comparison as a web page (Claude artifact, static host) | `/imagecompare-artifact` skill |
 

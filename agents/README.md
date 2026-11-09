@@ -43,7 +43,7 @@ derive diffs and run the gates, so its "never modify" rule is prose backed by re
 not structure. This is the same trade Anthropic's own `claude-code-action` repo makes: its reviewer
 agents omit write tools where they can, and rely on instruction where the job needs a shell.
 
-## The three agents
+## The agents
 
 | Agent | Writes? | Job |
 |---|---|---|
@@ -52,9 +52,11 @@ agents omit write tools where they can, and rely on instruction where the job ne
 | `fix-verifier` | no | Derives the diff itself, runs the gates, default REJECT. |
 | `change-implementer` | yes | Implements **one** formalized fix/feature contract. Never reviews its own work. |
 | `change-verifier` | no* | Derives the diff from pre-images, re-proves RED, audits close-out obligations, default REJECT. |
+| `bloat-auditor` | no | Reads one change's diff or one slice of the repo, returns a cut ledger. Never cuts. |
 
-The first three are dispatched by `skills/verify-docs/SKILL.md`, the last two by
-`skills/fix-issue/SKILL.md` and `skills/implement-feature/SKILL.md` — none invoked directly.
+The first three are dispatched by `skills/verify-docs/SKILL.md`, the last three by
+`skills/fix-issue/SKILL.md`, `skills/implement-feature/SKILL.md` and `skills/prune/SKILL.md` — none
+invoked directly.
 (*`change-verifier` holds no Edit/Write but does hold Bash for its swap-restore RED check; it must
 leave the tree byte-identical, and proving that is part of its own protocol.)
 

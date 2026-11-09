@@ -26,6 +26,9 @@ reject against:
   integration; pure logic → Vitest unit).
 - **Invariants** — any rule whose silent breakage would corrupt data or violate a documented
   contract. These are what step 2 writes down and what gets a mutation entry.
+- **Size budget** — about how many lines the feature should add to production code and to tests,
+  and which existing helpers, specs and fixtures it extends instead of adding its own. The verifier
+  rejects an overrun no contract item explains.
 
 If the request is ambiguous in a way that changes the contract, ask one question before designing.
 
@@ -52,12 +55,14 @@ Create a run directory (`.agent-runs/feature-<slug>/`, gitignored). Then:
    `CONTRACT` (include the doc keys from step 2 and the row id). It implements to the documented
    contract, cites the invariants, writes the tests + mutation entries, lights the row, and records
    pre-images under `RUN_DIR/before/` so its diff can be derived independently.
-2. Dispatch **`change-verifier`** with `REPO_ROOT`, `RUN_DIR`, `CLASS: feature`, and **the same
+2. **Audit it for bloat** as `fix-issue` step 3.2 does (the diff, one `bloat-auditor` with
+   `SCOPE: change`, the implementer applying its `CUTS`), never skipped for a feature.
+3. Dispatch **`change-verifier`** with `REPO_ROOT`, `RUN_DIR`, `CLASS: feature`, and **the same
    `CONTRACT` only**. Never forward the implementer's summary, rationale, or self-assessment — the
    verifier's preflight rejects a dispatch that carries them. It derives the diff from the
    pre-images, proves the new tests bite (swap-restore or mutation kill), audits the feature-class
    obligations, runs the battery, and defaults to REJECT.
-3. On REJECT, re-dispatch the implementer with the verifier's objections. **Two attempts, then stop
+4. On REJECT, re-dispatch the implementer with the verifier's objections. **Two attempts, then stop
    and escalate to the user** — a third try on the same objections is where adversarial loops start
    producing regressions instead of fixes.
 

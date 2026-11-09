@@ -21,6 +21,8 @@ with, so it must stand on its own:
 - **Suspected component** — which file/function. Grep for the UI string, the message type, or the
   state variable named in the report.
 - **Layer** — see step 2.
+- **Size budget** — about how many lines the fix should add to production code and to tests. The
+  worked example below is the target shape.
 
 If the report is ambiguous (no repro, multiple readings), ask one clarifying question before
 dispatching anything.
@@ -60,12 +62,26 @@ Create a run directory (`.agent-runs/fix-<slug>/`, gitignored). Then:
    maps the test into the feature's existing `test/dashboard/features.json` row (a new row only if
    the bug exposed an untracked feature), adds the docs/testing.md "Findings" entry, and records
    pre-images under `RUN_DIR/before/` so its diff can be derived independently.
-2. Dispatch **`change-verifier`** with `REPO_ROOT`, `RUN_DIR`, `CLASS: fix`, and **the same
+2. **Audit it for bloat before anything verifies it.** Write the change's diff from the pre-images:
+
+   ```bash
+   cd "$REPO_ROOT" && : > "$RUN_DIR/change.diff"
+   (cd "$RUN_DIR/before" && find . -type f | sed 's|^\./||') | while read -r p; do
+     git diff --no-index -- "$RUN_DIR/before/$p" "$p" >> "$RUN_DIR/change.diff"; done
+   sed -n 's/^NEW://p' "$RUN_DIR/preimages.txt" 2>/dev/null | while read -r p; do
+     git diff --no-index -- /dev/null "$p" >> "$RUN_DIR/change.diff"; done
+   ```
+
+   Dispatch **`bloat-auditor`** with `REPO_ROOT`, `RUN_DIR`, `SCOPE: change` and the `CONTRACT`,
+   then re-dispatch the implementer with its `CUT` entries as `CUTS`; `JUDGMENT` entries go to the
+   user instead. Skip this step when the diff adds under ~50 lines, which the verifier's own
+   minimal-diff check covers.
+3. Dispatch **`change-verifier`** with `REPO_ROOT`, `RUN_DIR`, `CLASS: fix`, and **the same
    `CONTRACT` only**. Never forward the implementer's summary, rationale, or self-assessment — the
    verifier's preflight rejects a dispatch that carries them. It re-derives RED itself by restoring
    the pre-change production code (recompiling for webview-layer tests, which run against
    `dist/webview.js`), audits the fix-class obligations, runs the battery, and defaults to REJECT.
-3. On REJECT, re-dispatch the implementer with the verifier's objections. **Two attempts, then stop
+4. On REJECT, re-dispatch the implementer with the verifier's objections. **Two attempts, then stop
    and escalate to the user** — a third try on the same objections is where adversarial loops start
    producing regressions instead of fixes.
 
