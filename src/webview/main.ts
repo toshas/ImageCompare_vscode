@@ -65,12 +65,11 @@ interface LoadedImage {
   height: number;
 }
 
-// Modality colors
 const MODALITY_COLORS = [
   '#0f0', '#f60', '#0af', '#f0f', '#ff0', '#f44', '#4f4', '#44f'
 ];
 
-// Branded index spaces, re-declared here because the webview compiles alone (docs/tuple-matching.md trap 2).
+// Branded index spaces, re-declared from src/types.ts (docs/tuple-matching.md trap 2).
 type OriginalModalityIndex = number & { readonly __brand: 'OriginalModalityIndex' };
 type DisplayModalityIndex = number & { readonly __brand: 'DisplayModalityIndex' };
 // Tuple index is a single space (no display/original split); the brand guards it against modality indices.
@@ -269,10 +268,8 @@ function updateStatus(name: string, info: string, tupleIndex?: number) {
 
 // Initialize
 function init() {
-  // Send ready message to extension
   vscode.postMessage({ type: 'ready' });
 
-  // Set up event listeners
   setupEventListeners();
 
   // Focus the document so keyboard shortcuts work immediately
@@ -281,7 +278,6 @@ function init() {
 }
 
 function setupEventListeners() {
-  // Help modal
   helpBtn.addEventListener('click', () => helpModalEl.classList.add('active'));
   closeHelpBtn.addEventListener('click', () => helpModalEl.classList.remove('active'));
 
@@ -299,16 +295,13 @@ function setupEventListeners() {
   // A discarded page gets no unload event, so a hide is the last chance to write (docs/standalone.md, "The view survives a reload").
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveView(); });
 
-  // Keyboard
   document.addEventListener('keydown', handleKeyDown);
   document.addEventListener('keyup', handleKeyUp);
 
   if (touchUi) setupTouch();
 
-  // Mouse wheel zoom
   viewerEl.addEventListener('wheel', handleWheel, { passive: false });
 
-  // Mouse drag pan
   viewerEl.addEventListener('mousedown', handleMouseDown);
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('mouseup', handleMouseUp);
@@ -318,7 +311,6 @@ function setupEventListeners() {
   carouselEl.addEventListener('wheel', handleCarouselWheel, { passive: false });
   modalitySelectorEl.addEventListener('wheel', handlePillWheel, { passive: false });
 
-  // Carousel resize
   setupCarouselResize();
 
   // The visible-row window is computed from clientHeight, which is 0 until the viewer unhides — and changes on vertical panel resizes. The one paint-path re-centre the rule allows, height-only: width drags must not re-center, the resize anchor owns those (docs/loading-architecture.md: selection-centres-on-navigation).
@@ -330,7 +322,6 @@ function setupEventListeners() {
     if (isMultiTupleMode && carouselWallEl) scrollCarouselToCurrentTuple();
   }).observe(carouselEl);
 
-  // Window resize
   window.addEventListener('resize', () => {
     if (images.length) render();
   });
@@ -369,7 +360,6 @@ function setupEventListeners() {
     fpDragging = false;
   });
 
-  // Crop button
   cropBtn.addEventListener('click', () => {
     if (crop.cropMode) {
       crop.exitCropMode();
@@ -378,7 +368,6 @@ function setupEventListeners() {
     }
   });
 
-  // Delete button
   deleteBtn.addEventListener('click', deleteCurrent);
 
   // Votes leave a host that states copyResults by the clipboard; the host serializes them.
@@ -386,11 +375,9 @@ function setupEventListeners() {
     if (capabilities.copyResults && votingEnabled) vscode.postMessage({ type: 'copyResults' });
   });
 
-  // PPTX export button
   pptxBtn.addEventListener('click', () => {
     // A host that cannot hand over a file is never sent an export (docs/crop-and-pptx.md).
     if (pptxBusy || !capabilities.exportPptx) return;
-    // Collect tuples that have winners (voted for)
     const tupleIndices: TupleIndex[] = [];
     // Original space: the wire is always the original index (docs/tuple-matching.md: wire-index-is-original).
     const winnerModalityIndices: (OriginalModalityIndex | null)[] = [];
@@ -463,7 +450,6 @@ function applyHostAffordances(): void {
   (resultsBtn as HTMLElement).hidden = !(capabilities.copyResults && votingEnabled);
 }
 
-// Crop confirmation callback
 function handleCropConfirm() {
   if (!crop.cropRect) return;
   const currentImage = images[currentModalityIndex];
@@ -506,7 +492,6 @@ function tryEnterCropMode(): void {
   cropBtn.classList.add('active');
 }
 
-// Handle messages from extension
 window.addEventListener('message', (event) => {
   const message = event.data;
 
@@ -629,7 +614,6 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
     : modalities.map((_, i) => MODALITY_COLORS[i % MODALITY_COLORS.length]);
   modalityOrder = modalities.map((_, i) => asOriginal(i)); // Initialize order: [0, 1, 2, ...]
 
-  // Load winner state
   votingEnabled = message.votingEnabled;
   applyHostAffordances();
   winners = new Map();
@@ -640,12 +624,10 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
     }
   }
 
-  // Reset navigation state
   currentTupleIndex = asTuple(0);
   currentModalityIndex = asDisplay(0);
   previousModalityIndex = asDisplay(0);
 
-  // Clear caches
   images = [];
   loadedTuples.clear();
   thumbnailUrls.clear();
@@ -655,13 +637,11 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
 
-  // Reset view state
   zoom = 1;
   panX = 0;
   panY = 0;
   lastNavAt = 0;
 
-  // Cancel any pending load
   if (loadDebounceTimer !== null) {
     clearTimeout(loadDebounceTimer);
     loadDebounceTimer = null;
@@ -671,7 +651,6 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
     siblingDwellTimer = null;
   }
 
-  // Hide loader if visible
   canvasEl.classList.remove('preview');
   imageLoaderEl.classList.remove('active');
 
@@ -680,10 +659,8 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   // Open wide enough for every modality column at 30px, within a 40%-of-window budget.
   CAROUSEL_WIDTH = Math.max(220, Math.min(carouselFitWidth(30), Math.floor(window.innerWidth * 0.4)));
 
-  // Calculate carousel thumb size
   updateCarouselThumbSize();
 
-  // Build carousel
   if (isMultiTupleMode) {
     buildCarousel();
   }
@@ -692,15 +669,12 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   // Pills are created here once; loadTuple only updates them (rebuild per keystroke stalled the carousel).
   buildModalitySelector();
 
-  // Request first tuple's images
   loadTuple(asTuple(0));
 
-  // Hide loading, show UI
   loadingEl.classList.add('hidden');
   viewerEl.classList.add('active');
   infoEl.classList.remove('hidden');
 
-  // Show progress if generating thumbnails
   if (isMultiTupleMode) {
     progressContainerEl.classList.add('active');
   }
@@ -896,8 +870,7 @@ function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: numb
   }
 }
 
-function showMissingPlaceholder() {
-  // Clear canvas and show missing message
+function drawCanvasNotice(text: string) {
   const carouselOffset = carouselOffsetPx();
   
   canvasEl.width = 400;
@@ -907,7 +880,7 @@ function showMissingPlaceholder() {
   ctx.fillStyle = '#888';
   ctx.font = '16px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('Image not available', 200, 100);
+  ctx.fillText(text, 200, 100);
   
   canvasEl.style.width = '400px';
   canvasEl.style.height = '200px';
@@ -929,7 +902,6 @@ function handleProgress(message: { current: number; total: number }) {
 }
 
 function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: number }) {
-  // Clear from loadedTuples - mark as missing
   const tupleImages = loadedTuples.get(message.tupleIndex);
   if (tupleImages) {
     tupleImages[message.modalityIndex] = { missing: true } as any;
@@ -938,7 +910,6 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
   // The missing sentinel must live in the map: recycled rows repaint from it (message.modalityIndex is already the global/original index).
   const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
 
-  // Update carousel to show placeholder for missing file
   const thumb = carouselTileFor(message.tupleIndex, message.modalityIndex);
   thumbnailUrls.set(thumbKey, PLACEHOLDER_THUMB, () => {
     if (!thumb) return;
@@ -947,7 +918,6 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
     thumb.classList.remove('placeholder');
   });
   
-  // If this is the current tuple, update display
   if (message.tupleIndex === currentTupleIndex) {
     images = tupleImages ? reorderImagesForDisplay(tupleImages) : [];
     // If current modality was deleted, try to switch to another
@@ -968,10 +938,8 @@ function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: nu
     tuple.images[message.modalityIndex].name = message.imageInfo.name;
   }
 
-  // Clear the error marker from loadedTuples
   const tupleImages = loadedTuples.get(message.tupleIndex);
   if (tupleImages && tupleImages[message.modalityIndex]) {
-    // Remove the error marker (will be reloaded)
     tupleImages[message.modalityIndex] = undefined as any;
   }
 
@@ -979,7 +947,6 @@ function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: nu
   const thumbKey = `${message.tupleIndex}-${message.modalityIndex}`;
   thumbnailUrls.delete(thumbKey);
 
-  // Update carousel to remove missing state
   const thumb = carouselTileFor(message.tupleIndex, message.modalityIndex);
   if (thumb) {
     thumb.classList.remove('missing');
@@ -1001,7 +968,6 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
   tuples.splice(message.tupleIndex, 1);
   loadedTuples.delete(message.tupleIndex);
 
-  // Re-index loaded tuples (shift indices down)
   const newLoadedTuples = new Map<TupleIndex, LoadedImage[]>();
   for (const [idx, imgs] of loadedTuples) {
     if (idx > message.tupleIndex) {
@@ -1019,7 +985,6 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
   thumbnailUrls.rekey((tIdx, mIdx) =>
     tIdx === message.tupleIndex ? null : `${tIdx > message.tupleIndex ? tIdx - 1 : tIdx}-${mIdx}`);
 
-  // Re-index winners (shift indices down)
   const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
   for (const [tIdx, mIdx] of winners) {
     if (tIdx > message.tupleIndex) {
@@ -1034,14 +999,12 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
     winners.set(tIdx, mIdx);
   }
 
-  // Adjust current tuple index if needed
   if (currentTupleIndex >= tuples.length) {
     currentTupleIndex = asTuple(Math.max(0, tuples.length - 1));
   } else if (currentTupleIndex > message.tupleIndex) {
     currentTupleIndex--;
   }
 
-  // Always update multi-tuple mode and rebuild carousel
   isMultiTupleMode = tuples.length > 1;
   buildCarousel();
 
@@ -1055,10 +1018,8 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
   // decodeRetried is index-keyed and an insertion shifts every later index; clearing is cheaper than re-indexing.
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
-  // Add the new tuple at the specified index
   tuples.splice(message.tupleIndex, 0, message.tuple);
 
-  // Re-index loaded tuples (shift indices up)
   const newLoadedTuples = new Map<TupleIndex, LoadedImage[]>();
   for (const [idx, imgs] of loadedTuples) {
     if (idx >= message.tupleIndex) {
@@ -1075,7 +1036,6 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
   // Re-index thumbnail urls (shift indices up); nothing is dropped, so nothing is revoked.
   thumbnailUrls.rekey((tIdx, mIdx) => `${tIdx >= message.tupleIndex ? tIdx + 1 : tIdx}-${mIdx}`);
 
-  // Re-index winners (shift indices up)
   const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
   for (const [tIdx, mIdx] of winners) {
     if (tIdx >= message.tupleIndex) {
@@ -1091,10 +1051,8 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
     currentTupleIndex++;
   }
 
-  // Update multi-tuple mode
   isMultiTupleMode = tuples.length > 1;
 
-  // Rebuild carousel and request thumbnail for new tuple
   if (isMultiTupleMode) {
     updateCarouselThumbSize();
     buildCarousel();
@@ -1136,10 +1094,8 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
   currentModalityIndex = asDisplay(currentModalityIndex >= displayPos ? currentModalityIndex + 1 : currentModalityIndex);
   previousModalityIndex = asDisplay(previousModalityIndex >= displayPos ? previousModalityIndex + 1 : previousModalityIndex);
   
-  // Update ALL tuples to have a placeholder for the new modality
   for (let t = 0; t < tuples.length; t++) {
     const tuple = tuples[t];
-    // Insert placeholder ImageInfo for new modality
     const placeholder: ImageInfo = {
       name: '', // Empty name marks a missing slot, keeping webview tuples dense (docs/tuple-matching.md: sparse-vs-dense-tuples)
       modality: message.modality,
@@ -1148,7 +1104,6 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
     };
     tuple.images.splice(message.modalityIndex, 0, placeholder);
 
-    // Update modalityIndex for subsequent images
     for (let i = message.modalityIndex + 1; i < tuple.images.length; i++) {
       tuple.images[i].modalityIndex = asOriginal(i);
     }
@@ -1166,7 +1121,6 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
 
-  // Rebuild UI
   buildModalitySelector();
   if (isMultiTupleMode) {
     updateCarouselThumbSize();
@@ -1198,7 +1152,6 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
 
   const removedModality = modalities[message.modalityIndex];
 
-  // Remove from modalities and colors
   modalities.splice(message.modalityIndex, 1);
   modalityColors.splice(message.modalityIndex, 1);
   modalityPaths.splice(message.modalityIndex, 1);
@@ -1232,7 +1185,6 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
   currentModalityIndex = asDisplay(Math.max(0, carryIndex(currentModalityIndex)));
   previousModalityIndex = asDisplay(Math.max(0, carryIndex(previousModalityIndex)));
 
-  // Adjust current modality index if needed
   if (currentModalityIndex >= modalities.length) {
     currentModalityIndex = asDisplay(Math.max(0, modalities.length - 1));
   }
@@ -1240,10 +1192,8 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
     previousModalityIndex = asDisplay(Math.max(0, modalities.length - 1));
   }
 
-  // Update ALL tuples to remove the modality
   for (const tuple of tuples) {
     tuple.images = tuple.images.filter(img => img.modality !== removedModality);
-    // Update modalityIndex for remaining images
     tuple.images.forEach((img, i) => {
       img.modalityIndex = asOriginal(i);
     });
@@ -1265,14 +1215,12 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
 
-  // Rebuild UI
   buildModalitySelector();
   if (isMultiTupleMode) {
     updateCarouselThumbSize();
     buildCarousel();
   }
   
-  // Request ALL thumbnails again
   vscode.postMessage({
     type: 'requestThumbnails',
     tupleIndices: Array.from({ length: tuples.length }, (_, i) => i)
@@ -1293,7 +1241,6 @@ function restoreOriginalOrder<T>(displayArr: T[], order: number[]): T[] {
 }
 
 function reorderImagesForDisplay(originalImages: LoadedImage[]): (LoadedImage | undefined)[] {
-  // Reorder images according to modalityOrder, keeping undefined slots
   const reordered: (LoadedImage | undefined)[] = new Array(modalityOrder.length);
   for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
     const originalIdx = modalityOrder[displayIdx];
@@ -1475,7 +1422,6 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
   const thumbnailDataUrl = thumbnailUrls.get(thumbnailKey);
   
   if (thumbnailDataUrl) {
-    // Show thumbnail as blurry preview
     const previewImg = new Image();
     previewImg.onload = () => {
       // Deferred: only show if we're still on the same tuple/modality.
@@ -1508,22 +1454,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
     previewImg.src = thumbnailDataUrl;
   } else {
     // No thumbnail yet — a drawn placeholder beats a blank white canvas.
-    const carouselOffset = carouselOffsetPx();
-    
-    canvasEl.width = 400;
-    canvasEl.height = 200;
-    ctx.fillStyle = '#333';
-    ctx.fillRect(0, 0, 400, 200);
-    ctx.fillStyle = '#888';
-    ctx.font = '16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Loading...', 200, 100);
-    
-    canvasEl.style.width = '400px';
-    canvasEl.style.height = '200px';
-    
-    const centerOffsetX = carouselOffset / 2;
-    canvasEl.style.transform = `translate(calc(-50% + ${centerOffsetX}px), -50%)`;
+    drawCanvasNotice('Loading...');
 
     const modalityName = modalities[displayModalityIndex] || 'Image';
     updateStatus(`${modalityName}: Loading...`, `Zoom: ${zoom.toFixed(1)}x`, tupleIndex);
@@ -1864,7 +1795,6 @@ function carouselTileFor(tupleIndex: number, originalModalityIndex: number): HTM
   return parts.colBound[colSlot] === displayIdx ? parts.imgs[colSlot] : null;
 }
 
-/** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
 /** True while a wheel is still moving the wall: a bind during a gesture takes the blank tile (docs/loading-architecture.md: images-fill-progressively). */
 let carouselFlying = false;
 let carouselSettleTimer: number | undefined;
@@ -1910,7 +1840,8 @@ function pumpCarouselImages(): void {
   }
 }
 
-function bindCarouselRow(el: HTMLElement, tupleIdx: number, win: ColumnWindow = currentColumnWindow()) {
+/** Everything a row shows derives from the state maps, so recycling a slot fully repaints it — and a row only reads urls, never revokes one (docs/loading-architecture.md: thumb-url-owned-by-cache). */
+function bindCarouselRow(el: HTMLElement, tupleIdx: number, win: ColumnWindow) {
   el.dataset.tupleIndex = String(tupleIdx);
   el.classList.toggle('current', tupleIdx === currentTupleIndex);
   const parts = rowParts.get(el);
@@ -2241,7 +2172,6 @@ function runMenuAction(action: MenuActionId, target: MenuContext): void {
 function updateModalitySelector() {
   // Every view change repaints the pills — order, hide, tuple, modality, and render() on zoom and pan.
   scheduleViewSave();
-  // Calculate win counts per modality (by display index)
   const winCounts: number[] = new Array(modalities.length).fill(0);
   if (votingEnabled) {
     for (const [_, modalityIdx] of winners) {
@@ -2289,7 +2219,6 @@ function moveModality(currentPos: number, newPos: number, rebuild = true): boole
   // Move in paths so the pill tooltip stays attached to its modality
   move(modalityPaths);
 
-  // Move in modalityOrder (tracks original index at each display position)
   move(modalityOrder);
 
   if (votingEnabled) {
@@ -2303,7 +2232,6 @@ function moveModality(currentPos: number, newPos: number, rebuild = true): boole
   // Keep the Space-peek target attached to its modality across the move.
   previousModalityIndex = remap(previousModalityIndex);
 
-  // Update current index
   currentModalityIndex = remap(currentModalityIndex);
   // render() re-derives `images` from the cache using the new modalityOrder.
   if (rebuild) rebuildAfterMove();
@@ -2312,7 +2240,6 @@ function moveModality(currentPos: number, newPos: number, rebuild = true): boole
 
 /** Rebuilds the pill row and the strip after one move or a batch of them. */
 function rebuildAfterMove(): void {
-  // Rebuild UI
   buildModalitySelector();
   if (isMultiTupleMode) {
     buildCarousel();
@@ -2365,7 +2292,7 @@ function render() {
 
   if (!currentImage || isMissing) {
     if (isMissing) {
-      showMissingPlaceholder();
+      drawCanvasNotice('Image not available');
       canvasEl.classList.remove('preview');
       imageLoaderEl.classList.remove('active');
       const modalityName = modalities[currentModalityIndex] || 'Image';
@@ -2385,10 +2312,8 @@ function render() {
 
   const { img, name, width, height, modality } = currentImage;
 
-  // Update status
   updateStatus(`${name} (${width}×${height})`, `Zoom: ${zoom.toFixed(1)}x`, currentTupleIndex);
 
-  // Calculate display size
   const carouselOffset = carouselOffsetPx();
   const vw = viewerEl.clientWidth - carouselOffset;
   const vh = viewerEl.clientHeight;
@@ -2408,7 +2333,6 @@ function render() {
   const centerOffsetX = carouselOffset / 2;
   canvasEl.style.transform = `translate(calc(-50% + ${panX + centerOffsetX}px), calc(-50% + ${panY}px))`;
 
-  // Update thumbnail navigator
   renderThumbnail(img, width, height, vw, vh, baseScale);
 }
 
@@ -2448,7 +2372,6 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
     thumbViewportEl.style.height = Math.min(vpH, thumbH - Math.max(0, vpY)) + 'px';
   }
 
-  // Update crop overlay position if active
   if (crop.cropMode) {
     const carouselOffset = carouselOffsetPx();
     crop.renderCropOverlay({
@@ -2490,6 +2413,14 @@ let pinchAnchorX = 0;
 let pinchAnchorY = 0;
 let pinchRaf = 0;
 
+function swapWithPrevious() {
+  const temp = currentModalityIndex;
+  currentModalityIndex = previousModalityIndex;
+  previousModalityIndex = temp;
+  render();
+  centreOnCurrentModality();
+}
+
 /** The touch layout: its class, the ▦ strip and the gestures, each mapped onto an action a key already takes (docs/pointer-input.md: gestures-load-nothing). */
 function setupTouch(): void {
   document.body.classList.add('touch-ui');
@@ -2501,13 +2432,6 @@ function setupTouch(): void {
     if (!stripClosed && (e.target as HTMLElement).closest('#carousel .carousel-row')) toggleStrip();
   });
   statusInfoEl.addEventListener('click', () => { zoom = 1; panX = panY = 0; render(); });
-  const swapWithPrevious = () => {
-    const temp = currentModalityIndex;
-    currentModalityIndex = previousModalityIndex;
-    previousModalityIndex = temp;
-    render();
-    centreOnCurrentModality();
-  };
   // The same image-area coordinates handleWheel zooms about.
   const viewerPoint = (x: number, y: number) => {
     const rect = viewerEl.getBoundingClientRect();
@@ -2567,12 +2491,10 @@ function handleKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  // Crop mode intercepts keys
   if (crop.cropMode && crop.handleCropKeyDown(e)) return;
 
   if (!images.length) return;
 
-  // Toggle crop mode with C key
   if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     if (crop.cropMode) {
@@ -2603,11 +2525,7 @@ function handleKeyDown(e: KeyboardEvent) {
       // A hidden flip *target* is skipped; flipping back to a hidden current the user clicked into still works (docs/session-files.md: hidden-is-presentation-only).
       if (!spaceDown && !hiddenModalities.has(modalityOrder[previousModalityIndex])) {
         spaceDown = true;
-        const temp = currentModalityIndex;
-        currentModalityIndex = previousModalityIndex;
-        previousModalityIndex = temp;
-        render();
-        centreOnCurrentModality();
+        swapWithPrevious();
       }
       break;
 
@@ -2684,11 +2602,7 @@ function handleKeyUp(e: KeyboardEvent) {
   if (e.code === 'Space') {
     spaceDown = false;
     if (images.length > 0) {
-      const temp = currentModalityIndex;
-      currentModalityIndex = previousModalityIndex;
-      previousModalityIndex = temp;
-      render();
-      centreOnCurrentModality();
+      swapWithPrevious();
     }
   }
 }
@@ -2724,7 +2638,6 @@ function handleMouseDown(e: MouseEvent) {
   if ((e.target as HTMLElement).closest('#carousel')) return;
   if ((e.target as HTMLElement).closest('#floating-panel')) return;
 
-  // Crop mode intercepts mouse events
   if (crop.cropMode && crop.handleCropMouseDown(e)) return;
 
   isDragging = true;
@@ -2742,7 +2655,7 @@ function handleMouseMove(e: MouseEvent) {
 }
 
 function handleMouseUp(e: MouseEvent) {
-  if (crop.cropMode) crop.handleCropMouseUp(e);
+  if (crop.cropMode) crop.handleCropMouseUp();
   isDragging = false;
   viewerEl.classList.remove('dragging');
 }
@@ -2916,5 +2829,4 @@ function setupCarouselResize() {
   });
 }
 
-// Start
 init();
