@@ -1,7 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
-import { HARNESS_URL } from './harness';
-import { FixtureSpec, initMessage, imageMessages, thumbnailMessages } from '../fixtures/messages';
-import { hideModalityViaMenu } from './helpers';
+import { FixtureSpec, imageMessages, thumbnailMessages } from '../fixtures/messages';
+import { hideModalityViaMenu, getState, sendInit } from './helpers';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -32,9 +31,7 @@ const PAST_DWELL_MS = 450;
  * a real session spends its life in — `loadInited` delivers everything and would leave nothing to ask for.
  */
 async function loadPartial(page: Page): Promise<void> {
-  await page.goto(HARNESS_URL);
-  await page.waitForFunction(() => (window as any).__ic_outbound.some((m: any) => m && m.type === 'ready'));
-  await page.evaluate((msg) => (window as any).__ic_send(msg), initMessage(SPEC) as any);
+  await sendInit(page, SPEC);
   for (const msg of thumbnailMessages(SPEC)) {
     await page.evaluate((m) => (window as any).__ic_send(m), msg as any);
   }
@@ -59,25 +56,15 @@ async function pressAndCapture(page: Page, codes: string[], type = 'requestImage
   }, [codes, type] as const);
 }
 
-async function requestsSince(page: Page, start: number): Promise<any[]> {
-  return page.evaluate(
-    (s) => (window as any).__ic_outbound.slice(s).filter((m: any) => m && m.type === 'requestImage'),
-    start,
+/** Every message of `type` posted since `start`, in order. */
+const sentSince = (page: Page, start: number, type: string): Promise<any[]> =>
+  page.evaluate(
+    ([s, t]) => (window as any).__ic_outbound.slice(s).filter((m: any) => m && m.type === t),
+    [start, type] as const,
   );
-}
 
 const outboundLength = (page: Page): Promise<number> =>
   page.evaluate(() => (window as any).__ic_outbound.length);
-
-const getStateOf = (page: Page): Promise<any> =>
-  page.evaluate(() => (window as any).__ic_test.getState());
-
-/** Every column report posted since `start`, in order — the sweep's aim moves once per one of these. */
-const columnReports = (page: Page, start: number): Promise<any[]> =>
-  page.evaluate(
-    (s) => (window as any).__ic_outbound.slice(s).filter((m: any) => m && m.type === 'setCurrentModality'),
-    start,
-  );
 
 test.describe('tuple arrival asks for one image, not the whole tuple', () => {
   test('a navigation requests only the modality on screen', async ({ page }) => {
@@ -97,7 +84,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await pressAndCapture(page, ['ArrowDown']);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const requests = await requestsSince(page, start);
+    const requests = await sentSince(page, start, 'requestImage');
     expect(requests.every((r) => r.tupleIndex === 1)).toBe(true);
     // Display index 2 is on screen: `->` reaches 3, `<-` reaches 1, then 4, 0, 5.
     expect(requests.map((r) => r.modalityIndex)).toEqual([2, 3, 1, 4, 0, 5]);
@@ -113,7 +100,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await pressAndCapture(page, ['ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown']);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const requests = await requestsSince(page, start);
+    const requests = await sentSince(page, start, 'requestImage');
     const passed = requests.filter((r) => r.tupleIndex !== 4);
     // Pre-change, tuple 1 alone pulled all six modalities on the way past.
     expect(passed.every((r) => !r.sibling)).toBe(true);
@@ -129,7 +116,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await pressAndCapture(page, ['ArrowDown']);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const requests = await requestsSince(page, start);
+    const requests = await sentSince(page, start, 'requestImage');
     expect(requests.some((r) => r.modalityIndex === 1)).toBe(false);
     // The hidden pill is skipped as a *step* too: `->` from 0 lands on 2, so 2 is the nearest sibling.
     expect(requests.map((r) => r.modalityIndex)).toEqual([0, 2, 3, 4, 5]);
@@ -177,7 +164,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
 
     const report = await page.evaluate(() =>
       (window as any).__ic_outbound.filter((m: any) => m && m.type === 'tupleFullyLoaded').at(-1));
-    const state = await page.evaluate(() => (window as any).__ic_test.getState());
+    const state = await getState(page);
     expect(report.tupleIndex).toBe(0);
     // Every field is the live strip, not a stale or default one.
     expect(report.modalityOrder).toEqual(state.modalityOrder);
@@ -232,7 +219,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
 
     const report = since.find((m: any) => m && m.type === 'setCurrentModality');
     expect(report).toBeTruthy();
-    const state = await getStateOf(page);
+    const state = await getState(page);
     expect(report.currentDisplayIndex).toBe(3);
     expect(report.currentDisplayIndex).toBe(state.currentModalityIndex);
     expect(report.modalityOrder).toEqual(state.modalityOrder);
@@ -250,7 +237,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await loadPartial(page);
     // Move the on-screen column one place right: the strip becomes [1, 0, 2, ...].
     await pressAndCapture(page, ['BracketRight']);
-    const order = (await getStateOf(page)).modalityOrder;
+    const order = (await getState(page)).modalityOrder;
     expect(order.slice(0, 2)).toEqual([1, 0]);
     // The reorder reports the strip it rearranged, on the key dwell; let that land before measuring,
     // so the report read below is the click's (docs/loading-architecture.md: picked-column-reports-itself).
@@ -283,9 +270,9 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(await pressAndCapture(page, ['ArrowRight'], 'setCurrentModality')).toHaveLength(0);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const reports = await columnReports(page, start);
+    const reports = await sentSince(page, start, 'setCurrentModality');
     expect(reports).toHaveLength(1);
-    const state = await getStateOf(page);
+    const state = await getState(page);
     expect(state.currentModalityIndex).toBe(1);
     expect(reports[0].currentDisplayIndex).toBe(state.currentModalityIndex);
     expect(reports[0].modalityOrder).toEqual(state.modalityOrder);
@@ -305,11 +292,11 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     expect(await pressAndCapture(page, new Array(10).fill('ArrowRight'), 'setCurrentModality')).toHaveLength(0);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const reports = await columnReports(page, start);
+    const reports = await sentSince(page, start, 'setCurrentModality');
     expect(reports).toHaveLength(1);
     // Cycling does not wrap, so ten steps right over six pills end on the last one.
     expect(reports[0].currentDisplayIndex).toBe(SPEC.modalities.length - 1);
-    expect((await getStateOf(page)).currentModalityIndex).toBe(SPEC.modalities.length - 1);
+    expect((await getState(page)).currentModalityIndex).toBe(SPEC.modalities.length - 1);
   });
 
   // (docs/loading-architecture.md: picked-column-reports-itself)
@@ -319,7 +306,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await pressAndCapture(page, ['Digit5']);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const reports = await columnReports(page, start);
+    const reports = await sentSince(page, start, 'setCurrentModality');
     expect(reports).toHaveLength(1);
     expect(reports[0].currentDisplayIndex).toBe(4);
     expect(reports[0].modalityOrder).toEqual([0, 1, 2, 3, 4, 5]);
@@ -334,9 +321,9 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     await pressAndCapture(page, ['BracketRight']);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const reports = await columnReports(page, start);
+    const reports = await sentSince(page, start, 'setCurrentModality');
     expect(reports).toHaveLength(1);
-    const state = await getStateOf(page);
+    const state = await getState(page);
     expect(state.modalityOrder.slice(0, 2)).toEqual([1, 0]);
     expect(reports[0].modalityOrder).toEqual(state.modalityOrder);
     expect(reports[0].currentDisplayIndex).toBe(state.currentModalityIndex);
@@ -356,10 +343,10 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
       (document.querySelector('.carousel-row[data-tuple-index="4"] .carousel-thumb[data-modality="3"]') as HTMLElement).click();
     });
     // The click's own report is on the wire before any dwell could fire.
-    expect(await columnReports(page, start)).toHaveLength(1);
+    expect(await sentSince(page, start, 'setCurrentModality')).toHaveLength(1);
     await page.waitForTimeout(PAST_DWELL_MS);
 
-    const reports = await columnReports(page, start);
+    const reports = await sentSince(page, start, 'setCurrentModality');
     expect(reports).toHaveLength(1);
     expect(reports[0].currentDisplayIndex).toBe(3);
   });
@@ -371,10 +358,10 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     const start = await outboundLength(page);
     await page.locator('.modality-btn[data-display-index="2"]').click();
 
-    const reports = await columnReports(page, start);
+    const reports = await sentSince(page, start, 'setCurrentModality');
     expect(reports).toHaveLength(1);
     expect(reports[0].currentDisplayIndex).toBe(2);
-    expect((await getStateOf(page)).currentModalityIndex).toBe(2);
+    expect((await getState(page)).currentModalityIndex).toBe(2);
   });
 
   test('flipping to a sibling inside the dwell window loads it at once', async ({ page }) => {
@@ -382,7 +369,7 @@ test.describe('tuple arrival asks for one image, not the whole tuple', () => {
     const start = await outboundLength(page);
     // The accepted regression: one image's latency, never a spinner nobody clears.
     await pressAndCapture(page, ['ArrowDown', 'ArrowRight']);
-    const requests = await requestsSince(page, start);
+    const requests = await sentSince(page, start, 'requestImage');
     expect(requests.map((r) => r.modalityIndex)).toEqual([0, 1]);
     expect(requests.every((r) => r.tupleIndex === 1 && !r.sibling)).toBe(true);
   });

@@ -173,7 +173,7 @@ test.describe('only a host that states restoresView is asked to keep the view', 
     expect(onHide).toEqual(['set']);
   });
 
-  // Item 5. Watched failing with restoreView's `if (!viewRestorePending) return;` removed (the re-init re-read and
+  // Watched failing with restoreView's `if (!viewRestorePending) return;` removed (the re-init re-read and
   // re-applied the view), and with its one `rebuildAfterMove()` dropped (each pill kept its slot's pre-restore colour).
   test('a host stating restoresView applies the saved view at the first init and not at a later re-init', async ({ page }) => {
     const spec = { ...DEFAULT_SPEC, modalities: ['GT', 'PRED', 'DEPTH'], capabilities: { ...BASE_CAPS, exportPptx: true, copyResults: false, restoresView: true } };

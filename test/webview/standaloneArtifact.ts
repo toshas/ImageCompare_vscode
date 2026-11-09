@@ -3,11 +3,7 @@
  * it: one freshness rule, one build, shared by the Playwright `globalSetup` and the spec that
  * serves the page.
  *
- * Building it inside the spec's `beforeAll` meant every parallel worker ran its own
- * `scripts/build-standalone.mjs` over the SAME output path, so a worker could serve a page another
- * worker was mid-write on. The build therefore happens once, in `globalSetup`, before any worker
- * exists; the spec only asserts. Freshness is a completeness check plus an mtime rule against the
- * build's real inputs, not an `existsSync` — see docs/testing.md, "The standalone artifact".
+ * Why it is built once and how freshness is decided: docs/testing.md, "The standalone artifact".
  *
  * Every function takes the repo root as an argument (defaulting to the real one) so the rule itself
  * can be exercised on a synthetic tree in test/unit/standaloneArtifact.test.ts.
@@ -124,9 +120,6 @@ export type ArtifactState =
  * Missing, corrupt (present but not a finished page), unverifiable (the inputs cannot be
  * enumerated, so nothing about the artifact is known), stale (some build input is at least as new
  * as the artifact), or fresh.
- *
- * `>=` not `>`: a build reads its inputs before it writes, so an input sharing the artifact's
- * mtime was edited after it. The cost of the tie is one redundant build, never a stale page.
  */
 export function standaloneArtifactState(root: string = ROOT): ArtifactState {
   let artifact: fs.Stats;

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loadInited, getState, openMenuOn, pickMenuAction } from './helpers';
-import { DEFAULT_SPEC } from '../fixtures/messages';
+import { NO_REVEAL_SPEC } from '../fixtures/messages';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -14,13 +14,8 @@ import { DEFAULT_SPEC } from '../fixtures/messages';
 // only layer that can reach them at all (docs/testing.md, "What nothing covers"). What stands in
 // for a mutation: each of the three rules added after review — keys not acting behind an open
 // menu, the menu closing when the host re-indexes slots, and the faded action toast releasing
-// clicks — was verified by reverting its fix and watching this suite go red. The model half of
+// clicks (notice.spec.ts) — was verified by reverting its fix and watching this suite go red. The model half of
 // the same behaviour IS mutation-covered, in test/unit/contextMenuModel.test.ts.
-
-const NO_REVEAL = {
-  ...DEFAULT_SPEC,
-  capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false },
-};
 
 test.describe('context menu', () => {
   test('right-clicking the image offers the image items and suppresses the browser menu', async ({ page }) => {
@@ -68,14 +63,13 @@ test.describe('context menu', () => {
   });
 
   test('a host that cannot reveal is never offered the item', async ({ page }) => {
-    await loadInited(page, NO_REVEAL);
+    await loadInited(page, NO_REVEAL_SPEC);
     expect(await openMenuOn(page, '#canvas')).toEqual(['Copy Image', 'Copy Path']);
     expect(await openMenuOn(page, '.modality-btn')).toEqual(['Copy Path', 'Hide Modality']);
   });
 
   test('Escape dismisses the menu without also resetting the view', async ({ page }) => {
     await loadInited(page);
-    await page.evaluate(() => (window as any).__ic_test.getState());
     await page.mouse.move(300, 200);
     await page.mouse.wheel(0, -200); // zoom in, so a stray Escape would be visible as zoom === 1
     await page.waitForFunction(() => (window as any).__ic_test.getState().zoom !== 1);
@@ -125,7 +119,7 @@ test.describe('context menu', () => {
   });
 
   test('the help modal names only the items this host offers', async ({ page }) => {
-    await loadInited(page, NO_REVEAL);
+    await loadInited(page, NO_REVEAL_SPEC);
     await page.locator('#help-btn').click();
     await expect(page.locator('#help-contextmenu-items'))
       .toHaveText('Copy Image / Copy Path / Hide/Show Modality');

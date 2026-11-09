@@ -1,5 +1,5 @@
-import { test, expect, Page } from '@playwright/test';
-import { loadInited, getState } from './helpers';
+import { test, expect } from '@playwright/test';
+import { loadInited, getState, outbound } from './helpers';
 import { DEFAULT_SPEC } from '../fixtures/messages';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -13,9 +13,6 @@ import { DEFAULT_SPEC } from '../fixtures/messages';
 // in test/unit/modePolicy.test.ts. What stands in for the rest: SIX of the seven tests here were
 // watched failing against the pre-change bundle, which posted `deleteTuple` unconditionally and
 // whose Del help row was a static string in the shell. The seventh is labelled below.
-
-const outbound = (page: Page, type: string) =>
-  page.evaluate((t) => (window as any).__ic_outbound.filter((m: any) => m?.type === t), type);
 
 test.describe('what Del removes is the host\'s to state', () => {
   // REGRESSION GUARD, not a new-behaviour assertion: this passes against the pre-change bundle too,

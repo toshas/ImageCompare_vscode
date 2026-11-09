@@ -1,20 +1,14 @@
 import { test, expect, Page, Locator } from '@playwright/test';
-import { loadInited, getState, focusViewer } from './helpers';
+import { loadInited, getState, focusViewer, send } from './helpers';
 import { initMessage, colorFor } from '../fixtures/messages';
 import { makeSolidPng } from '../fixtures/synthetic';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// The harness converts a dataUrl-shaped thumbnail into the real {bytes, mime} wire payload before
-// dispatch, exactly like the extension host posts it — the spec never hand-builds a Uint8Array.
 const pngUrl = (w: number, h: number): string =>
   'data:image/png;base64,' + makeSolidPng(w, h, colorFor(1, 0)).toString('base64');
 
 const TILE = '.carousel-row[data-tuple-index="1"] .carousel-thumb[data-modality="0"]';
-
-async function send(page: Page, msg: Record<string, unknown>): Promise<void> {
-  await page.evaluate((m) => (window as any).__ic_send(m), msg as any);
-}
 
 /** Decoded pixel width of the tile — 0 while a src is undecodable, unset or revoked before decode. */
 async function paintedWidth(tile: Locator): Promise<number> {

@@ -84,7 +84,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "reorders the current modality left"
+              "match": "the reorder buttons are gone and [ ] still reorder"
             }
           ]
         },
@@ -171,7 +171,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "clicking a modality pill switches modality"
+              "match": "a click, and a 3 px wobble, select the pill without reordering"
             }
           ]
         },
@@ -1207,10 +1207,6 @@
           "id": "view-copy-image",
           "name": "Copy Image (context menu / Ctrl+C) writes the displayed image",
           "tests": [
-            {
-              "suite": "webview",
-              "match": "copy writes the displayed image to the clipboard"
-            },
             {
               "suite": "webview",
               "match": "copy after navigation writes the currently displayed image"
@@ -3039,10 +3035,6 @@
             {
               "suite": "webview",
               "match": "standalone poll adopts a modality directory copied in after boot"
-            },
-            {
-              "suite": "webview",
-              "match": "standalone poll executes a modality dir rename as remove-then-adopt"
             },
             {
               "suite": "webview",

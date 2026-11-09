@@ -1,12 +1,11 @@
 import { test, expect, Page } from '@playwright/test';
-import { loadInited, getState, focusViewer } from './helpers';
+import { loadInited, getState, focusViewer, send } from './helpers';
 import { colorFor } from '../fixtures/messages';
 import { makeSolidPng } from '../fixtures/synthetic';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // Bytes that no image decoder accepts — models a thumbnail generated from a truncated mid-write read.
-// The harness turns each dataUrl into the real {bytes, mime} payload the extension posts.
 const CORRUPT_DATA_URL =
   'data:image/png;base64,' + Buffer.from('truncated-mid-write-not-a-png').toString('base64');
 
@@ -14,10 +13,6 @@ const VALID_DATA_URL =
   'data:image/png;base64,' + makeSolidPng(64, 40, colorFor(1, 0)).toString('base64');
 
 const TILE = '.carousel-row[data-tuple-index="1"] .carousel-thumb[data-modality="0"]';
-
-async function send(page: Page, msg: Record<string, unknown>): Promise<void> {
-  await page.evaluate((m) => (window as any).__ic_send(m), msg as any);
-}
 
 async function requestCountFor(page: Page, tupleIndex: number): Promise<number> {
   return page.evaluate(

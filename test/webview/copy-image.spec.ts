@@ -125,16 +125,6 @@ async function copyUnfocusedThenRefocus(page: Page): Promise<string> {
 }
 
 test.describe('copy image', () => {
-  test('copy writes the displayed image to the clipboard', async ({ page }) => {
-    await loadInited(page, SPEC);
-    await sendImage(page, 1, TUPLE1_DIMS.width, TUPLE1_DIMS.height);
-    await focusViewer(page);
-
-    const toast = await copyFocused(page);
-    expect(toast).toBe('Image copied');
-    expect(await readClipboardDims(page)).toEqual({ width: SPEC.width, height: SPEC.height });
-  });
-
   test('copy after navigation writes the currently displayed image, not the first-copied one', async ({ page }) => {
     await loadInited(page, SPEC);
     await sendImage(page, 1, TUPLE1_DIMS.width, TUPLE1_DIMS.height);
@@ -148,7 +138,6 @@ test.describe('copy image', () => {
     await page.keyboard.press('ArrowDown');
     expect((await getState(page)).currentTupleIndex).toBe(1);
 
-    // Context-menu copy: the message lands while the workbench menu still holds focus.
     const second = await copyUnfocusedThenRefocus(page);
     expect(await readClipboardDims(page)).toEqual(TUPLE1_DIMS);
     expect(second).toBe('Image copied');

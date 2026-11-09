@@ -1,16 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { loadInited, getState, lastOutbound, focusViewer } from './helpers';
-
-async function viewerCenter(page: import('@playwright/test').Page) {
-  const box = await page.locator('#viewer').boundingBox();
-  if (!box) throw new Error('no viewer box');
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2, box };
-}
+import { centreOf } from './touchDriver';
 
 test.describe('zoom & pan', () => {
   test('wheel zooms in; Escape resets', async ({ page }) => {
     await loadInited(page);
-    const { x, y } = await viewerCenter(page);
+    const { x, y } = await centreOf(page, '#viewer');
 
     await page.mouse.move(x, y);
     for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -240); // scroll up = zoom in
@@ -30,7 +25,7 @@ test.describe('crop mode', () => {
     await expect.poll(async () => (await getState(page)).cropMode).toBe(true);
 
     // Draw a rectangle across the central region of the viewer.
-    const { box } = await viewerCenter(page);
+    const box = (await page.locator('#viewer').boundingBox())!;
     const x1 = box.x + box.width * 0.4;
     const y1 = box.y + box.height * 0.4;
     const x2 = box.x + box.width * 0.6;
