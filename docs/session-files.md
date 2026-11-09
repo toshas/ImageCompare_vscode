@@ -43,8 +43,9 @@ paths are on disk.
 
 The scan rejects a mix of files and directories, and a lone image file. A single *directory* is
 never rejected for being one: it resolves to mode 1 or mode 3 by what it holds. A listed path that
-fails to stat is dropped before the mode is decided. If one of two listed directories is missing, the
-survivor opens as mode 1: the mode follows what the scan found, not what the caller asked for.
+fails to stat is dropped before the mode is decided, so the survivor of two listed directories, one
+missing, opens as a single one does: the mode follows what the scan found, not what the caller asked
+for.
 
 The last two rows are the same mode reached two ways, which is the point. Dropping a folder of images
 and selecting those same images produce one comparison, not two behaviours. `scanDirectory()`
@@ -207,13 +208,10 @@ Users can hide the extension with `workbench.editor.customLabels.patterns`.
 
 ## Winner voting persistence
 
-Voting is enabled only when both hold:
-
-- the mode allows it (`MODES[mode].voting` in `modePolicy.ts`); mode 3 is one row of unrelated
-  files, with nothing to rank;
-- the host has somewhere to put the answer: for the provider,
-  `baseUri !== undefined || modalityDirs.size > 0`; for the standalone, a writable root. A published
-  comparison is one, its votes landing in the browser-local viewer layer (`docs/standalone.md`).
+Voting is enabled iff the mode allows it (`MODES[mode].voting` in `modePolicy.ts`; mode 3 is one row
+of unrelated files, with nothing to rank) **and** the host has somewhere to put the answer (the
+provider: `baseUri !== undefined || modalityDirs.size > 0`; the standalone: a writable root, which a
+published comparison is, its votes landing in the browser-local viewer layer, `docs/standalone.md`).
 
 The mode half is read from `ScanResult.mode`, not inferred from `baseUri`/`modalityDirs` both being
 unset — which is the same thing, until it isn't (`mode-is-explicit`).

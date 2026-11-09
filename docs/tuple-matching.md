@@ -348,9 +348,9 @@ Nothing but the code comments and this doc keeps the un-permute and the carry al
   Thumbnails were once the exception. On a stale slot a successful post was dropped, but
   `thumbnailError` went out unguarded and blanked a slot that was fine. Every delivery (the
   requested image, the bulk sweep, on-demand thumbnails and single-slot regeneration) therefore
-  resolves its slot through `resolveSlotForUri` on both the success and the
-  error path. The index it was enqueued at is checked first and is almost always still correct. Only
-  when a splice actually moved the row does it fall back to finding the file by URI.
+  resolves its slot through `resolveSlotForUri` on both the success and the error path. The index it
+  was enqueued at is checked first and is almost always still correct. Only when a splice actually
+  moved the row does it fall back to finding the file by URI.
 
   A splice moves the row rather than voiding the work, so nothing has to be re-requested to repair
   it. A modality add/remove still asks for every thumbnail, tuple add asks only for the new row, and

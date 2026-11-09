@@ -43,9 +43,9 @@ its lift scale included. It scales about its centre, whatever origin a resting e
 that change side get a new transform (`slotShift`), so a move costs the same with five pills or five
 hundred.
 
-The clamp, the midpoints and the slide are read from the pills' rects. A hover scale or a landed
-pill's glide is undone in arithmetic from the computed transform. `offsetLeft` and `offsetWidth`
-round to whole px, and pills sit between them. Clearing the transforms to measure would snap a glide
+The clamp, midpoints and slide are read from the pills' rects. A hover scale or a landed pill's
+glide is undone in arithmetic from the computed transform: `offsetLeft` and `offsetWidth` round to
+whole px, and pills sit between them, while clearing the transforms to measure would snap a glide
 still running from the last drop.
 
 The slot is searched from where the *pointer* puts the pill, not from the clamped drawing. A clamped
@@ -64,8 +64,8 @@ drag at the lift. Cancelling `touchstart` also cancels the browser's tap-to-clic
 the pill itself for a tap.
 
 **Only the row's capture ends a drag.** The lift captures the pointer to the row so the drag survives
-the finger leaving it. A real Android WebView has already captured a touch to the pressed pill. The
-hand-over then fires `lostpointercapture` *at the pill*, which bubbles to the row. Read as a release,
+the finger leaving it. A real Android WebView has already captured a touch to the pressed pill, so
+the hand-over fires `lostpointercapture` *at the pill*, which bubbles to the row. Read as a release,
 that ended every drag at 0 px on the phone. Headless Chromium's touch emulation fires no
 implicit-capture events at all, which is why every emulated run passed. The spec dispatches the
 pill's `lostpointercapture` by hand.
@@ -75,9 +75,9 @@ sends no click at all after a drop that rebuilds the row (the pressed pill is go
 dropped where it started, it clicks the row, the capture target, never the pill. Another engine may
 click the pill beneath, so a mouse or pen drag arms a swallow.
 
-The swallow eats only a click a pointer made (`detail` ≥ 1), and the next press anywhere disarms it.
-A release that no click follows — Chromium's usual case — must not leave it waiting for the user's
-next real click. A programmatic `click()` or a keyboard activation (`detail` 0) was never the
+The swallow eats only a click a pointer made (`detail` ≥ 1), and the next press anywhere disarms it:
+a release that no click follows — Chromium's usual case — must not leave it waiting for the next
+real click, and a programmatic `click()` or keyboard activation (`detail` 0) was never the
 release's.
 
 A finger arms nothing: a cancelled `touchstart` sends no click, so a finger's swallow would eat the
@@ -92,15 +92,15 @@ its trackpad, and VS Code on a desktop, keep the desktop layout unchanged. There
 device decides, not the host. A device in the touch layout adds `touch-ui` to `body`.
 
 - **The strip** is a full-width, opaque picker over the image, hidden until the ▦ button in the bar
-  opens it. The image area spans the whole viewer: `carouselOffsetPx()` is 0 in this
-  layout, where the desktop strip sits beside the image. A single-tuple comparison has no strip and
-  no ▦. The button's box shows only while `#viewer` carries `has-carousel`, the class main.ts sets
-  beside `#carousel.active`. The gate is not `:has()`, which Safari < 15.4 and Firefox < 121 lack.
-  Hidden, the button takes no room in the bar, as on desktop.
+  opens it. The image area therefore spans the whole viewer: `carouselOffsetPx()` is 0 here, where
+  the desktop strip sits beside the image. A single-tuple comparison has no strip and no ▦: the
+  button's box shows only while `#viewer` carries `has-carousel`, the class main.ts sets beside
+  `#carousel.active` (not `:has()`, which Safari < 15.4 and Firefox < 121 lack), and hidden the
+  button takes no room in the bar, as on desktop.
 - The strip takes the viewer's width and refits on resize and rotation; tiles have a 56 px floor,
   and columns that don't fit scroll sideways. A finger drags it (the same paths the wheel and the
   horizontal scrollbar drive). A tile tap navigates as a click does and closes the strip.
-- **On the image**, a one-finger swipe steps once when it crosses 40 px. Sideways switches modality
+- **On the image**: a one-finger swipe steps once when it crosses 40 px. Sideways switches modality
   (skipping hidden ones, as ← / → do); up or down switches tuple (up is next). Touch and hold
   (350 ms within 10 px) flips to the previous modality until the finger lifts, as holding Space
   does. Two fingers pinch-zoom about their midpoint and pan; lifting one never turns the other

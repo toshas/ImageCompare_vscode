@@ -70,7 +70,7 @@ listing it under `optionalDependencies` installs nothing, ever. After a normal i
 - `node_modules/@emnapi/` is an empty directory (no `runtime/` at all);
 - a locally produced VSIX has zero wasm32 files.
 
-A local VSIX is Sharp → Jimp: never hand one to someone on an old CPU, or use it to judge fallback
+A local VSIX is Sharp → Jimp: never hand one to someone on an old CPU or use it to judge fallback
 behaviour.
 
 `.github/workflows/publish.yml` delivers the tier. On every target it installs `@emnapi/runtime`,
@@ -137,9 +137,9 @@ recipe without the prune loop:
   libvips packages beside its own `sharp-linux-arm` pair;
 - `alpine-x64` holds the glibc pair beside its musl one.
 
-(This is about a recipe on a linux runner, not the darwin legs, which CI builds on macOS.) The
-universal build no longer needs a bespoke order either: every target now runs its installs, then
-prunes, then hand-extracts wasm32 last.
+(This is about a recipe on a linux runner, not the darwin legs, which CI builds on macOS.) That is
+also why the universal build no longer needs a bespoke order: every target now runs its installs,
+then prunes, then hand-extracts wasm32 last.
 
 A wrong-libc VSIX is worse than a missing one: it installs, then fails at runtime. The post-package
 scan reads the VSIX's zip central directory and holds every leg to one rule. The packed `@img/*` set
@@ -161,7 +161,8 @@ presence. Measured by packaging with the pre-prune recipe:
 - a `linux-arm64` VSIX carrying four libvips tiers passes both weaker checks and exits 1 under the
   allow-set. It is a local rebuild of 36,092,593 bytes reproducing the shape 0.4.0 shipped
   (published: 36,092,188 bytes; pruned: 12,528,278);
-- pre-prune `linux-x64` and `linux-armhf` also exit 1;
+- pre-prune `linux-x64` and `linux-armhf` also pass both weaker checks and exit 1 under the
+  allow-set;
 - all ten pruned legs still exit 0.
 
 The build matrix runs `fail-fast: false`, so one target's packaging defect reports itself instead of
@@ -257,10 +258,10 @@ With the per-entry writes it settles, that is all the shutdown work this service
 by the memory-cache cap and safe to lose, since publication is still rename-only.
 
 The per-entry `.jpg` write is deliberately *not* awaited where it is issued. A thumbnail is on screen
-as soon as its bytes exist, never after a disk round-trip. It is registered instead, and `flush()` is
-where the wait happens. A `flush()` that returned with those writes outstanding dropped the newest
-thumbnails on a host exit. In a test bed, it left files landing in a directory the teardown was
-already removing.
+as soon as its bytes exist, never after a disk round-trip. The write is registered instead, and
+`flush()` is where the wait happens. A `flush()` that returned with those writes outstanding dropped
+the newest thumbnails on a host exit. In a test bed, it left files landing in a directory the
+teardown was already removing.
 
 ## What the cache key sees, and when the cache dies
 
@@ -346,17 +347,20 @@ per-entry files already aged out, costs one cold session that rebuilds.
 
 ## Testing
 
-Unit suites that `publish.yml` gates on (`docs/testing.md`) and that touch this subsystem:
+`publish.yml`-gated unit suites (`docs/testing.md`) touching this subsystem:
 - `test/unit/ppmxParser.test.ts`: the pure decode half.
-- `test/unit/thumbPack.test.ts`: the packfile wire format, importing the real `thumbPack.ts`.
+- `test/unit/thumbPack.test.ts`: the real `thumbPack.ts` packfile wire format.
 - `test/unit/thumbPackFlush.test.ts`: the pack's *lifetime*. The real `ThumbnailService` generates
   real thumbnails into a real temp `globalStorageUri` through the fs-backed `vscode` mock, then closes.
-- `test/unit/thumbCacheKeying.test.ts`: a real in-place overwrite with mtime and size restored, and
-  the eviction of the key it superseded.
+- `test/unit/thumbCacheKeying.test.ts`: a real in-place overwrite (mtime and size restored) and the
+  superseded key's eviction.
 - `test/unit/thumbCacheExpiry.test.ts`: a backdated cache dir swept while the pack is in use, and a
-  pack deleted under a live session that the close puts back.
-- `test/unit/thumbTierStats.test.ts` and `test/unit/thumbSharedWait.test.ts`: the real
+  pack deleted mid-session that the close puts back.
+- `test/unit/thumbTierStats.test.ts`, `test/unit/thumbSharedWait.test.ts`: the real
   `ThumbnailService`'s tier and pack-load accounting.
+
+`test/unit/pngTextChunk.test.ts` uses Sharp to mint a fixture PNG and re-read it, so a native Sharp
+must load for that one test to run, but it exercises Sharp incidentally, not the loader or tiers.
 
 The two fallback tiers are pinned as far as this machine can honestly reach, and no further.
 `sharpLoader.ts` is ordinary bundled source; of the npm packages only `sharp` is external (the host
@@ -431,8 +435,8 @@ provides `vscode`). There is no seam to stub, so both suites play the *environme
 
   When one is deleted anyway (another window's sweep, this window's un-awaited one racing the load, a
   manual clear), the session that loaded it must put it back. At every publish decision that would
-  otherwise write nothing, `packGone` stats the pair, and a missing half marks the cache dirty; a
-  fully warm session produces no other signal that would. A violation shows up only as one
+  otherwise write nothing, `packGone` stats the pair and a missing half marks the cache dirty, since
+  a fully warm session produces no other signal that would. A violation shows up only as one
   inexplicably cold open per `cacheMaxAgeDays`, on the mounts where it hurts most.
 - **`sharp-externalized`** — Sharp stays externalized. Bundling it breaks native binary resolution
   and disables the `Module._resolveFilename` workaround entirely.
@@ -455,8 +459,8 @@ provides `vscode`). There is no seam to stub, so both suites play the *environme
   and identical dimensions, or the backend in use becomes user-visible.
 - **`metadata-written-twice`** — crop metadata is written twice: EXIF (Sharp only, inside
   `thumbnailService.cropImage`) *and* a PNG `tEXt` chunk, injected once for every render path by the
-  shared crop flow in `cropFlow.ts`. The Jimp path cannot write EXIF, and the tEXt chunk is the
-  cross-tool contract. Readers must accept either.
+  shared crop flow in `cropFlow.ts`, because the Jimp path cannot write EXIF and the tEXt chunk is
+  the cross-tool contract. Readers must accept either.
 - **`passthrough-no-backend`** — browser-decodable formats never touch a backend in `loadFullImage`,
   not even for `metadata()`.
 - **`all-platform-targets-built`** — the publish matrix covers every platform target VS Code can ask

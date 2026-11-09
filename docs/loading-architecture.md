@@ -37,6 +37,7 @@ Bounded · Prioritized · Cancellable · Identity-checked · Guaranteed-response
 One process-wide `WorkPool` (`sharedWorkPool()`) schedules every **display** read/decode: full
 images, thumbnails, and the existence poll. The provider keeps it. `workPool.ts` has no node
 imports, so the standalone adapter bundles it and runs its own instance (`docs/standalone.md`).
+
 Its size comes from *usable* parallelism:
 `availableParallelism <= 2 ? 1 : min(availableParallelism - 1, 4) + 2`, so 1 or 4..6. A 1-2 core
 box keeps its single slot: it has no second core to overlap the JS round-trip onto. The ceiling is
@@ -360,14 +361,11 @@ the wait it can impose, and at concurrency 1 the one running sweep item can stil
 
 It is a one-shot fire from `sendInitData`, never *skipped* for a hidden panel, only paused while it
 is hidden. Cancelling or skipping it leaves blank thumbnails until something re-requests them. Two
-things re-request:
-
-- `requestThumbnails`, which the webview posts on tuple add (that row) and on modality add/remove
-  (every tuple)
-- `regenerateThumbnail`, for a single slot. The watcher fires it when the slot's file changed, was
-  restored, renamed, or newly placed. The existence sweep fires it for each image in a modality
-  directory it adopts (`adoptNewModalityDir`), and for each unknown file its per-directory listing
-  hands to `handleFileCreated`.
+things re-request: `requestThumbnails`, which the webview posts on tuple add (that row) and on
+modality add/remove (every tuple), and `regenerateThumbnail`, for a single slot. The watcher fires
+it when the slot's file changed, was restored, renamed, or newly placed. The existence sweep fires
+it for each image in a modality directory it adopts (`adoptNewModalityDir`), and for each unknown
+file its per-directory listing hands to `handleFileCreated`.
 
 The second is the common one: an in-place overwrite on every training step refills that slot. A
 skipped slot is not necessarily blank for the life of the panel.
@@ -448,6 +446,7 @@ virtual carousel already does to decide which rows to materialise. Both hosts pa
 the aim's `radius`. It is reported, not assumed, because a "screenful" spans an order of magnitude.
 Tile size is the carousel width divided by the modality count, so a 3-modality session shows ~7
 rows and a 30-modality one, at the tile floor, ~34.
+
 A host that reports nothing gets `SWEEP_CROSS_RADIUS` (12), deliberately on the small side: an
 under-estimate costs only reach along the column, an over-estimate costs the rectangle (the table
 below). Zero and negative reports are floored at one row, so a collapsed carousel still gets a
@@ -505,7 +504,7 @@ in both products. So the **webview** gates the post:
   started.
 
 Gating at the source is available here, not for the row. `setCurrentTuple` has a second consumer
-that must stay ungated (`cancelImageLoads`); `setCurrentModality` has exactly one. The coalescing
+that must stay ungated (`cancelImageLoads`); `setCurrentModality` has exactly one, so the coalescing
 also keeps a held key off the wire. And only the webview can tell a pick from a burst: the policy
 sees one message shape, whoever sent it. That gate is `ColumnReportGate`
 (`src/webview/tupleLoadPlan.ts`), pure and unit-pinned rather than DOM-pinned. It cannot diverge
@@ -587,10 +586,10 @@ against the pool width (5 here, 1..6 in general):
   queue cannot empty. Anything ≥ 2× the width would do; the margin costs nothing.
 - **Not so big that a re-aim churns.** The re-centre lag no longer depends on the chunk (see
   "Cancelling on re-aim"). An oversized chunk costs the *cancel-and-re-dispatch* work of each jump.
-  On the cold 115×9 harness below, one jump cancels `chunk - 5` slots: 3 at chunk 8, 27 at 32, 123
-  at 128. None had started, so the cost is bookkeeping, not IO. 32 is ~7× the effective bulk width
-  and was left alone on this evidence. Going lower buys nothing the anti-starvation bullet does not
-  already spend.
+  Measured on the cold 115×9 harness below, one jump cancels `chunk - 5` slots: 3 at chunk 8, 27 at
+  32, 123 at 128. None had started, so the cost is bookkeeping, not IO. 32 is ~7× the effective bulk
+  width and was left alone on this evidence. Going lower buys nothing the anti-starvation bullet
+  does not already spend.
 
 Measured at 746×10 on a virtual-clock harness calibrated to the field log: 4.65 KB per tile on a
 ~2 MB/s channel, 11.45 ms per slot (21 184 ms × the pool's 4 effective bulk slots ÷ 7 398 items).
@@ -609,9 +608,9 @@ seconds into the sweep:
 Total time is unchanged by construction (same slots, same pool, only the order), and that is the
 point. This buys latency for the row in front of the user, not throughput.
 
-The last row is the honest limit of this round. A warm pack on a slow link produces tiles faster
-than the channel drains them: 2 ms per slot against 2.3 ms per tile of wire. The backlog then moves
-off the pool queue onto the *wire* queue, which nothing here re-orders. Thumbnail
+The last row is the honest limit of this round. When the extension can produce tiles faster than the
+channel drains them (a warm pack on a slow link: 2 ms per slot against 2.3 ms per tile of wire), the
+backlog moves off the pool queue onto the *wire* queue, which nothing here re-orders. Thumbnail
 posts go to `postMessage` FIFO, and the transport budget covers only speculative *image* pushes.
 Re-centring still helps (9.5 s → 7.3 s) but cannot beat a queue it does not own. Pacing or
 re-ordering the thumbnail wire is a separate lever, and a separate round.
@@ -908,12 +907,12 @@ Three rules, in the order they are applied to an `image` push:
 
 In flight means *posted but not acknowledged*. The release signal is the `Thenable` returned by
 `webview.postMessage`, which on a remote window resolves only after a round trip through the same
-link. Two honest limits follow:
+link.
 
-- If a future VS Code resolved that promise eagerly, rule 3 would degenerate to a no-op. Rule 2,
-  which needs no ack, would still hold, and rule 2 is what the trace indicts.
-- If the promise never settles (a disposed webview mid-post), a 30 s watchdog releases the credit.
-  A lost ack costs one stalled wave rather than a session with prefetch switched off.
+Two honest limits follow. If a future VS Code resolved that promise eagerly, rule 3 would degenerate
+to a no-op. Rule 2, which needs no ack, would still hold, and rule 2 is what the trace indicts. If
+the promise never settles (a disposed webview mid-post), a 30 s watchdog releases the credit, so a
+lost ack costs one stalled wave rather than a session with prefetch switched off.
 
 Both watchdogs (the ack timers and the sweep's stall timer) are tracked on the panel and cleared in
 `disposePanel`, so a timer does not retain a closed panel for half a minute.
@@ -1198,8 +1197,8 @@ Opening a panel is asynchronous, and step order is load-bearing:
 2. **A dispose during the initial scan is probed explicitly** (`earlyDispose`). The real
    `onDidDispose` can only attach after the scan, so a close in that window would otherwise leak the
    panel's watchers and timers.
-3. **Per-panel disposables go in `panelSubscriptions`, never the provider-wide `disposables`.** The
-   provider outlives every panel, so registering there leaks one entry per open/close for the session.
+3. **Per-panel disposables go in `panelSubscriptions`.** The provider outlives every panel, so
+   registering on it leaks one entry per open/close for the session.
 
 ## Invariants
 
@@ -1249,11 +1248,12 @@ Opening a panel is asynchronous, and step order is load-bearing:
   (130 x 5.7 ms) and **HitTest** (363 x 1.9 ms), against **270 ms** of script. The cost of this
   carousel is the size of its DOM, not the work its code does. The wall is one promoted layer
   (`will-change: transform`) holding `rowPool x colPool` tiles; without containment a change
-  anywhere in it invalidates paint across the whole thing. The same measurement keeps
-  `CAROUSEL_OVERSCAN` small: every buffered row is DOM painted and hit-tested whether or not it is
-  seen. It was briefly raised to 10 on a guess about blank rows that `images-fill-progressively` had
-  already made moot. Profile before optimising anything here: three fixes on this path targeted
-  script and image decode before a trace showed where the time goes.
+  anywhere in it invalidates paint across the whole thing.
+
+  The same measurement keeps `CAROUSEL_OVERSCAN` small: every buffered row is DOM painted and
+  hit-tested whether or not it is seen. It was briefly raised to 10 on a guess about blank rows that
+  `images-fill-progressively` had already made moot. Profile before optimising anything here: three
+  fixes on this path targeted script and image decode before a trace showed where the time goes.
 - **`images-fill-progressively`** — a bind never pays for a thumbnail. While a wheel moves the wall,
   a bound tile takes the shared blank. When the gesture settles, a budgeted filler gives tiles their
   real image a few per frame, nearest row to the current one first. Both halves are measured, on the
@@ -1303,13 +1303,14 @@ Opening a panel is asynchronous, and step order is load-bearing:
   frozen scrolling. Both are index lookups now. Rows are ring-mapped (`slot = tupleIndex % pool`), so
   the row holding a tuple is arithmetic, and each row's tiles and circles are captured once at
   creation in `rowParts`. A tile is `parts.imgs[displayIndex % colPool]`, and only when
-  `colBound[slot]` still holds that column. The ring mapping makes this possible at all, so a change
-  to it must keep `carouselTileFor` honest. It verifies `carouselRowBound[slot] === tupleIndex`
-  before returning; a slot bound to another tuple correctly returns null rather than the wrong
-  tile. Since `columns-virtualize-like-rows`, the lookup also passes through the column ring: a
-  column not on screen has no tile and correctly returns null, and the thumbnail waits in the url
-  cache until it scrolls in. This removed a constant factor; the term was the tile count, which is
-  that invariant's.
+  `colBound[slot]` still holds that column.
+
+  The ring mapping makes this possible at all, so a change to it must keep `carouselTileFor` honest.
+  It verifies `carouselRowBound[slot] === tupleIndex` before returning; a slot bound to another
+  tuple correctly returns null rather than the wrong tile. Since `columns-virtualize-like-rows`, the
+  lookup also passes through the column ring: a column not on screen has no tile and correctly
+  returns null, and the thumbnail waits in the url cache until it scrolls in. This removed a
+  constant factor; the term was the tile count, which is that invariant's.
 - **`wheel-coalesced-to-one-frame`** — the carousel's row axis is a virtualized wall: an offset
   change rebinds rows and repaints every tile in them. Before `columns-virtualize-like-rows` that
   was *every modality* of each bound row, so the work per apply scaled with the modality count. It
@@ -1430,9 +1431,11 @@ Opening a panel is asynchronous, and step order is load-bearing:
   arrival flush in `setCurrentTuple` empties *every* held payload for the arrived tuple in one turn.
   The second is the larger excursion. Its worst case is one whole tuple's images at once (six 16 MB
   modalities ≈ 96 MB against an 8 MB budget), so the bound holds on admission, not on instantaneous
-  bytes in flight. Re-gating either flush is *not* the fix. It would either withhold user-facing
-  held payloads (breaking `user-pushes-never-withheld`, since the hold does not record which pushes
-  were speculative) or need a re-park loop around the one timer that keeps a scrub responsive.
+  bytes in flight.
+
+  Re-gating either flush is *not* the fix. It would either withhold user-facing held payloads
+  (breaking `user-pushes-never-withheld`, since the hold does not record which pushes were
+  speculative) or need a re-park loop around the one timer that keeps a scrub responsive.
 
   The sweep claim is raised in `generateAllThumbnails` and released only through `endSweep`: the
   sweep's settle, a synchronous throw out of its prologue, the idle stall watchdog, or panel
@@ -1811,8 +1814,8 @@ Opening a panel is asynchronous, and step order is load-bearing:
   were keyed and cancelled from the start and the current-tuple loads were not, so a panel
   accumulated one queued load per modality per tuple ever visited. Every site is a way to break it:
   the key at submit, the cancel on `setCurrentTuple`, and the cancel on dispose. `pool.cancel`
-  matches exactly, so `poolKey` does not cover these keys, and a panel closed mid-browse would keep
-  reading files for a view that is gone.
+  matches exactly, so `poolKey` does not cover these keys, and a panel closed mid-browse would
+  otherwise keep reading files for a view that is gone.
   It is not a silence under `reply-exactly-once`: a cancelled serve never started, and `loadTuple`
   re-requests every uncached slot on revisit. The standalone adapter carries the same wiring, for
   the same reason.

@@ -97,11 +97,11 @@ extension does not.
 One more difference is a fact neither host may invent. An emptied comparison reaches the same
 terminal notice here, through the same bundle (`docs/loading-architecture.md: empty-comparison-is-terminal`),
 but only the extension can also say *why*. A File System Access root handle cannot distinguish a
-deleted directory from an unreadable one. The standalone never sends the `rootMissing` edge the
+deleted directory from an unreadable one, so the standalone never sends the `rootMissing` edge the
 provider's base-dir sweep sends (`docs/file-watching.md: root-loss-reported-as-an-edge`), and the
 notice keeps its generic wording. `scripts/check-sidedness.mjs` gate (e) enforces that silence both
 ways: it fails if anything the standalone ships posts the message, or if the provider stops posting
-it. A rule guarding a message nobody sends guards nothing.
+it, since a rule guarding a message nobody sends guards nothing.
 
 **How much is actually shared, and why not more.** Both products run one implementation of the UI
 (the real `dist/webview.js` plus `src/webviewShell.ts`, ~3 700 lines) and one of the decisions
@@ -332,8 +332,8 @@ A restore reads the names against the comparison as it lists now. A name that is
 A modality the save never saw keeps its default place after the saved ones. An unmatched tuple or
 modality leaves the view at its default.
 
-Restoring is navigation. The order, hidden set, tuple, modality and zoom are applied once, at the
-first `init`, through the actions keys and drags take. Loading sees an ordinary navigation
+Restoring is navigation. The order, hidden set, tuple, modality and zoom are applied once, at
+first `init`, through the actions keys and drags take, so loading sees an ordinary navigation
 (`view-restore-is-navigation`).
 
 Only a host that states `restoresView` keeps a view (`view-kept-only-where-stated`). The published
@@ -424,14 +424,14 @@ recipe in the skill.
   is told afterwards. A host contributes capability **flags** (`HostCapabilities` on `init`) and the
   **implementation** of an action it was asked to serve, never an item, a label or an enablement
   rule. No shared code asks *which* product it is running in; it asks what this host can do.
-  Before this rule, `package.json` contributed the context menu
+  The rule exists because `package.json` once contributed the context menu
   (`contributes.menus["webview/context"]`), dispatched through five extension commands. That put a
-  *decision*, the item set and its `when` clauses, outside the import graph. There
+  *decision*, the item set and its `when` clauses, outside the import graph, where
   `check-sidedness.mjs` structurally cannot see it, so neither gate (c) nor the shared-module list
-  could notice. The standalone had no menu at all: right-click fell through to the browser's own.
-  Hide/Show Modality, whose only trigger in either product was that menu, was unreachable for the
-  life of the build, while the *shared* help modal advertised it. Rendering the menu in the webview
-  makes it shared **by construction**, not by a list somebody maintains.
+  could notice. The standalone therefore had no menu at all: right-click fell through to the
+  browser's own. Hide/Show Modality, whose only trigger in either product was that menu, was
+  unreachable for the life of the build, while the *shared* help modal advertised it. Rendering the
+  menu in the webview makes it shared **by construction**, not by a list somebody maintains.
   Gate: `scripts/check-sidedness.mjs` gate (f) fails the build if the manifest contributes a
   `webview/context` menu again. It also fails if a menu item's label text appears anywhere in
   `src/`, `standalone/` or the manifest but the model. It matches bare text, not just a quoted
@@ -444,21 +444,21 @@ recipe in the skill.
 - **`host-supplies-data-not-policy`** — a host may hand a shared runner **data** (where the user is,
   what the webview reported) and **primitives** (a timer, a pool, a post), never a **decision**. The
   distinction is not pedantry. `runThumbnailSweep` takes its aim as an injected callback. For two
-  commits each host hand-built that callback. ff11b92's trailing-edge re-aim dwell landed in
-  `imageCompareProvider.ts`, and the standalone silently kept chasing the cursor
+  commits each host hand-built that callback, so ff11b92's trailing-edge re-aim dwell landed in
+  `imageCompareProvider.ts` and the standalone silently kept chasing the cursor
   (`docs/loading-architecture.md: sweep-centre-dwells`). `POLICY_SEAMS` in
   `scripts/check-sidedness.mjs` names every such injected decision. It fails the build when a host
   stops importing the shared factory, hand-builds the injected value, or stops feeding the factory
-  its raw reports. The list is curated rather than derived. The general form ("no callback may
-  contain host logic") is unenforceable without false positives, and a gate people can read beats
-  one they cannot. Each seam has two sites, the two hosts (`imageCompareProvider.ts`,
+  its raw reports. The list is curated rather than derived because the general form ("no callback
+  may contain host logic") is unenforceable without false positives, and a gate people can read
+  beats one they cannot. Each seam has two sites, the two hosts (`imageCompareProvider.ts`,
   `standalone/adapter.ts`), exactly where the divergence can reappear. Structure alone is not the
   proof: `test/unit/sweepHostEquivalence.test.ts` drives the same burst through both real hosts and
   requires identical traces. That test would have caught the original leak.
-- **`results-format-shared`** — `results.txt` parse and serialize live only in
-  `src/resultsFile.ts`. The extension's `fileService` wrappers and the standalone adapter both call
-  them, so the two products can never disagree about the file format (user data both read and
-  write).
+- **`results-format-shared`** — `results.txt` parse and serialize live only in `src/resultsFile.ts`.
+  The extension calls them through `fileService`'s `readResultsFile` and through `persistResults`,
+  the adapter directly, so the two products never disagree about the file format (user data both
+  read and write).
 - **`deck-layout-shared`** — PPTX slide selection, pairing and layout live only in
   `src/pptxDeck.ts`, parameterized over an IO interface (image loading, crop metadata). The provider
   and the adapter inject IO, never layout.
@@ -488,9 +488,9 @@ recipe in the skill.
   was. That covers any non-OK response, an HTML page in its place (as from a host that rewrites every
   path to one page), and a throwing fetch (as on `file://`). Present, it opens a comparison of
   exactly the listed files, each fetched by its relative URL, unless the user has already opened a
-  folder, which wins. `files` is a listing, not a configuration. The shared scanner the
-  dropped-folder path uses decides what the files mean (columns, tuples, names, order). A
-  published comparison can never be laid out differently from the same folder opened locally. `host`
+  folder, which wins. `files` is a listing, not a configuration: the dropped-folder path's
+  shared scanner decides what the files mean (columns, tuples, names, order), so a published
+  comparison can never be laid out differently from the same folder opened locally. `host`
   and `thumbs` change what the page offers and how fast the strip fills, never what the files mean.
   The manifest is reported on the landing rather than opened when:
   - `files` is not a non-empty list of relative paths inside the page's directory;

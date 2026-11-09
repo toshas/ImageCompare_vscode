@@ -83,7 +83,10 @@ export: pooled at `EXPORT`", for how they are scheduled and what they cost.
 ### `_cropNN` is a cross-file contract
 
 `nextCropName` in `cropPlan.ts` writes `_crop${String(n).padStart(2, '0')}`. The invariant
-`cropnn-writer-reader-match` below lists every reader. The writer's format and those readers'
+`cropnn-writer-reader-match` below lists every reader. Among them, `pptxDeck.ts` pairs crops with
+their parents through `^…_crop\d+$` (`findCropTuples`, `findParentTuple`), and `fileService.ts`
+matches `/_crop\d+$/` to deprioritize crop references
+(`docs/tuple-matching.md: crop-never-beats-noncrop`). The writer's format and those readers'
 patterns must keep agreeing. Break the agreement and nothing throws: crops start winning matches away
 from originals, and tuples quietly bind the wrong files.
 
@@ -203,6 +206,7 @@ naming and rect math, and `cropMath` pins the screen mapping. `pptxDeck`, `expor
   `DECK_IMAGE_MAX_DIM`/`DECK_JPEG_QUALITY` in `pptxDeck.ts` (2560px longest side, quality 85),
   shared by whichever backend runs: Sharp, `ThumbnailService.capSlideImage` (Jimp) when Sharp is
   absent, or the standalone's canvas encode.
+
   The one exception is the no-backend last resort: when Sharp and Jimp both fail to load (already a
   hard-error state for thumbnails), original bytes pass through uncapped. Not a quality preference:
   pptxgenjs zips with jszip (3.10.1 installed). Its *read* path handles ZIP64 (`lib/signature.js`,

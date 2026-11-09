@@ -278,8 +278,8 @@ Where this reflects a decision rather than an accident:
 
   The *file* half of that is harmless by accident, not by design. A failed listing does make every
   tracked name a removal candidate. But `applyExternalRemoval` resolves a candidate by its
-  synthesized `<dir>/<name>`, in a file list `<root>/<modality>/<file>`. That matches no image's real
-  URI, so every removal is a no-op.
+  synthesized `<dir>/<name>`, which in a file list is `<root>/<modality>/<file>`. That matches no
+  image's real URI, so every removal is a no-op.
 
   The gate exists for the cycle's **tail**: `pollResults` reads `<root>/results.txt` and posts
   `winnersReset` on any change. In a file list that file belongs to nobody, because voting is off
@@ -409,21 +409,18 @@ never poll at all.
 
 ## What is pinned
 
-`pollPlan.test.ts` pins the
-barren-dir budget/mtime policy, the name-first/lazy-fingerprint diff, the per-directory
-arrivals-and-candidates plan (including the unlistable-dir and not-a-file rules), and rename
-pairing; `pollCost.test.ts` drives the **real** `runDeleteSweep` over temp dirs and pins what one
-cycle costs (per directory, not per file) together with the three cases that must survive that:
-a real deletion, a directory that cannot be listed, and a tracked file turned dangling symlink.
-`adoptionPlan.test.ts` pins the
-adoption qualification/imageful gates and the column-insert mutations and payload. For
-`watcherLogic.test.ts`, `arrivalPlan.test.ts` and `removalPlan.test.ts`, their rows in
-`docs/testing.md`, "The suites", say what they pin. `removalPlan.test.ts` also pins the
-`commitSlotRemoval` commit transcripts.
-The provider-side glue
-around them imports `vscode` and is therefore untested; exercise it
-by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to see `onDidCreate` /
-`fs.watch` / `poll delete detected` as `[IC-EXT]` lines in the "ImageCompare" output channel.
+`pollPlan.test.ts` pins the barren-dir budget/mtime policy, the name-first/lazy-fingerprint diff,
+the per-directory arrivals-and-candidates plan (including the unlistable-dir and not-a-file rules),
+and rename pairing; `pollCost.test.ts` drives the **real** `runDeleteSweep` over temp dirs and pins
+what one cycle costs (per directory, not per file) together with the three cases that must survive
+that: a real deletion, a directory that cannot be listed, and a tracked file turned dangling
+symlink. `adoptionPlan.test.ts` pins the adoption qualification/imageful gates and the column-insert
+mutations and payload. For `watcherLogic.test.ts`, `arrivalPlan.test.ts` and `removalPlan.test.ts`,
+their rows in `docs/testing.md`, "The suites", say what they pin. `removalPlan.test.ts` also pins
+the `commitSlotRemoval` commit transcripts. The provider-side glue around them imports `vscode` and
+is therefore untested; exercise it by hand per `docs/testing.md`, "Manual checks", with
+`imageCompare.debug` on to see `onDidCreate` / `fs.watch` / `poll delete detected` as `[IC-EXT]`
+lines in the "ImageCompare" output channel.
 
 ## Invariants
 
@@ -587,8 +584,8 @@ by hand per `docs/testing.md`, "Manual checks", with `imageCompare.debug` on to 
   watchers and its `watchedDirs` entry. Mode 2 deliberately keeps both: nothing re-adopts a directory
   there, so releasing would leave the column permanently deaf if it came back. Otherwise a pipeline
   that rotates output directories would accumulate one watcher pair per directory until the inotify
-  limit breaks watching for the whole editor. A directory deleted and recreated would keep a handle
-  bound to the dead inode.
+  limit breaks watching for the whole editor, and a directory deleted and recreated would keep a
+  handle bound to the dead inode.
 - **`poll-diff-names-first`** — a poll/sweep listing diff is decided on the name *set* first.
   Fingerprints (mtime/size) are consulted only for names present on both sides, and a side missing a
   fingerprint never yields `changed`. This lets the browser adapter defer its per-entry `getFile()`

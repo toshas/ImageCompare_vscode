@@ -370,7 +370,7 @@ fixed.
   shell. The policy that produces the unit IS mutation-covered, in `test/unit/modePolicy.test.ts`.
   Limits: the seventh is labelled in the file as a regression guard for the tuple path, which
   passed before too.
-- **The standalone in mode 3, by mutation.** The adapter's poll must stay off a shape whose
+- **The standalone in mode 3, by mutation.** The adapter's poll stays off a shape whose
   `<root>/<modality>` directories do not exist. What stands in: `standalone opens a folder of loose
   images, and never polls a results.txt it does not own` is the only check. It asserts the effect
   that dies with the gate: a stray `results.txt` in the folder read and pushed back as
@@ -505,19 +505,18 @@ fixed.
   (Manual checks); a failure shows as VS Code's default menu over ours in the panel. Layer 3 pins
   *our* side (the event default-prevented and our menu open, in the harness and in the real
   standalone artifact). Limits: the extension's serving half (`handleMenuAction`, `resolveMenuTarget`,
-  `revealPath`, `postNotice`) is uncovered, like the rest of the provider; its standalone twin is
-  covered against the real artifact.
+  `revealPath`, `postNotice`) is uncovered, for the same reason the rest of the provider is; its
+  standalone twin is covered against the real artifact.
 - **Most of `imageCompareProvider.ts`** (the largest file). The provider's message loop, watcher
   wiring and PPTX export run untested. Only their pure helpers (`watcherLogic`, `workPool`,
-  `pngText`, …) are extracted and pinned; prefer that shape for new logic. The
-  integration layer covers activation, command registration, real-fs scanning, results.txt I/O, and
-  the real API's entry types (the dangling-symlink premise every `type & FileType.File` gate rests
-  on).
-
-  Limits: **no mutation covers that entry-type case**. Only the integration layer pins it, which the
+  `pngText`, …) are extracted and pinned; prefer that shape for new logic. The integration layer
+  covers activation, command registration, real-fs scanning, results.txt I/O, and the real API's
+  entry types (the dangling-symlink premise every `type & FileType.File` gate rests on). Limits:
+  **no mutation covers that entry-type case**. Only the integration layer pins it, which the
   Vitest-only mutation harness cannot run, so its premise was confirmed by hand against the shipped
-  VS Code source. What stands in for a mutation: the rule it protects, the `type & FileType.File`
-  gate in `listImagesIn`, stays covered by the `symlink: broken link accepted` mutation.
+  VS Code source. What stands in for a mutation on the code side: the rule it protects, the
+  `type & FileType.File` gate in `listImagesIn`, stays covered by the
+  `symlink: broken link accepted` mutation.
 - **The standalone poll's snapshot pruning.** `runPollCycle` ends by dropping `s.snapshots` entries
   whose modality column is gone. Nothing pins that block and nothing at the wire level can. The
   cycle that removes a column has already overwritten that dir's snapshot with `[]` (an unlistable
@@ -543,10 +542,10 @@ fixed.
 - **The webview's pixels.** The Playwright layer drives the real bundle but asserts logic through
   the state hook — no pixel snapshots — so canvas rendering and visual layout are verified by eye
   (the demo gallery and the manual checks below).
-- **Packaging.** Nothing checks the `.vscodeignore` un-ignore list's other entries (`sharp` itself,
-  `detect-libc`, `semver`), whose failure mode is identical and silent. By contrast, one CI step
-  scans the VSIX for the wasm32 tier (`docs/image-backends.md`), which transitively pins two entries
-  (`@img`, `@emnapi`).
+- **Packaging.** One CI step scans the VSIX for the wasm32 tier (`docs/image-backends.md`), which
+  transitively pins two entries of the `.vscodeignore` un-ignore list (`@img`, `@emnapi`). Nothing
+  checks its other entries (`sharp` itself, `detect-libc`, `semver`), whose failure mode is
+  identical and silent.
 
 ## Findings (caught by this testbed)
 
@@ -705,12 +704,12 @@ fixed.
   same reason, and both closed the same way: **fake the platform's verdict at the `node:fs` seam,
   never the filesystem**.
 
-  `vi.mock('node:fs', …)` replaces exactly one function (`watch` there, `promises.access` here, only
-  for paths a test lists as lying), leaving the real symlink, listing and provider in play. Without
-  that stub the mutations below are no-ops on Linux and survive; with it they are killed. Three
-  mutations in `scripts/mutation-check.mjs`, one per probe, each verified SURVIVING with the two new
-  tests reverted. When a `node:fs` call's *contract* differs across platforms, assume the POSIX
-  runner cannot see it and stub the seam.
+  `vi.mock('node:fs', …)` replaces exactly one function (`watch` there; `promises.access` here, and
+  here only for paths a test lists as lying), leaving the real symlink, listing and provider in
+  play. Without that stub the mutations below are no-ops on Linux and survive; with it they are
+  killed. Three mutations in `scripts/mutation-check.mjs`, one per probe, each verified SURVIVING
+  with the two new tests reverted. When a `node:fs` call's *contract* differs across platforms,
+  assume the POSIX runner cannot see it and stub the seam.
 
 - **One message, two consumers with opposite latency needs: the sweep chased a held key** *(fixed)* —
   `setCurrentTuple` is posted ungated on every navigation so `cancelImageLoads` can kill stale
@@ -731,10 +730,10 @@ fixed.
   `test/unit/sweepHostEquivalence.test.ts` drives the *same* held-key burst through both **real**
   hosts: the real provider, and the real `standalone/adapter.ts` (browser globals stubbed, opened on
   a fake FSA handle). The two traces must be identical and equal to the literal ff11b92 pinned. That
-  suite is why the mutation sandbox carries `standalone/`: two entries mutate the adapter, and only
-  this suite kills them. `scripts/check-sidedness.mjs` gained a third gate for the structural half,
-  `POLICY_SEAMS`, a curated list of injected decisions that fails when a host hand-builds one. Run
-  against the ff11b92 and 32f73a0 trees, it names both hosts and quotes the offending line
+  suite is why the mutation sandbox carries `standalone/`: three entries mutate the adapter, and
+  only this suite kills them. `scripts/check-sidedness.mjs` gained a third gate for the structural
+  half, `POLICY_SEAMS`, a curated list of injected decisions that fails when a host hand-builds one.
+  Run against the ff11b92 and 32f73a0 trees, it names both hosts and quotes the offending line
   (`docs/standalone.md: host-supplies-data-not-policy`).
 
 - **A clicked column never reached either host, so the sweep filled column 0** *(fixed)* — the aim's
@@ -1225,8 +1224,7 @@ fixed.
   Two things close it. `test/unit/shimParity.test.ts` runs the real `performCrop` with
   `globalThis.Buffer` stubbed to the real shim (the substitution esbuild's `inject` makes for the
   bundle), against a `renderCrop` returning a plain `Uint8Array`, as a canvas blob does. It
-  reproduces `cropError` on the unfixed shim and kills both mutations.
-
+  reproduces `cropError` on the unfixed shim and kills both mutations. And
   `scripts/check-sidedness.mjs` gate (d) makes the class mechanical: it walks the standalone
   bundle's closure (which it already derives) and resolves every `Buffer.x` / `path.x` /
   `vscode.a.b` chain against the shim's **real** runtime surface, obtained by bundling and
