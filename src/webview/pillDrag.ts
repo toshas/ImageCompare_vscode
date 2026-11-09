@@ -24,6 +24,16 @@ type Drag = {
   rowLeft: number; rowRight: number; startX: number; clientX: number; raf: number;
 };
 
+/** A pill's untransformed left and width, from its drawn rect and its current, possibly mid-transition, scale-and-translate about its origin. */
+function restingSpan(el: HTMLElement): { left: number; width: number } {
+  const r = el.getBoundingClientRect();
+  const cs = getComputedStyle(el);
+  if (cs.transform === 'none') return { left: r.left, width: r.width };
+  const m = new DOMMatrixReadOnly(cs.transform);
+  const ox = parseFloat(cs.transformOrigin);
+  return { left: r.left - m.e - ox * (1 - m.a), width: r.width / m.a };
+}
+
 /** Installs the row's pointer gestures; the row is rebuilt only by `onDrop`, never here. */
 export function installPillDrag(rowEl: HTMLElement, actions: PillDragActions): void {
   let press: Press | null = null;
@@ -50,13 +60,8 @@ export function installPillDrag(rowEl: HTMLElement, actions: PillDragActions): v
     const pills = Array.from(rowEl.querySelectorAll<HTMLElement>('.modality-btn'));
     const from = pills.indexOf(pill);
     if (from < 0 || pills.length < 2) { press = null; return; }
-    // Rects, not offsets, which round to whole px while pills sit at fractional ones; a hover or glide transform is set aside to read them.
-    const moving = pills.filter((el) => getComputedStyle(el).transform !== 'none');
-    for (const el of moving) { el.style.transition = 'none'; el.style.transform = 'none'; }
-    const boxes = pills.map((el) => el.getBoundingClientRect());
-    for (const el of moving) el.style.transform = '';
-    void rowEl.offsetWidth;
-    for (const el of moving) el.style.transition = '';
+    // Rects, not offsets, which round to whole px while pills sit at fractional ones; a hover or glide transform is undone in arithmetic, so a glide keeps running.
+    const boxes = pills.map(restingSpan);
     const lefts = boxes.map((b) => b.left);
     const widths = boxes.map((b) => b.width);
     const gap = from + 1 < pills.length ? lefts[from + 1] - lefts[from] - widths[from] : lefts[from] - lefts[from - 1] - widths[from - 1];

@@ -140,9 +140,15 @@ test.describe('pill drag-reorder (mouse)', () => {
   });
 
   test('a lifted end pill, its lift scale included, stays within the row\'s ends at either end of a drag', async ({ page }) => {
-    await loadInited(page, FOUR);
+    // Long labels, so a lift scaled about the resting end pill's outer edge instead of its centre lands
+    // (1.08 - 1) / 2 x ~160 px = ~6.4 px past the end, not the 1.1 px a one-letter pill gave.
+    await loadInited(page, { ...FOUR, labelsExplicit: true, modalities: ['FIRST_a_rather_long_modality_label', 'SECOND_long_modality_label', 'THIRD_long_modality_label', 'FOURTH_long_modality_label'] });
     // Fractional pill widths whatever the fonts: whole-pixel offsets put the clamp ~1.3 px past the far end here.
-    await page.addStyleTag({ content: FRACTIONAL_PILLS_CSS });
+    // The long pills take FRACTIONAL_PILLS_CSS's fractions on a fixed width, so no runner's font moves them.
+    await page.addStyleTag({ content: `${FRACTIONAL_PILLS_CSS}
+.modality-btn { width: 160.0625px; overflow: hidden; }
+.modality-btn:nth-child(1) { width: 160.4375px; }
+.modality-btn:nth-child(4) { width: 160.5625px; }` });
     const rect = (i: number) => page.locator('#modality-selector .modality-btn').nth(i).evaluate((el) => {
       const r = el.getBoundingClientRect();
       return { left: r.left, right: r.right, width: r.width, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 };
@@ -157,6 +163,7 @@ test.describe('pill drag-reorder (mouse)', () => {
       const end = await rect(3);
       const p = await rect(i);
       expect(p.width % 1).not.toBe(0);
+      expect(p.width).toBeGreaterThan(160);
       expect(await scrollLeft()).toBe(0);
       await page.mouse.move(p.cx, p.cy);
       // Pressed fully hovered, as a hand presses: the hover scale must not leak into the measured row.
@@ -176,6 +183,75 @@ test.describe('pill drag-reorder (mouse)', () => {
       await page.mouse.up();
       expect((await getState(page)).modalityOrder).toEqual(order);
     }
+  });
+
+  // Under FRACTIONAL_PILLS_CSS the rect midpoints and the whole-px offset ones differ by up to 0.9 px
+  // (pill 3: 204.625 vs 205.5 from pill 0), and a pill's pitch by 0.44 px (68.4375 vs 68), so a drop
+  // 0.2 px either side of the true midpoint and the slide's exact distance both pin the rects. Watched
+  // failing with `mids` built from offsetLeft + offsetWidth / 2, and with `shift` as
+  // offsetWidth + round(gap).
+  test('under fractional pill widths the drop slot turns at the true midpoint and the pills slide by the true pitch', async ({ page }) => {
+    for (const [past, order] of [[-0.2, [1, 2, 0, 3]], [0.2, [1, 2, 3, 0]]] as const) {
+      await loadInited(page, FOUR);
+      await page.addStyleTag({ content: FRACTIONAL_PILLS_CSS });
+      await page.mouse.move(5, 5);
+      await expect.poll(() => page.$$eval('#modality-selector .modality-btn', (els) => els.every((el) => el.getAnimations().length === 0))).toBe(true);
+      const at = await page.$$eval('#modality-selector .modality-btn', (els) => els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, mid: r.left + r.width / 2, cy: (r.top + r.bottom) / 2 };
+      }));
+      const x0 = at[0].mid;
+      await page.mouse.move(x0, at[0].cy);
+      await page.mouse.down();
+      await page.mouse.move(x0 + at[3].mid - at[0].mid + past, at[0].cy, { steps: 12 });
+      await expect(page.locator(pill(0))).toHaveClass(/pill-dragging/);
+      // Pill 1 has slid back by exactly the distance between pill 0 and pill 1.
+      const slid = await page.locator(pill(1)).evaluate((el) => parseFloat(/translateX\((-?[\d.]+)px\)/.exec(el.style.transform)?.[1] ?? 'NaN'));
+      expect(Math.abs(slid + (at[1].left - at[0].left))).toBeLessThan(0.01);
+      await page.mouse.up();
+      expect((await getState(page)).modalityOrder).toEqual(order);
+    }
+  });
+
+  // A drop's landed pill glides home on the transform transition; a press during that glide must
+  // neither snap it nor measure it where it is drawn. The glide is stretched to 3 s here so the second
+  // press lands well inside it. Watched failing against the pre-change lift, which cleared the
+  // transforms to measure (the glide snapped), and against rects read with no transform undone (the
+  // landed pill measured ~60 px from its slot, so the second drop missed).
+  test('a press during a landed pill\'s glide leaves the glide running and measures the row at rest', async ({ page }) => {
+    await loadInited(page, FOUR);
+    await page.addStyleTag({ content: `${FRACTIONAL_PILLS_CSS}\n#modality-selector .modality-btn:not(.pill-dragging) { transition: transform 3s linear; }` });
+    await page.mouse.move(5, 5);
+    await expect.poll(() => page.$$eval('#modality-selector .modality-btn', (els) => els.every((el) => el.getAnimations().length === 0))).toBe(true);
+    const rest = await page.$$eval('#modality-selector .modality-btn', (els) => els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, width: r.width, cy: (r.top + r.bottom) / 2 };
+    }));
+    const gap = rest[1].left - rest[0].left - rest[0].width;
+    const mid = (i: number) => rest[i].left + rest[i].width / 2;
+    // Pill 0 dropped 1 px short of pill 2's midpoint: slot 1, drawn ~67 px right of where it lands.
+    await page.mouse.move(mid(0), rest[0].cy);
+    await page.mouse.down();
+    await page.mouse.move(mid(2) - 1, rest[0].cy, { steps: 12 });
+    await page.mouse.up();
+    expect((await getState(page)).modalityOrder).toEqual([1, 0, 2, 3]);
+    const gliding = () => page.locator(pill(1)).evaluate((el) => ({ anims: el.getAnimations().length, dx: new DOMMatrix(getComputedStyle(el).transform).e }));
+    expect((await gliding()).dx).toBeGreaterThan(20);
+
+    // Press B (now first) and lift it while A is still on its way.
+    const b = (await page.locator(pill(0)).boundingBox())!;
+    const x0 = b.x + b.width / 2;
+    await page.mouse.move(x0, rest[0].cy);
+    await page.mouse.down();
+    await page.mouse.move(x0 + 6, rest[0].cy);
+    await expect(page.locator(pill(0))).toHaveClass(/pill-dragging/);
+    const during = await gliding();
+    expect(during.anims).toBeGreaterThan(0);
+    expect(during.dx).toBeGreaterThan(10);
+    // A's resting midpoint, from B's: B's half width, the gap, A's half width. 1 px past it is slot 1.
+    await page.mouse.move(x0 + rest[1].width / 2 + gap + rest[0].width / 2 + 1, rest[0].cy, { steps: 8 });
+    await page.mouse.up();
+    expect((await getState(page)).modalityOrder).toEqual([0, 1, 2, 3]);
   });
 
   test('the reorder buttons are gone and [ ] still reorder', async ({ page }) => {
@@ -341,7 +417,8 @@ test.describe('pill drag-reorder (touch)', () => {
   });
 
   test('a held first pill is drawn within the row\'s near end from the moment it lifts', async ({ page }) => {
-    await loadInited(page, FOUR);
+    // A ~250 px first pill: the lift's 4 % growth per side is ~10 px, so a clamp without that inset misses the 0.5 px tolerance by far (on a one-letter pill it was 1.1 px).
+    await loadInited(page, { ...FOUR, labelsExplicit: true, modalities: ['FIRST_a_rather_long_modality_label_for_the_lift', 'B', 'C', 'D'] });
     const rect = () => page.locator(pill(0)).evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect);
     const start = await rect();
     const touch = await TouchDriver.attach(page);
@@ -351,6 +428,7 @@ test.describe('pill drag-reorder (touch)', () => {
     const scale = await page.locator(pill(0)).evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).a);
     expect(scale).toBeGreaterThan(1.05);
     const lifted = await rect();
+    expect(start.width).toBeGreaterThan(200);
     expect(lifted.left).toBeGreaterThanOrEqual(start.left - 0.5);
     await touch.end();
   });

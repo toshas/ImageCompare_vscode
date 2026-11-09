@@ -14,6 +14,9 @@ All notable changes to the ImageCompare extension will be documented in this fil
   pinch to zoom, tap the zoom readout to reset, and ▦ opens the film strip as a full-width picker.
   The Tools panel, context menus, pill tooltips and vote circles are off there. A desktop, VS Code
   included, keeps its layout.
+- **A published comparison keeps its view across a reload**: the column order, hidden pills, the
+  row and column on screen, and the zoom and pan, kept in the viewer's browser per comparison. The
+  VS Code panel is unchanged.
 
 ### Changed
 - **Film-strip tiles are centre-cropped** to fill their square instead of letterboxed; thumbnails

@@ -561,6 +561,14 @@
             {
               "suite": "webview",
               "match": "a lifted end pill, its lift scale included, stays within the row's ends at either end of a drag"
+            },
+            {
+              "suite": "webview",
+              "match": "under fractional pill widths the drop slot turns at the true midpoint and the pills slide by the true pitch"
+            },
+            {
+              "suite": "webview",
+              "match": "a press during a landed pill's glide leaves the glide running and measures the row at rest"
             }
           ]
         },
@@ -1106,6 +1114,10 @@
             {
               "suite": "webview",
               "match": "a finger on the image never reaches the mouse handlers"
+            },
+            {
+              "suite": "webview",
+              "match": "a hovered pill keeps its resting look where the primary pointer cannot hover"
             }
           ]
         },
@@ -1407,7 +1419,13 @@
             {
               "suite": "webview",
               "match": "the pill row is one scrollable strip"
-            },
+            }
+          ]
+        },
+        {
+          "id": "pills-no-lead-space",
+          "name": "Nothing before the pill row: no empty ▦ box, no gap",
+          "tests": [
             {
               "suite": "webview",
               "match": "nothing in the bar precedes the pill row: no empty ▦ box and no gap before the first pill"
@@ -3595,6 +3613,52 @@
             {
               "suite": "webview",
               "match": "standalone help modal promises only what this host offers"
+            }
+          ]
+        },
+        {
+          "id": "standalone-view-survives-reload",
+          "name": "A published page keeps order, hidden pills, position and zoom across a reload, per comparison",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "standalone published comparison restores order, hidden pills, row, column, zoom and pan after a reload"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone published comparisons in sibling directories keep separate views"
+            },
+            {
+              "suite": "webview",
+              "match": "standalone published comparison with blocked storage opens at defaults and shows no error"
+            },
+            {
+              "suite": "webview",
+              "match": "a host stating restoresView is read once and written as the view changes"
+            },
+            {
+              "suite": "webview",
+              "match": "applies the saved view at the first init and not at a later re-init"
+            }
+          ]
+        },
+        {
+          "id": "view-restore-by-name",
+          "name": "A saved view restores by name, skipping what is gone",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "view state (viewState.ts, real code)"
+            }
+          ]
+        },
+        {
+          "id": "view-state-not-in-vscode",
+          "name": "The extension saves and restores no view",
+          "tests": [
+            {
+              "suite": "webview",
+              "match": "with the extension's capabilities getState and setState are never called"
             }
           ]
         }

@@ -83,6 +83,8 @@ interface StandaloneState {
 
 let state: StandaloneState | undefined;
 let webviewReady = false;
+// The saved view's localStorage key, set only for a published comparison (docs/standalone.md: viewer-layer-per-comparison).
+let viewKey: string | undefined;
 
 // The provider's scheduler with the browser's core count; decodes run in-page, so the shared clamp bounds them (docs/loading-architecture.md: pool-width-hides-latency).
 const pool = new WorkPool(poolWidth(navigator.hardwareConcurrency || 4));
@@ -101,8 +103,9 @@ const PREFETCH_COUNT = 3;
 // The stub must exist before the webview bundle's top-level `acquireVsCodeApi()` call runs.
 (window as unknown as { acquireVsCodeApi: unknown }).acquireVsCodeApi = () => ({
   postMessage: (m: WebViewMessage) => { void handleWebviewMessage(m); },
-  getState: () => undefined,
-  setState: (_s: unknown) => undefined,
+  // Blocked or failing storage keeps nothing and says nothing (docs/standalone.md, "The view survives a reload").
+  getState: () => { try { return viewKey ? JSON.parse(localStorage.getItem(viewKey) ?? 'null') ?? undefined : undefined; } catch { return undefined; } },
+  setState: (s: unknown) => { try { if (viewKey) localStorage.setItem(viewKey, JSON.stringify(s)); } catch { /* nothing is kept */ } },
 });
 
 /** Deliver an extension→webview message asynchronously, like the real postMessage (never re-enters the webview's dispatch). */
@@ -641,8 +644,8 @@ async function sendInit(s: StandaloneState): Promise<void> {
     votingEnabled,
     labelsExplicit: false,
     version: __IC_VERSION__,
-    // No file tree, no session file, the browser's text clipboard; a published comparison's export/copy flags are its regime row's (docs/standalone.md: affordances-rendered-by-the-webview) (docs/standalone.md: host-regime-is-one-table).
-    capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, ...(s.published?.capabilities ?? OPENED_FOLDER_CAPABILITIES) },
+    // No file tree, no session file, the browser's text clipboard; a published comparison's export/copy flags are its regime row's, and only it keeps a view (docs/standalone.md: affordances-rendered-by-the-webview) (docs/standalone.md: host-regime-is-one-table) (docs/standalone.md: view-kept-only-where-stated).
+    capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, ...(s.published?.capabilities ?? OPENED_FOLDER_CAPABILITIES), restoresView: !!s.published },
     // What Del removes here, stated rather than inferred by the webview (docs/session-files.md: mode-behaviour-is-a-table).
     deleteUnit: MODES[s.scan.mode].deleteUnit,
     // Whether a slot's file can be deleted is the root's to say; the webview greys Delete on it (docs/standalone.md: published-originals-never-written).
@@ -1213,6 +1216,7 @@ async function openPublishedComparison(): Promise<void> {
     const listed = createPublishedBackend(manifest.files, fetchPublishedFile);
     // Namespaced by the manifest's URL directory, so sibling comparisons on one origin never share a layer (docs/standalone.md: viewer-layer-per-comparison).
     const namespace = viewerLayerNamespace(new URL('imagecompare.json', location.href).href);
+    viewKey = `imagecompare-view\u0000${namespace}`;
     const listedPaths = new Set(manifest.files.map(file => `${listed.rootPath}/${file}`));
     // Loaded before the scan, so the viewer's votes are on init and their crops are rows (docs/standalone.md: published-originals-never-written).
     const root = await createViewerLayer(listed, listedPaths, indexedDbLayerStore(), namespace);

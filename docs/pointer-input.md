@@ -37,9 +37,11 @@ While the pill is lifted nothing is rebuilt. It follows the pointer, clamped to 
 its lift scale included (it scales about its centre, whatever origin a resting end pill has), the
 target slot comes from a binary search over pill midpoints cached at the lift (`dropSlot`), and only
 pills that change side get a new transform (`slotShift`), so a move costs the same with five pills or
-five hundred. The clamp, the midpoints and the slide are read from the pills' rects, a hover scale
-set aside: `offsetLeft` and `offsetWidth` round to whole px, and pills sit between them. The slot is searched from where the *pointer* puts the pill, not from the clamped
-drawing: a clamped centre can never pass the midpoint of an end pill no narrower than the dragged one,
+five hundred. The clamp, the midpoints and the slide are read from the pills' rects, with a hover
+scale or a landed pill's glide undone in arithmetic from the computed transform: `offsetLeft` and
+`offsetWidth` round to whole px, and pills sit between them, while clearing the transforms to measure
+would snap a glide still running from the last drop. The slot is searched from where the *pointer*
+puts the pill, not from the clamped drawing: a clamped centre can never pass the midpoint of an end pill no narrower than the dragged one,
 so that end slot would be unreachable. Near the row's edges it auto-scrolls. The drop commits once — one `moveModality`, one
 rebuild of the row and the strip — keeps the row where the user left it, and the landed pill glides
 from where it was let go. A rebuild per move both stutters on a long row and destroys the element
@@ -95,7 +97,8 @@ because the device decides, not the host. A device in the touch layout adds `tou
 - **Off in this layout**: the Tools panel (and with it crop and PPTX), the strip's resize handle, the
   vote circles on tiles, the pill path tooltip, and every context menu. Android opens a context menu
   on any long press, and here a long press is the flip or the pill lift. Text selection, the long-press
-  callout, the tap highlight, image dragging and the browser's own pinch and pan are off too. The
+  callout, the tap highlight, image dragging and the browser's own pinch and pan are off too, and the
+  pills' hover look applies only under `(hover: hover)`, so a tapped pill is not left enlarged. The
   strip's inner horizontal scroller says `touch-action: none` itself: an ancestor's `none` stops at a
   scroll container, and below it the browser claimed the first vertical move and cancelled the finger.
 - **A finger never reaches the mouse handlers** on the image: a touch `pointerdown` is cancelled,

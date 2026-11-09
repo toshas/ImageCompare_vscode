@@ -125,6 +125,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`webview/noticeChannel.ts`** - Pure (no vscode/DOM): the wording of what the user is told after a host action, and whether a reveal action rides along → `docs/standalone.md`
 - **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
 - **`webview/pillReorder.ts`** - Pure (no vscode/DOM): what a pill move does to every display index (`movedIndex` — a move, not a swap), the slot a lifted pill drops into (`dropSlot`) and how far each other pill slides meanwhile (`slotShift`) → `docs/pointer-input.md`
+- **`webview/viewState.ts`** - Pure (no vscode/DOM): a published page's saved view — built by name from the current state, and planned back onto the comparison as it lists now (`planRestore`) → `docs/standalone.md`
 - **`webview/pillDrag.ts`** - The pill row's pointer gestures: mouse drag, touch hold-then-drag, the row's own pan and fling, the tap click, the one commit on the drop → `docs/pointer-input.md`
 - **`webview/touchInput.ts`** - The touch layout's image and strip gestures (swipe, hold-to-flip, pinch, strip drag) and its context-menu suppression; each gesture calls an action a key already takes → `docs/pointer-input.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)

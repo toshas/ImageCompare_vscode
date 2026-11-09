@@ -770,6 +770,116 @@ test('standalone published comparisons in sibling directories keep separate vote
   await expect.poll(async () => (await icState(page)).winners).toEqual([[0, 0]]);
 });
 
+// ---- The view survives a reload (docs/standalone.md, "The view survives a reload") ----
+// The restore plan is mutation-covered in test/unit/viewState.test.ts; the save/restore wiring in
+// src/webview/main.ts and the localStorage key in standalone/adapter.ts are outside the Vitest-only
+// harness. Each test was watched failing: the first two against the pre-change adapter (getState a
+// stub, so every reload is back at defaults), the second also against a key with no namespace, the
+// third against the adapter's storage calls unwrapped (the throw escapes init as a page error).
+
+const threeCols = (): Record<string, Buffer> => ({
+  'gt/scene_01_gt.png': makeSolidPng(40, 30, [255, 0, 0]),
+  'gt/scene_02_gt.png': makeSolidPng(40, 30, [0, 255, 0]),
+  'pred/scene_01_pred.png': makeSolidPng(40, 30, [0, 0, 255]),
+  'pred/scene_02_pred.png': makeSolidPng(40, 30, [255, 255, 0]),
+  'depth/scene_01_depth.png': makeSolidPng(40, 30, [0, 255, 255]),
+  'depth/scene_02_depth.png': makeSolidPng(40, 30, [255, 0, 255]),
+});
+
+type ViewLite = { modalityPaths: string[]; hiddenModalities: number[]; currentTupleName: string | null; currentModalityIndex: number; zoom: number; panX: number; panY: number };
+const viewOf = (page: import('@playwright/test').Page) => page.evaluate(() => {
+  const s = (window as unknown as { __ic_test: { getState(): ViewLite } }).__ic_test.getState();
+  return { modalityPaths: s.modalityPaths, hiddenModalities: s.hiddenModalities, currentTupleName: s.currentTupleName, currentModalityIndex: s.currentModalityIndex, zoom: s.zoom, panX: s.panX, panY: s.panY };
+});
+
+/** Drag the last pill to the front, hide the middle one, go to row 2 and its last column, zoom and pan: the view a user leaves. */
+async function changeView(page: import('@playwright/test').Page): Promise<ViewLite> {
+  const before = await viewOf(page);
+  const pills = page.locator('#modality-selector .modality-btn');
+  const a = (await pills.nth(2).boundingBox())!;
+  const b = (await pills.nth(0).boundingBox())!;
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 - 3, b.y + b.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect.poll(async () => (await viewOf(page)).modalityPaths).toEqual([before.modalityPaths[2], before.modalityPaths[0], before.modalityPaths[1]]);
+  await pills.nth(1).click({ button: 'right' });
+  await page.locator('#context-menu [data-action-id="toggleHidden"]').click();
+  await page.locator('#viewer').click({ position: { x: 10, y: 10 } });
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Digit3');
+  const box = (await page.locator('#viewer').boundingBox())!;
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, -240);
+  await expect.poll(async () => (await viewOf(page)).zoom).toBeCloseTo(1.03 ** 3, 5);
+  await page.mouse.down();
+  await page.mouse.move(cx + 30, cy + 20, { steps: 4 });
+  await page.mouse.up();
+  const view = await viewOf(page);
+  // Every part is off its default, so a restore that drops any of them shows.
+  expect(view.currentTupleName).toBe('scene_02');
+  expect(view.currentModalityIndex).toBe(2);
+  expect(view.hiddenModalities.length).toBe(1);
+  expect(view.panX).not.toBe(0);
+  return view;
+}
+
+/** Waits until the debounced write has landed, by the page's own key prefix. */
+const viewWritten = (page: import('@playwright/test').Page, tuple: string) => expect.poll(() => page.evaluate((t) =>
+  Object.keys(localStorage).some(k => k.startsWith('imagecompare-view') && localStorage.getItem(k)!.includes(t)), tuple)).toBe(true);
+
+test('standalone published comparison restores order, hidden pills, row, column, zoom and pan after a reload', async ({ page }) => {
+  publish('view-keep', threeCols(), { host: 'claude-artifact' });
+  await openPublished(page, 'view-keep');
+  const left = await changeView(page);
+  await viewWritten(page, 'scene_02');
+  await page.reload();
+  await waitForRows(page, 2);
+  await expect.poll(() => viewOf(page)).toEqual(left);
+});
+
+test('standalone published comparisons in sibling directories keep separate views', async ({ page }) => {
+  publish('view-a', threeCols(), { host: 'claude-artifact' });
+  publish('view-b', threeCols(), { host: 'claude-artifact' });
+  await openPublished(page, 'view-b');
+  const untouched = await viewOf(page);
+  await page.goto(`${baseUrl}/view-a/image_compare.html`);
+  await waitForRows(page, 2);
+  const left = await changeView(page);
+  await viewWritten(page, 'scene_02');
+
+  await page.goto(`${baseUrl}/view-b/image_compare.html`);
+  await waitForRows(page, 2);
+  await page.waitForTimeout(400);
+  expect(await viewOf(page)).toEqual(untouched);
+
+  await page.goto(`${baseUrl}/view-a/image_compare.html`);
+  await waitForRows(page, 2);
+  await expect.poll(() => viewOf(page)).toEqual(left);
+});
+
+test('standalone published comparison with blocked storage opens at defaults and shows no error', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  // A private window or a storage-blocking frame: every localStorage access throws.
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new DOMException('blocked', 'SecurityError'); } });
+  });
+  publish('view-blocked', threeCols(), { host: 'claude-artifact' });
+  await openPublished(page, 'view-blocked');
+  const defaults = await viewOf(page);
+  await changeView(page);
+  await page.waitForTimeout(400);
+  await page.reload();
+  await waitForRows(page, 2);
+  await page.waitForTimeout(400);
+  expect(await viewOf(page)).toEqual(defaults);
+  await expect(page.locator('#ic-error')).toBeHidden();
+  await expect(page.locator('#copy-toast')).not.toHaveClass(/visible/);
+  expect(errors).toEqual([]);
+});
+
 test('standalone page reports a manifest naming an unknown host instead of opening it', async ({ page }) => {
   publish('art-unknown', twoRows(), { host: 'netlify' });
   await page.goto(`${baseUrl}/art-unknown/image_compare.html`);
@@ -1490,7 +1600,7 @@ test.describe('standalone context menu', () => {
     expect(await page.evaluate(() =>
       (window as unknown as { __ic_test: { getState(): { capabilities: Record<string, boolean> } } })
         .__ic_test.getState().capabilities))
-      .toEqual({ revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, exportPptx: true, copyResults: false });
+      .toEqual({ revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false, exportPptx: true, copyResults: false, restoresView: false });
 
     // Hide Modality reaches the state it could never reach before.
     await page.locator('#context-menu [data-action-id="toggleHidden"]').click();

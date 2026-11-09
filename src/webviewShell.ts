@@ -333,10 +333,13 @@ body {
   flex-shrink: 0;
   white-space: nowrap;
 }
-.modality-btn:hover { transform: scale(1.05); }
-.modality-btn:first-child { transform-origin: left center; }
-.modality-btn:last-child { transform-origin: right center; }
-.modality-btn:only-child:hover { transform: none; text-decoration: underline; }
+/* Only a pointer that can hover gets the hover look: a tap on a phone would leave it stuck on. */
+@media (hover: hover) {
+  .modality-btn:hover { transform: scale(1.05); }
+  .modality-btn:first-child { transform-origin: left center; }
+  .modality-btn:last-child { transform-origin: right center; }
+  .modality-btn:only-child:hover { transform: none; text-decoration: underline; }
+}
 /* A lifted pill follows the pointer with no easing; the others slide aside on the base transition. */
 .modality-btn.pill-dragging { transition: none; z-index: 2; cursor: grabbing; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6); }
 #modality-selector.pill-reordering { cursor: grabbing; }

@@ -80,7 +80,9 @@ test.describe('touch layout (coarse pointer)', () => {
     await expect(page.locator('#strip-btn')).toBeVisible();
     const m = await page.evaluate(() => {
       const btn = document.getElementById('strip-btn')!;
-      const shapes = Array.from(btn.querySelectorAll('svg *')).filter((el) => el instanceof SVGGeometryElement) as SVGGeometryElement[];
+      // Painted shapes only: an unpainted one (fill and stroke none) could pad the union back to centre around an offset glyph.
+      const shapes = (Array.from(btn.querySelectorAll('svg *')).filter((el) => el instanceof SVGGeometryElement) as SVGGeometryElement[])
+        .filter((el) => getComputedStyle(el).fill !== 'none' || getComputedStyle(el).stroke !== 'none');
       const b = btn.getBoundingClientRect();
       // The painted box: the union of the shapes' own boxes, so an offset inside the viewBox counts too.
       const rs = shapes.map((s) => s.getBoundingClientRect());

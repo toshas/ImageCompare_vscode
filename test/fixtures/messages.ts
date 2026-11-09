@@ -16,7 +16,7 @@ export interface FixtureSpec {
   /** Optional product version for the init message; absent mirrors specs predating the field. */
   version?: string;
   /** What the fixture host claims it can serve; the default mirrors the extension, the most capable host. */
-  capabilities?: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean; exportPptx?: boolean; copyResults?: boolean };
+  capabilities?: { revealInExplorer: boolean; copyTextToClipboard: boolean; saveSessionAs: boolean; exportPptx?: boolean; copyResults?: boolean; restoresView?: boolean };
   /** What the fixture host says Del removes; absent mirrors specs predating the field, which the webview reads as a row. */
   deleteUnit?: 'tuple' | 'image';
   /** Slots ([tupleIndex, modalityIndex]) the fixture host flags `readOnly` on init; absent flags none, as the provider does. */

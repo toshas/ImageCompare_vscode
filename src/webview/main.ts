@@ -24,6 +24,7 @@ import { ColumnWindow, MIN_TILE_PITCH, columnLeft, columnPoolSize, columnWindow 
 import { movedIndex } from './pillReorder';
 import { installPillDrag } from './pillDrag';
 import { installTouchInput } from './touchInput';
+import { buildSavedView, planRestore } from './viewState';
 import type { DeleteUnit } from '../modePolicy';
 
 // VSCode API
@@ -218,6 +219,10 @@ let deleteUnit: DeleteUnit = 'tuple';
 // The Delete button's last applied read-only state, so a per-frame refresh touches the DOM only on a change.
 let deleteGreyed: boolean | null = null;
 
+// The saved view is read once, at the first init, and written only after that read.
+let viewRestorePending = true;
+let viewSaveTimer: number | null = null;
+
 // Read-only state snapshot for the Playwright webview testbed (test/webview); inert unless the harness sets __ic_test_enabled — see docs/testing.md.
 if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?: boolean }).__ic_test_enabled) {
   (window as unknown as { __ic_test: unknown }).__ic_test = {
@@ -290,6 +295,9 @@ function setupEventListeners() {
       scrollCarouselToCurrentColumn();
     },
   });
+
+  // A discarded page gets no unload event, so a hide is the last chance to write (docs/standalone.md, "The view survives a reload").
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveView(); });
 
   // Keyboard
   document.addEventListener('keydown', handleKeyDown);
@@ -696,6 +704,45 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   if (isMultiTupleMode) {
     progressContainerEl.classList.add('active');
   }
+
+  restoreView();
+}
+
+/** Applies the saved view once per page load through the actions keys and drags take (docs/standalone.md: view-restore-is-navigation). */
+function restoreView(): void {
+  if (!viewRestorePending) return;
+  viewRestorePending = false;
+  // Without the host's word the webview never touches its state (docs/standalone.md: view-kept-only-where-stated).
+  if (!capabilities.restoresView || !tuples.length || !modalities.length) return;
+  const saved = vscode.getState();
+  if (saved === undefined || saved === null) return;
+  // Names in, indices out: nothing below sees the saved view itself (docs/standalone.md: view-restored-by-name).
+  const plan = planRestore(saved, modalities, tuples.map(t => t.name));
+  // Each slot through moveModality's remap, the row and the strip rebuilt once for the whole order.
+  if (plan.order.map((o, d) => moveModality(modalityOrder.indexOf(asOriginal(o)), d, false)).some(Boolean)) rebuildAfterMove();
+  for (const o of plan.hidden) runMenuAction('toggleHidden', { section: 'pill', tupleIndex: currentTupleIndex, modalityIndex: o });
+  const display = toDisplay(asOriginal(plan.modality), modalityOrder);
+  if (plan.tuple !== currentTupleIndex || display !== currentModalityIndex) goToTupleAndModality(asTuple(plan.tuple), display);
+  zoom = plan.zoom;
+  panX = plan.panX;
+  panY = plan.panY;
+  render();
+}
+
+/** Writes the view now, by name; the host's storage is the host's to guard (docs/standalone.md: view-restored-by-name). */
+function saveView(): void {
+  if (viewSaveTimer !== null) clearTimeout(viewSaveTimer);
+  viewSaveTimer = null;
+  // No write without the host's word, nor before the one read (docs/standalone.md: view-kept-only-where-stated).
+  if (!capabilities.restoresView || viewRestorePending) return;
+  vscode.setState(buildSavedView(modalities, hiddenByDisplay(), tuples[currentTupleIndex]?.name ?? null, currentModalityIndex, zoom, panX, panY));
+}
+
+/** Coalesces a burst of view changes (a pan, a drag) into one write within 250 ms of the first. */
+function scheduleViewSave(): void {
+  // No timer at all where the host keeps no view (docs/standalone.md: view-kept-only-where-stated).
+  if (!capabilities.restoresView || viewSaveTimer !== null) return;
+  viewSaveTimer = window.setTimeout(saveView, 250);
 }
 
 function handleThumbnail(message: { tupleIndex: TupleIndex; modalityIndex: number; bytes: Uint8Array; mime: string }) {
@@ -2192,6 +2239,8 @@ function runMenuAction(action: MenuActionId, target: MenuContext): void {
 }
 
 function updateModalitySelector() {
+  // Every view change repaints the pills — order, hide, tuple, modality, and render() on zoom and pan.
+  scheduleViewSave();
   // Calculate win counts per modality (by display index)
   const winCounts: number[] = new Array(modalities.length).fill(0);
   if (votingEnabled) {
@@ -2228,7 +2277,7 @@ function moveCurrentModality(direction: number) {
 }
 
 /** Move the modality at display `currentPos` to `newPos`, the ones between closing up; `[`/`]` and a pill drop both land here (docs/pointer-input.md: reorder-is-one-move). */
-function moveModality(currentPos: number, newPos: number): boolean {
+function moveModality(currentPos: number, newPos: number, rebuild = true): boolean {
   if (newPos < 0 || newPos >= modalities.length || newPos === currentPos) return false;
   const move = <T>(a: T[]) => { a.splice(newPos, 0, a.splice(currentPos, 1)[0]); };
   const remap = (k: number) => asDisplay(movedIndex(k, currentPos, newPos));
@@ -2257,7 +2306,12 @@ function moveModality(currentPos: number, newPos: number): boolean {
   // Update current index
   currentModalityIndex = remap(currentModalityIndex);
   // render() re-derives `images` from the cache using the new modalityOrder.
+  if (rebuild) rebuildAfterMove();
+  return true;
+}
 
+/** Rebuilds the pill row and the strip after one move or a batch of them. */
+function rebuildAfterMove(): void {
   // Rebuild UI
   buildModalitySelector();
   if (isMultiTupleMode) {
@@ -2266,7 +2320,6 @@ function moveModality(currentPos: number, newPos: number): boolean {
   render();
   // A reorder moves no column but re-permutes the strip the aim ranks over (docs/loading-architecture.md: picked-column-reports-itself).
   columnReport.keyed(currentModalityIndex);
-  return true;
 }
 
 /**

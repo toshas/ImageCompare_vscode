@@ -140,4 +140,28 @@ test.describe('pill bar layout (coarse pointer)', () => {
     await expect(page.locator('#strip-btn')).toBeHidden();
     await expectNoLead(page);
   });
+
+  // A phone's tap leaves :hover on the pill until the next tap elsewhere; emulated taps set no :hover,
+  // so a mouse hover stands in for it. Watched failing with the `@media (hover: hover)` wrapper removed.
+  test('a hovered pill keeps its resting look where the primary pointer cannot hover', async ({ page }) => {
+    for (const spec of [FOUR, SOLE_LONG]) {
+      await loadInited(page, spec);
+      expect(await page.evaluate(() => matchMedia('(hover: hover)').matches)).toBe(false);
+      const first = page.locator('#modality-selector .modality-btn').first();
+      await first.hover();
+      await page.waitForTimeout(300);
+      const look = await first.evaluate((el) => ({
+        hovered: el.matches(':hover'),
+        transform: getComputedStyle(el).transform,
+        underline: getComputedStyle(el).textDecorationLine,
+        originX: parseFloat(getComputedStyle(el).transformOrigin),
+        half: el.getBoundingClientRect().width / 2,
+      }));
+      expect(look.hovered).toBe(true);
+      expect(look.transform).toBe('none');
+      expect(look.underline).toBe('none');
+      // No outer-edge origin either: the default centre.
+      expect(look.originX).toBeCloseTo(look.half, 1);
+    }
+  });
 });

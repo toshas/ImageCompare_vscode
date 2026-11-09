@@ -95,6 +95,8 @@ The full ImageCompare viewer: zoom and pan kept across columns, `←`/`→` colu
   down for rows, touch and hold to flip back, pinch to zoom, tap the zoom readout to reset, and ▦
   opens the film strip. The Tools panel, vote circles and menus are off there, so a viewer on a
   phone can look but not crop or copy `results.txt`, and votes only with a keyboard (`Enter`).
+- **The view survives a reload** (the artifact reloading itself, a phone discarding the tab): column
+  order, hidden pills, the row and column on screen, zoom and pan, kept in the viewer's browser.
 
 If the page shows the folder picker with an `imagecompare.json: ...` message, the manifest is
 malformed, names a path outside the folder, or names a host the page does not know; stage it again
