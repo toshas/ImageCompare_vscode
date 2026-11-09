@@ -7,6 +7,7 @@
  */
 import * as path from 'path';
 import sharp from 'sharp';
+import { scaleAndClampRect, toRelativeRect } from '../../src/cropPlan';
 
 export const PHOTO_TUPLES = ['airplane', 'baboon', 'peppers', 'sailboat'];
 export const PHOTO_MODALITIES = ['original', 'desaturated', 'hue+120', 'thermal'];
@@ -101,22 +102,14 @@ export async function cropFixtures(
 ): Promise<CropFixture[]> {
   const src = path.join(IMAGES_DIR, `${PHOTO_TUPLES[tupleIndex]}.jpg`);
   const raw = await sharp(src).toBuffer();
-  const rel = {
-    x: cropRect.x / srcWidth,
-    y: cropRect.y / srcHeight,
-    w: cropRect.w / srcWidth,
-    h: cropRect.h / srcHeight,
-  };
+  const rel = toRelativeRect(cropRect, srcWidth, srcHeight);
   const out: CropFixture[] = [];
   for (let modalityIndex = 0; modalityIndex < PHOTO_MODALITIES.length; modalityIndex++) {
     const modality = PHOTO_MODALITIES[modalityIndex];
     const meta = await variant(raw, modality).metadata();
     const mw = meta.width ?? 0;
     const mh = meta.height ?? 0;
-    const x = Math.max(0, Math.round(rel.x * mw));
-    const y = Math.max(0, Math.round(rel.y * mh));
-    const w = Math.min(Math.round(rel.w * mw), mw - x);
-    const h = Math.min(Math.round(rel.h * mh), mh - y);
+    const { x, y, w, h } = scaleAndClampRect(rel, mw, mh);
     if (!(w > 0) || !(h > 0)) continue;
     const region = { left: x, top: y, width: w, height: h };
     const full = await variant(raw, modality).extract(region).png().toBuffer();

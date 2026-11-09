@@ -30,11 +30,11 @@ npm run test:all          # all three
 npx vitest run test/unit/workPool.test.ts --config test/vitest.config.ts   # one suite
 ```
 
-Layer 1 is the publish gate: `.github/workflows/publish.yml` runs `npm test` and
-`scripts/mutation-check.mjs` in its `test` job, which gates the whole build matrix — a red test
-blocks publishing to both marketplaces. On a `pull_request` that job (and `test-full`) is skipped,
-because test.yml runs both on the PR already; the ten-leg build matrix runs anyway, and everything
-that publishes is gated off by event
+Layer 1 is the publish gate: `.github/workflows/publish.yml`'s `test-full` job calls test.yml,
+whose `gates` job runs `npm test` and `scripts/mutation-check.mjs`. `test-full` gates the whole
+build matrix — a red test blocks publishing to both marketplaces. A `pull_request` skips
+`test-full`, because test.yml runs on the PR already; the ten-leg build matrix runs anyway, and
+everything that publishes is gated off by event
 (`docs/image-backends.md: pull-request-builds-never-publish`). All three layers additionally run in
 their own workflow (`.github/workflows/test.yml`) on **ubuntu / windows / macos** for every PR, and
 for pushes to `main` or `test/**` — its push trigger is branch-limited, so pushing any other branch
@@ -50,8 +50,8 @@ nothing but Node; the rest (`tupleMatching`, `pngTextChunk`, …) reach `vscode`
 through the `vscode` mock alias in `test/vitest.config.ts`. Vitest transpiles with esbuild and
 type-checks nothing itself; `tsconfig.test.json` closes that gap — `npx tsc --noEmit -p
 tsconfig.test.json` runs in the CI gates job and covers all of `test/` except `test/integration/`,
-which `test:integration` type-checks through its own tsconfig. The publish `test` job has no
-`tsc --noEmit` step: there, ts-loader type-checks `src/` only through `npm run compile`.
+which `test:integration` type-checks through its own tsconfig. On a tag, publish.yml's
+`test-full` runs that gates job, with its three `tsc --noEmit` configs.
 `scripts/check-no-personal-refs.mjs` runs only in `.githooks/pre-commit`.
 `pngTextChunk`'s Sharp-validation test needs a working native Sharp (installed by `npm ci`).
 
@@ -193,14 +193,14 @@ Three of its poll specs exist because the obvious fixture cannot fail:
   `FileSystemObserver`. The only trigger left is the spec, calling that callback by hand once, after
   both halves of the rename are on disk.
 
-The rename spec beside it mutates a live fixture under a 150 ms poll, so the removal and the
-adoption routinely land in *different* cycles. A two-cycle split emits
-modalityRemoved-then-modalityAdded whatever the block order inside a cycle is. Measured with
-adoption moved ahead of the removals in `runPollCycle`, `--workers=4`, 20 runs each. Quote the
-invocation shape with the number: it moves the escape rate threefold. The racing spec caught the
-reorder **14 of 20** whole-suite, 14 of 20 running only the two rename specs, and 18 of 20 under
-`--repeat-each=20`: it escapes 10-30% of the time, not the 1-in-6 first reported. The held-timer
-spec failed 20 of 20 in every shape, and is 20 of 20 green with the adapter restored.
+The deleted live-poll spec mutated a live fixture under a 150 ms poll, so the removal and the
+adoption routinely landed in *different* cycles. A two-cycle split emits
+modalityRemoved-then-modalityAdded whatever the block order inside a cycle. Measured with adoption
+moved ahead of the removals in `runPollCycle`, `--workers=4`, 20 runs each. Quote the invocation
+shape with the number: it moves the escape rate threefold. The racing spec caught the reorder
+**14 of 20** whole-suite, 14 of 20 running only the two rename specs, and 18 of 20 under
+`--repeat-each=20`: a 10-30% escape rate, not the 1-in-6 first reported. The held-timer spec, kept
+instead, failed 20 of 20 in every shape and is 20 of 20 green with the adapter restored.
 
 ### The standalone artifact is built once per run, and freshness is checked, not assumed
 
@@ -597,7 +597,7 @@ fixed.
   `test/unit/publishTargets.test.ts` reads the workflow as a document (js-yaml, an explicit
   devDependency) and evaluates the real `if:` expressions under a model of Actions' own semantics,
   implicit `success()` included, rather than asserting their wording. An equivalent rewrite passes;
-  a weakening does not. Fourteen mutations, all killed with those cases present; twelve survive once
+  a weakening does not. Thirteen mutations, all killed with those cases present; eleven survive once
   the cases are removed, and the other two mutate the semantic model itself, which goes with them.
   (`docs/image-backends.md: pull-request-builds-never-publish`)
 - **The PR install check that never ran** *(fixed)* — the item above claimed `codium-smoke` ran on
@@ -944,8 +944,8 @@ fixed.
   only half of a dir rename: the emptied column left, and the renamed/copied dir was never listed.
   Fixed by extracting the adoption decisions into `src/adoptionPlan.ts` (provider rewired onto it,
   wire-identical) and adding the poll's adoption executor, run after removals so a rename lands as
-  remove-then-adopt in one cycle. Guarded by the adoption/rename/re-open specs in
-  `test/webview/standalone-build.spec.ts` and `test/unit/adoptionPlan.test.ts`.
+  remove-then-adopt in one cycle. Guarded by `test/unit/adoptionPlan.test.ts` and
+  `test/webview/standalone-build.spec.ts`'s adoption/re-open/held-timer-rename specs.
 - **Symlinked modality dirs and images were invisible at open time** *(fixed)* — `FileType` is a
   bitmask (a symlinked dir stats `66`, a symlinked file `65`). The open-time scanner compared it
   with `===` while the adoption/poll paths already masked, so the same link showed up only if it

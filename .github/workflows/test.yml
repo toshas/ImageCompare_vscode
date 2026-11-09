@@ -18,7 +18,8 @@ concurrency:
 
 jobs:
   # The repo's own gate battery (the Vitest unit suites, mutation check, invariant+comment checkers)
-  # runs on every push/PR too, so no event sees less than the full union of both test systems.
+  # runs for every pull request and every push to `main` or `test/**` too, so no event sees less
+  # than the full union of both test systems.
   gates:
     name: gates (unit suites + mutation + checkers)
     runs-on: ubuntu-latest
@@ -173,9 +174,4 @@ jobs:
           path: |
             test/demos/gallery
             test/demos/raw
-            test/dashboard/dashboard.html
           retention-days: 14
-
-  # Live coverage dashboard + demo gallery at https://toshas.github.io/ImageCompare_vscode/
-  # (Pages must be set to "GitHub Actions" once in Settings -> Pages). Main-branch pushes only:
-  # PR runs keep using the demo-gallery artifact.

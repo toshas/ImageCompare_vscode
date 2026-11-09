@@ -2421,15 +2421,15 @@
             },
             {
               "suite": "unit",
-              "match": "skips its own test and test-full jobs on a pull_request"
+              "match": "skips its own test-full job on a pull_request"
             },
             {
               "suite": "unit",
-              "match": "still runs the whole chain on a tag when both gates pass"
+              "match": "still runs the whole chain on a tag when test-full passes"
             },
             {
               "suite": "unit",
-              "match": "refuses to build on a tag when either gate failed or was cancelled"
+              "match": "refuses to build on a tag when test-full failed or was cancelled"
             },
             {
               "suite": "unit",

@@ -51,7 +51,6 @@ out-integration/**
 .words-to-check.txt
 NIGHT-RUN-NOTES.md
 ITERATION-TIPS.md
-.dashboard-data/**
 .vscode-test.mjs
 
 # Test data

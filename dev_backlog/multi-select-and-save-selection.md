@@ -17,8 +17,8 @@ is generated now — but the behaviour is worth having in both products.
 ## The folder name
 
 `.selection_01`, `.selection_02`, … — leading dot, two-digit id, `NN = max existing + 1`. This
-mirrors `comparison_NN.pptx` (`pptxDeck.ts:300-308`) and `_cropNN` (`cropPlan.ts`), and the numbering
-belongs in a **pure planner** beside those two, not in either host.
+mirrors `comparison_NN.pptx` (`nextPptxName`, pptxDeck.ts) and `_cropNN` (`cropPlan.ts`), and the
+numbering belongs in a **pure planner** beside those two, not in either host.
 
 The leading dot is load-bearing: it is what keeps the folder out of the comparison. See the trap
 below.
@@ -38,7 +38,7 @@ path. Reorder then costs nothing, insertion and removal cost nothing, and a dele
 drops out of the selection because its key no longer resolves. Any index-keyed design will need
 re-shifting logic in three places and will still be wrong after the fourth.
 
-Note `winners` (`webview/main.ts:163`) *is* keyed `TupleIndex -> DisplayModalityIndex`. Check whether
+Note `winners` (webview/main.ts) *is* keyed `TupleIndex -> DisplayModalityIndex`. Check whether
 that already misbehaves under `[` / `]`; if it does, that is a separate bug and this plan should not
 copy the pattern.
 

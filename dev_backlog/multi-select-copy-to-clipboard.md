@@ -11,15 +11,15 @@ With several thumbnails selected, one keystroke puts them all on the clipboard.
 ## What already exists — do not rewrite it
 
 Copying **one** image already works: right-click a thumbnail, `copyCurrentImage()` ->
-`writeImageToClipboard()` (`webview/main.ts:2174-2210`), with `showCopyToast` and its CSS already in
+`writeImageToClipboard()` (webview/main.ts), with `showCopyToast` and its CSS already in
 `webviewShell.ts`. This round extends that path; it must not add a parallel one.
 
 **The reason that matters is a bug we already paid for.** `writeImageToClipboard` defers the write
 until the document has focus, because Chromium silently drops `clipboard.write()` from an unfocused
 document — the context-menu case — leaving the *previous* image on the clipboard with only a 1.4 s
-"Copy failed" toast as evidence. It is written up in `docs/testing.md` Findings ("copy-image
-staleness"). A fresh `navigator.clipboard.write(...)` call, which is what the PR adds, reintroduces
-it exactly.
+"Copy failed" toast as evidence. It is written up in `docs/testing.md` Findings ("Copy Image kept
+the previously copied image"). A fresh `navigator.clipboard.write(...)` call, which is what the PR
+adds, reintroduces it exactly.
 
 ## The open question this round has to answer
 

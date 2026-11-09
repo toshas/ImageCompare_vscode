@@ -50,30 +50,38 @@ node scripts/share-comparison.mjs <folder | session.imagecompare> --out <empty d
 ```
 
 The script first builds the page from the checkout (about ten seconds), so the page always matches
-the code that stages it. `--host` is where the page will be published: `claude-artifact` (the default) or `static` (GitHub
-Pages, a bucket, an intranet share, `python3 -m http.server`). The script stages into `--out`:
-`image_compare.html` (titled after the comparison), `imagecompare.json`, every image byte for byte at
-its layout path, `imagecompare.thumbs.*.json` (prebuilt strip thumbnails, so viewers do not download
-every full image to see the strip) and `publish-plan.json`.
+the code that stages it. `--host` is where the page will be published: `claude-artifact` (the
+default) or `static` (GitHub Pages, a bucket, an intranet share, `python3 -m http.server`). The
+script stages into `--out`:
+- `image_compare.html`, titled after the comparison
+- `imagecompare.json`
+- every image, byte for byte, at its layout path
+- `imagecompare.thumbs.*.json`: prebuilt strip thumbnails, so viewers do not download every full
+  image to see the strip
+- `publish-plan.json`
 
-**If the script refuses, stop.** It checks the whole comparison against what the host accepts — image
-types, the per-image, per-file and total size limits, the file counts — and on any violation prints
-every one, stages nothing and exits non-zero. Relay that report to the user as printed. Never work
-around it: do not convert, re-encode, resize, drop or rename images to make a comparison fit, and do
-not switch `--host` on your own. What to share instead is the user's decision.
+**If the script refuses, stop.** It checks the whole comparison against what the host accepts: image
+types, the per-image, per-file and total size limits, and the file counts. On any violation it
+prints every one, stages nothing and exits non-zero. Relay that report to the user as printed.
+
+Never work around it. Do not convert, re-encode, resize, drop or rename images to make a comparison
+fit. Do not switch `--host` on your own. What to share instead is the user's decision.
 
 ## 3. Publish
 
-**As a Claude artifact.** Publishing uploads the page and every image to claude.ai; make sure the
+**As a Claude artifact.** Publishing uploads the page and every image to claude.ai. Make sure the
 user means to share them. Read `publish-plan.json`: its `batches` are in order, each within what one
-publish call accepts, and each starts with `image_compare.html`. Publish every batch the same way:
-`image_compare.html` as the artifact page and every other file in that batch as the page's supporting
-files, at exactly the relative paths the plan lists (the staged folder is the publish root). Batch 0
-creates the artifact; each further batch goes, in order, to the same artifact URL, and files already
-published are kept. Give the user the link.
+publish call accepts, and each starts with `image_compare.html`.
+
+In each batch, send `image_compare.html` as the artifact page. Send each other file in the batch as
+a supporting file, at the relative path the plan lists. The staged folder is the publish root.
+Batch 0 creates the artifact. Send each further batch, in order, to the same artifact URL; files
+already published are kept.
+
+Give the user the link.
 
 **Anywhere else** (`--host static`). Upload the staged folder as it is and link to
-`image_compare.html`; locally, `python3 -m http.server` in the folder and open
+`image_compare.html`. Locally, run `python3 -m http.server` in the folder and open
 `http://localhost:8000/image_compare.html`. Opening the file straight from disk (`file://`) shows the
 folder picker instead, because browsers block reading neighbouring files there.
 

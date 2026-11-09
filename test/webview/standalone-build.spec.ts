@@ -1321,11 +1321,11 @@ test('standalone re-open picks up a modality dir added while the comparison was 
  * A dir rename, pinned deterministically: one poll cycle, both halves of the rename already on
  * disk before it runs.
  *
- * A live-poll spec can be satisfied for the wrong reason. Its rename mutates a live fixture while the
- * 150 ms poll is running, so `pred`'s disappearance and `aaa_pred`'s images routinely land in
- * DIFFERENT cycles — and a two-cycle split emits modalityRemoved then modalityAdded whatever the
- * order of the two blocks inside a cycle is. Measured on this box: with adoption moved ahead of the
- * removals in `runPollCycle`, that spec still passed 18 runs out of 20 at --workers=4.
+ * A live-poll spec, since deleted, was satisfied for the wrong reason. Its rename mutated a live
+ * fixture while the 150 ms poll ran, so `pred`'s disappearance and `aaa_pred`'s images routinely
+ * landed in DIFFERENT cycles — and a two-cycle split emits modalityRemoved then modalityAdded
+ * whatever the order of the two blocks inside a cycle is. Measured on this box: with adoption moved
+ * ahead of the removals in `runPollCycle`, it still passed 18 runs out of 20 at --workers=4.
  *
  * So this one removes the split instead of observing it. `pollIntervalMs` is set to a sentinel that
  * an init script intercepts: the interval the adapter arms is captured rather than started (every

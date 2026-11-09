@@ -6,7 +6,7 @@ on a 265 x 136 grid (36,040 images).
 
 ## NOT the crash cause
 
-Same caveat as its sibling: the crash was VS Code's text search OOM-ing the renderer
+The crash was VS Code's text search OOM-ing the renderer
 (`v8-oom-stack` -> `addMatch` / `$handleFileMatch`), recurring ~30 times since 2026-08-16. This is a
 real defect found while looking, not the thing that killed the window.
 
@@ -51,8 +51,8 @@ So eviction must be driven by **what is bound**, not by insertion order alone. A
    fix is one line of docs recording the retention policy as deliberate, plus a number, so the next
    person does not re-derive this.
 
-(1) is the cheapest correct option and composes with column virtualization, which would make
-unbinding far more frequent.
+(1) is the cheapest correct option and composes with column virtualization, which has shipped and
+makes unbinding frequent.
 
 ## Acceptance
 

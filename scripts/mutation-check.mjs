@@ -2915,15 +2915,15 @@ const mutations = [
     name: 'publish on a PR: the build job stops depending on the full three-OS matrix',
     file: '.github/workflows/publish.yml',
     suite: 'test/unit/publishTargets.test.ts',
-    find: '    needs: [test, test-full]',
-    replace: '    needs: [test]',
+    find: '    needs: [test-full]\n',
+    replace: '',
     killedBy: 'tag-gating test (a tag could then publish a build that fails on Windows)'
   },
   {
-    name: 'publish on a PR: the build gate stops requiring both suites to have succeeded',
+    name: 'publish on a PR: the build gate stops requiring test-full to have succeeded',
     file: '.github/workflows/publish.yml',
     suite: 'test/unit/publishTargets.test.ts',
-    find: "(needs.test.result == 'success' && needs['test-full'].result == 'success')",
+    find: "needs['test-full'].result == 'success'",
     replace: 'true',
     killedBy: 'tag-gating test (an if: replaces the implicit success(), so a failed gate no longer stops the build)'
   },
@@ -2934,14 +2934,6 @@ const mutations = [
     find: "    if: ${{ !cancelled() && (github.event_name == 'pull_request'",
     replace: "    if: ${{ always() && (github.event_name == 'pull_request'",
     killedBy: 'tag-gating test (always() is the documented trap: it runs past a cancellation !cancelled() refuses)'
-  },
-  {
-    name: 'publish on a PR: the test job runs on a pull request again, duplicating test.yml gates',
-    file: '.github/workflows/publish.yml',
-    suite: 'test/unit/publishTargets.test.ts',
-    find: "    # test.yml's `gates` job already runs this battery on every PR; running it again here buys nothing.\n    if: ${{ github.event_name != 'pull_request' }}\n",
-    replace: '',
-    killedBy: 'no-duplicate-work test (the same battery test.yml already ran on the PR)'
   },
   {
     name: 'publish on a PR: test-full calls test.yml on a pull request, doubling the three-OS matrix',

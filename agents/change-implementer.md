@@ -66,17 +66,8 @@ way, then re-run the battery.
 
 ## Before you return
 
-Run the battery yourself — a change that arrives at the verifier with a red gate is a wasted
-round-trip:
-
-```
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json && npx tsc --noEmit -p tsconfig.test.json
-npm test
-node scripts/check-invariants.mjs
-node scripts/comment-lint.mjs
-node scripts/mutation-check.mjs
-npm run compile
-```
+Run the CLAUDE.md → Verification battery yourself, verbatim — a change that arrives at the verifier
+with a red gate is a wasted round-trip.
 
 Return: the changed-path list (each with its pre-image noted), what each obligation got (test,
 row, docs, mutation entry), and the exact commands you ran with their outcomes. State facts;

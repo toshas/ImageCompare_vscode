@@ -25,10 +25,8 @@ Split the tracked files into slices an auditor can hold whole, about 6-8k lines 
   are applied only on a yes.
 - Group the `CUT` entries into batches by area (production code, tests, docs and tooling), so each
   batch reads as one change and a rejected cut holds up only its own batch.
-- **Docs follow Simplified Technical English.** Every prose file is held to ASD-STE100's writing
-  rules, as `agents/bloat-auditor.md` → "The prose standard" states them, and the auditors'
-  `verbose-prose` cuts rewrite what breaks them. A rewrite batch holds one or two docs, because its
-  verifier must check that every claim of the original survived.
+- **A rewrite batch holds one or two docs**, because its verifier must check that every claim of the
+  original survived (prose standard: agents/bloat-auditor.md).
 
 ## 3. Apply and verify, one batch at a time
 

@@ -89,17 +89,9 @@ Verdict per obligation: **done** / **n/a because <reason>** / **MISSING**. Any M
 
 ## Run the gates
 
-All of them, verbatim, in `REPO_ROOT`; a gate this change broke is a reject, a gate already red
-before the change is context to report (establish which, and say how you know):
-
-```
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json && npx tsc --noEmit -p tsconfig.test.json
-npm test
-node scripts/check-invariants.mjs
-node scripts/comment-lint.mjs
-node scripts/mutation-check.mjs
-npm run compile
-```
+Run the CLAUDE.md → Verification battery, verbatim, in `REPO_ROOT`. A gate this change broke is a
+reject; a gate already red before the change is context to report (establish which, and say how you
+know).
 
 Plus the layer the change lives in: `npm run test:webview` (after compile) and/or
 `npm run test:integration` when the diff touches files those layers execute.

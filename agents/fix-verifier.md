@@ -81,14 +81,7 @@ where a file is expected, anything under `.git/` — reject and name it.
    by adding a closed list that is already incomplete. An unverified new absolute is a reject.
 4. **Citations.** Any `<doc-path>: <invariant-key>` reference or section pointer the diff adds or
    moves must resolve. Check it; do not assume the gate below covers the case.
-5. **Run the gates.** In `REPO_ROOT`, all of them, verbatim:
-   ```
-   node scripts/check-invariants.mjs
-   node scripts/comment-lint.mjs
-   npm test
-   node scripts/mutation-check.mjs
-   npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
-   ```
+5. **Run the gates.** Run the CLAUDE.md → Verification battery, verbatim, in `REPO_ROOT`.
    A gate this change broke is a reject. A gate already failing before the change is context to
    report, not this change's fault — establish which by reading, and say which you concluded. There is
    no branch here where you review with the gates skipped: an environment that cannot run them was

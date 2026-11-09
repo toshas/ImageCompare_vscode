@@ -41,7 +41,7 @@ Discovery breadth is the orchestrator's job, and it belongs in the contract you 
 
 ## 2. Pick the test layer (orchestrator)
 
-This repo has three (see [docs/testing.md](../../../docs/testing.md)):
+This repo has three (see [docs/testing.md](../../docs/testing.md)):
 
 | The bug is about… | Layer | Lives in | Runner |
 |---|---|---|---|
@@ -117,8 +117,9 @@ or N is a REJECT fixup (its objections may change what N+1 should do). Serialise
   per-obligation verdicts in the report or commit message.
 - `npm run test:dashboard` — confirm the mapped row lights green.
 - CI needs no extra step: the matrix in `.github/workflows/test.yml` runs all three layers on
-  ubuntu/windows/macos for every push and PR, so a deterministic, behavior-not-pixels test is
-  guarded everywhere automatically. Bug fixes get a test, never a demo clip.
+  ubuntu/windows/macos for every pull request and every push to `main` or `test/**`, so a
+  deterministic, behavior-not-pixels test is guarded everywhere automatically. Bug fixes get a test,
+  never a demo clip.
 
 ## Worked example — the modality-reorder tooltip bug
 

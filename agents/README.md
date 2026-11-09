@@ -60,7 +60,7 @@ invoked directly.
 (*`change-verifier` holds no Edit/Write but does hold Bash for its swap-restore RED check; it must
 leave the tree byte-identical, and proving that is part of its own protocol.)
 
-Two design points that are easy to undo by accident:
+Three design points that are easy to undo by accident:
 
 - **The verifier is dispatched without the generator's reasoning.** Not an efficiency measure — a
   model grades a change framed as its own work measurably softer than the identical change attributed
@@ -81,11 +81,5 @@ $EDITOR agents/<name>.md                                    # write it
 ln -sfn ../../agents/<name>.md .claude/agents/<name>.md     # Claude Code
 ```
 
-`.gitignore` ignores local agent state (`.claude/*`) but re-includes `.claude/agents/`, so the
-symlinks are committable while `settings.local.json` and caches are not.
-
-## Windows caveat
-
-Symlinks need `git config core.symlinks true` (and Developer Mode or admin) on Windows checkouts.
-Without it, replace the symlinks with copies kept in sync by a pre-commit hook — the canonical file
-under `agents/` stays the source either way.
+`.gitignore` and the Windows symlink caveat: as skills/README.md, with `.claude/agents/` in place of
+the skill dirs.

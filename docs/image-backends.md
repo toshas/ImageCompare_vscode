@@ -175,7 +175,8 @@ platform build strips it completely.
 
 Measure a VSIX's size on the artifact: `ls -la *.vsix`, and `unzip -l <vsix> | sort -rn` for what
 costs. If a VSIX grows or shrinks by more than ~1 MB and you added no native dependency, a libvips
-tier was added or dropped; check that before believing the build is fine.
+tier was added or dropped; check that before believing the build is fine. `dist/extension.js` (Jimp
+bundled in) is about 1 MB in the production build `vsce package` runs (1,053,646 bytes at 0.7.0).
 
 ## Why PPMX needs a custom path
 
@@ -481,13 +482,14 @@ provides `vscode`). There is no seam to stub, so both suites play the *environme
   `verify-openvsx` is skipped behind it.
 
   Three traps ride along:
-  - Giving `build` an `if:` so it can run while both gate jobs are *skipped* removes the implicit
-    `success()`. The condition must itself refuse a gate that **failed** or was **cancelled**, or a
-    tag can publish a build that fails on Windows: what `needs: [test, test-full]` exists to prevent.
+  - Giving `build` an `if:` so it can run while `test-full` is *skipped* removes the implicit
+    `success()`. The condition must itself refuse a `test-full` that **failed** or was
+    **cancelled**, or a tag can publish a build that fails on Windows: what `needs: [test-full]`
+    exists to prevent.
   - A skip carries down the whole `needs` chain, not one hop. `codium-smoke`, whose one need is a
-    green `build`, was skipped behind those same gates on every PR until it got an `if:` reading
+    green `build`, was skipped behind that same gate on every PR until it got an `if:` reading
     `build`'s result. `publish` keeps its event gate although that rule skips it today, because the
-    gate still holds if both gate jobs ever run on a PR.
+    gate still holds if `test-full` ever runs on a PR.
   - Cancelling superseded runs must exempt tags: a publish cut mid-flight leaves the two marketplaces
     half-updated, so `cancel-in-progress` is true for `pull_request` only.
 - **`universal-has-no-native`** — the universal VSIX carries the WASM tier and no native

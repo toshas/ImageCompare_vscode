@@ -18,7 +18,7 @@ This item is about everything along the tuple axis that is **not** DOM, and none
 | the `init` message payload | 5.2 MB for 265 x 136; 832 KB for 746 x 10 |
 | `tuples` in the webview | one entry per tuple, always |
 | the thumbnail plan | one slot per tuple x modality, planned up front — **36,040** on the 265 x 136 grid |
-| `loadedTuples` image cache | grows with what you visit; no eviction |
+| `loadedTuples` image cache | evicted beyond `prefetchCount + 3` of the current tuple |
 | `ThumbUrlCache` | one blob per swept slot, forever — its own item |
 | `winners` | one entry per vote, bounded by user action |
 
@@ -37,8 +37,6 @@ array before a single thumbnail is drawn. Measured open times on 265 x 136: `sca
    streaming the rest would cut time-to-first-thumbnail. Check what the webview actually needs at
    open — the carousel wall is sized arithmetically, so it may need only a count and the visible
    band.
-3. **`loadedTuples`.** An unbounded cache of decoded images, one entry per visited tuple. Same shape
-   as the `ThumbUrlCache` problem and probably the same fix: evict on unbind.
 
 ## Measure before building any of it
 
