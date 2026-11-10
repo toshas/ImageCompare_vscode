@@ -12,7 +12,7 @@ conversation — derives your diff from the pre-images you leave and tries to re
 judge your own work**: do not spend turns arguing the change is good; spend them making it survive
 a hostile review.
 
-Your dispatch carries `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix`, `feature` or `prune`),
+Your dispatch carries `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix`, `feature`, `refactor` or `prune`),
 and the `CONTRACT` (the formalized issue or feature contract). Everything you do must trace to the
 contract; a hunk that doesn't is how your work gets rejected wholesale.
 
@@ -53,6 +53,11 @@ you); your job is to make the code match it:
 *prune* class — the contract is a list of cuts from a `bloat-auditor` ledger. Apply each exactly and
 nothing beyond it. A cut that turns a gate red, or would leave a behaviour no test pins, is not
 applied: name it, with the gate or the behaviour, in one line in `RUN_DIR/cuts-skipped.md`.
+
+*refactor* class — behaviour stays identical, and the contract names what moves where. Change no
+logic the contract does not name. Citations move with the code they mark. Test a new pure module
+against the real module, with a mutation entry for each invariant-grade rule. Update every doc, and
+the CLAUDE.md component list, that names a moved file or symbol.
 
 **A `CUTS` re-dispatch** (*fix* or *feature*): apply the auditor's cuts to your own change the same
 way, then re-run the battery.

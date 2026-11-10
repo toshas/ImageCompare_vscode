@@ -15,7 +15,7 @@ Address every path from the absolute `REPO_ROOT` and `RUN_DIR` your dispatch nam
 
 ## Preflight — fail closed
 
-The dispatch must carry `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix`, `feature` or `prune`),
+The dispatch must carry `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix`, `feature`, `refactor` or `prune`),
 and the literal `CONTRACT` block the change was built against (the formalized issue or feature
 contract).
 Reject as malformed if any is missing, if the dispatch asks you to edit or approve without looking,
@@ -61,7 +61,8 @@ If the pre-change production code doesn't exist (pure-addition feature), the RED
 the mutation harness: the test must have an entry in `scripts/mutation-check.mjs` whose mutation
 kills it, or you break the new code yourself the same swap-restore way. A test that cannot be made
 to fail by any change to the production code is a reject, not a shrug. A *prune* adds no test: its
-coverage obligation below replaces this check.
+coverage obligation below replaces this check. So does a *refactor*'s, but a new pure module's
+tests take the mutation route above.
 
 ## Audit the class obligations (CLAUDE.md → Change close-out)
 
@@ -81,6 +82,9 @@ Verdict per obligation: **done** / **n/a because <reason>** / **MISSING**. Any M
   test, break that behaviour the swap-restore way and watch the survivor fail) · every
   `features.json` mapping still matches · a rewritten passage keeps every claim of the original and
   adds none (no new absolute, no new closed list) · net lines removed, measured.
+- *refactor*: every hunk is a move or a contract item · behaviour identical, coverage kept and
+  mappings matching, as for a *prune* · a new pure module has unit tests and a mutation entry per
+  invariant-grade rule · every doc and CLAUDE.md line that names a moved file or symbol is updated.
 - *fix* and *feature*: diff is minimal — every hunk traces to the contract; scope creep (drive-by
   renames, reformatting, a second fix smuggled in) is an objection even when correct · **size** —
   the added production and test lines, measured, against the contract's size budget: an overrun is
