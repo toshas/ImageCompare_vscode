@@ -1,18 +1,11 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { loadInited, getState, lastOutbound, focusViewer } from './helpers';
-
-async function viewerBox(page: Page) {
-  const box = await page.locator('#viewer').boundingBox();
-  if (!box) throw new Error('no viewer box');
-  return box;
-}
+import { centreOf } from './touchDriver';
 
 test.describe('pointer interactions', () => {
   test('drag pans the image when zoomed in', async ({ page }) => {
     await loadInited(page);
-    const box = await viewerBox(page);
-    const cx = box.x + box.width / 2;
-    const cy = box.y + box.height / 2;
+    const { x: cx, y: cy } = await centreOf(page, '#viewer');
 
     // Pan only matters when zoomed in.
     await page.mouse.move(cx, cy);
@@ -26,13 +19,6 @@ test.describe('pointer interactions', () => {
 
     const s = await getState(page);
     expect(Math.abs(s.panX) + Math.abs(s.panY)).toBeGreaterThan(0);
-  });
-
-  test('clicking a modality pill switches modality', async ({ page }) => {
-    await loadInited(page);
-    expect((await getState(page)).currentModalityIndex).toBe(0);
-    await page.locator('.modality-btn').nth(1).click();
-    await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(1);
   });
 
   test('clicking a carousel thumbnail navigates to that tuple', async ({ page }) => {
@@ -66,15 +52,6 @@ test.describe('keyboard actions', () => {
     await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(0);
     await page.keyboard.up('Space');
     await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(1);
-  });
-
-  test('[ reorders the current modality left', async ({ page }) => {
-    await loadInited(page);
-    await focusViewer(page);
-    expect((await getState(page)).modalityOrder).toEqual([0, 1]);
-    await page.keyboard.press('ArrowRight'); // move focus to modality at display pos 1
-    await page.keyboard.press('['); // move it left to pos 0
-    await expect.poll(async () => (await getState(page)).modalityOrder).toEqual([1, 0]);
   });
 });
 

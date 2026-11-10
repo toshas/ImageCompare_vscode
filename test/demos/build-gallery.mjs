@@ -21,8 +21,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const RAW = join(__dirname, 'raw');
 const OUT = join(__dirname, 'gallery');
 
-// Output is H.264 MP4 embedded as <video>: a real motion codec (small + sharp)
-// that plays in EVERY viewer — Safari, Chrome, VS Code's built-in HTML preview.
 // (Note: <video> renders in a browser, not inline in GitHub markdown.)
 const WIDTH = 680;
 const CRF = 28;

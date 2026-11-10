@@ -25,18 +25,7 @@ import { dirname, join } from 'node:path';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, '..');
 
-/**
- * Each mutation names the file it edits and the suite that must kill it. Every
- * suite imports the real source, so a mutation hits src/* (or standalone/*, which the sandbox now
- * carries too: the host-equivalence suite drives the real adapter) — except the rules at the end that
- * are not source at all: test infrastructure (test/webview/standaloneArtifact.ts,
- * test/webview/playwright.config.ts) — whether the webview layer serves a current, complete page, and
- * how that layer sizes itself and lays out its reports on a host CI never runs on — and the publish
- * workflow (.github/workflows/publish.yml), whose platform-target matrix decides which hosts can
- * install the extension at all and which nothing else in the tree checks. All suites live
- * under test/unit/ and are run through Vitest (the tuple-matching and pngText
- * mutations are killed there; the old in-test copies are gone).
- */
+/** Each mutation names the file it edits and the Vitest suite under test/unit/ that must kill it. The file is source (src/, standalone/) or a non-source rule a suite pins (test/ helpers and config, .github/workflows/). */
 const mutations = [
   // ── Tuple matching: the Vitest suite imports the real fileService.ts ──
   {
@@ -256,7 +245,7 @@ const mutations = [
     suite: 'test/unit/workPool.test.ts',
     find: 'for (let p = Priority.VISIBLE; p < Priority.PREFETCH; p++) {',
     replace: 'for (let p = Priority.PREFETCH - 1; p >= Priority.VISIBLE; p--) {',
-    killedBy: 'Test 2/5 (strict priority ordering)'
+    killedBy: 'Full priority ladder test (strict priority ordering)'
   },
   {
     name: 'workPool: EXPORT demoted below speculation',
@@ -474,7 +463,7 @@ const mutations = [
     suite: 'test/unit/columnWindow.test.ts',
     find: 'const to = Math.floor((scrollLeft + Math.max(0, viewportWidth) - pad) / pitch) + COLUMN_OVERSCAN;',
     replace: 'const to = Math.floor((scrollLeft + Math.max(0, viewportWidth) - pad) / pitch);',
-    killedBy: 'left-edge test (last = floor((220-6)/14) + 2 = 17)'
+    killedBy: 'left-edge test (last = floor((220-6)/26) + 2 = 10)'
   },
   {
     name: 'columnWindow: right clamp removed (the ring binds slots past the last column)',
@@ -685,7 +674,7 @@ const mutations = [
     killedBy: 'rearrangement test (new column lands beside its original predecessor)'
   },
   {
-    name: 'modalityVisibility: tiny-tile vote guard inverted (12px tiles vote again)',
+    name: 'modalityVisibility: tiny-tile vote guard inverted (tiles below the vote threshold vote again)',
     file: 'src/webview/modalityVisibility.ts',
     suite: 'test/unit/modalityVisibility.test.ts',
     find: 'return tileSize >= 3 * WINNER_CIRCLE_PX;',
@@ -1173,10 +1162,10 @@ const mutations = [
   {
     name: 'provider: centre snapshotted at sweep start (a mid-sweep navigation never re-aims)',
     file: 'src/imageCompareProvider.ts',
-    suite: 'test/unit/sweepProviderCentre.test.ts',
+    suite: 'test/unit/sweepCentreDwell.test.ts',
     find: '          centre: () => state.sweepAim.aim(),',
     replace: '          centre: (pinned => () => pinned)(state.sweepAim.aim()),',
-    killedBy: 'provider re-aim test (setCurrentTuple mid-sweep must move the remaining dispatches)'
+    killedBy: 'dwell test (the sweep re-aims at the settled row)'
   },
   {
     name: 'sweep aim: the centre follows the raw keystroke (a held key re-aims on every completed thumbnail)',
@@ -1386,7 +1375,7 @@ const mutations = [
     suite: 'test/unit/removalPlan.test.ts',
     find: '  io.post({ type: \'tupleDeleted\', tupleIndex: asTuple(tupleIndex) });\n  io.refreshCurrentTuple(current);',
     replace: '  io.refreshCurrentTuple(current);\n  io.post({ type: \'tupleDeleted\', tupleIndex: asTuple(tupleIndex) });',
-    killedBy: 'Test 4/8 (transcript must read tupleDeleted, then refresh)'
+    killedBy: 'Test 4 (transcript must read tupleDeleted, then refresh)'
   },
   {
     name: 'removal: re-save after the tuple step dropped',
@@ -1394,7 +1383,7 @@ const mutations = [
     suite: 'test/unit/removalPlan.test.ts',
     find: '  io.refreshCurrentTuple(current);\n  io.saveResults();',
     replace: '  io.refreshCurrentTuple(current);',
-    killedBy: 'Test 4/8 (a save must follow the tuple step, not only the end of the plan)'
+    killedBy: 'Test 4 (a save must follow the tuple step, not only the end of the plan)'
   },
   {
     name: 'removal: re-save after a modality step dropped',
@@ -1402,7 +1391,7 @@ const mutations = [
     suite: 'test/unit/removalPlan.test.ts',
     find: '  io.post({ type: \'modalityRemoved\', modalityIndex: asOriginal(modalityIndex) });\n  io.saveResults();',
     replace: '  io.post({ type: \'modalityRemoved\', modalityIndex: asOriginal(modalityIndex) });',
-    killedBy: 'Test 6/8 (each modality removal must be followed by its own save)'
+    killedBy: 'Test 6 (each modality removal must be followed by its own save)'
   },
   {
     name: 'removal: current-index clamp dropped when the last row goes',
@@ -2926,15 +2915,15 @@ const mutations = [
     name: 'publish on a PR: the build job stops depending on the full three-OS matrix',
     file: '.github/workflows/publish.yml',
     suite: 'test/unit/publishTargets.test.ts',
-    find: '    needs: [test, test-full]',
-    replace: '    needs: [test]',
+    find: '    needs: [test-full]\n',
+    replace: '',
     killedBy: 'tag-gating test (a tag could then publish a build that fails on Windows)'
   },
   {
-    name: 'publish on a PR: the build gate stops requiring both suites to have succeeded',
+    name: 'publish on a PR: the build gate stops requiring test-full to have succeeded',
     file: '.github/workflows/publish.yml',
     suite: 'test/unit/publishTargets.test.ts',
-    find: "(needs.test.result == 'success' && needs['test-full'].result == 'success')",
+    find: "needs['test-full'].result == 'success'",
     replace: 'true',
     killedBy: 'tag-gating test (an if: replaces the implicit success(), so a failed gate no longer stops the build)'
   },
@@ -2945,14 +2934,6 @@ const mutations = [
     find: "    if: ${{ !cancelled() && (github.event_name == 'pull_request'",
     replace: "    if: ${{ always() && (github.event_name == 'pull_request'",
     killedBy: 'tag-gating test (always() is the documented trap: it runs past a cancellation !cancelled() refuses)'
-  },
-  {
-    name: 'publish on a PR: the test job runs on a pull request again, duplicating test.yml gates',
-    file: '.github/workflows/publish.yml',
-    suite: 'test/unit/publishTargets.test.ts',
-    find: "    # test.yml's `gates` job already runs this battery on every PR; running it again here buys nothing.\n    if: ${{ github.event_name != 'pull_request' }}\n",
-    replace: '',
-    killedBy: 'no-duplicate-work test (the same battery test.yml already ran on the PR)'
   },
   {
     name: 'publish on a PR: test-full calls test.yml on a pull request, doubling the three-OS matrix',
@@ -3338,7 +3319,7 @@ const mutations = [
     suite: "test/unit/shareComparison.test.ts",
     find: "  if (columns.length > 0) return columns;",
     replace: "  if (false) return columns;",
-    killedBy: "column-folder layout test (the extension reads a folder of columns as columns)"
+    killedBy: "byte-for-byte staging test (the extension reads a folder of columns as columns)"
   },
   {
     name: "sharing script: session labels ignored",
@@ -3891,14 +3872,6 @@ function runSuite(suite) {
   return spawnSync('npx', args, { cwd: sandbox, encoding: 'utf8' });
 }
 
-function fail(msg, res) {
-  console.error(`\n${msg}`);
-  if (res) {
-    if (res.stdout) console.error(res.stdout);
-    if (res.stderr) console.error(res.stderr);
-  }
-}
-
 // ── Baseline: every referenced suite must be green before we trust a kill ──
 const suites = [...new Set(selected.map((m) => m.suite))];
 console.log('Baseline (no mutation) — every suite must be green:');
@@ -3910,7 +3883,9 @@ for (const suite of suites) {
     console.log(`  green  ${suite}`);
   } else {
     baselineGreen = false;
-    fail(`  RED    ${suite}  (exit ${res.status}${res.error ? `, ${res.error.message}` : ''})`, res);
+    console.error(`\n  RED    ${suite}  (exit ${res.status}${res.error ? `, ${res.error.message}` : ''})`);
+    if (res.stdout) console.error(res.stdout);
+    if (res.stderr) console.error(res.stderr);
   }
 }
 if (!baselineGreen) {

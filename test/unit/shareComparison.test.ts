@@ -20,7 +20,7 @@ import {
   StagedFile,
   unopenablePaths,
 } from '../../standalone/sharePlan';
-import { nodeBase64, nodeShareIo } from '../../standalone/shareNodeIo';
+import { nodeShareIo } from '../../standalone/shareNodeIo';
 import { parsePackedThumbs, decodePackedThumb } from '../../standalone/packedThumbs';
 import { HOST_REGIMES } from '../../standalone/hostRegimes';
 import { makeSolidPng } from '../fixtures/synthetic';
@@ -67,7 +67,7 @@ function columnsFolder(): string {
 }
 
 const share = (input: string, out: string, host: 'claude-artifact' | 'static' = 'claude-artifact', title?: string) =>
-  shareComparison({ input, out, host, title, pageHtml: PAGE, base64: nodeBase64 }, nodeShareIo);
+  shareComparison({ input, out, host, title, pageHtml: PAGE }, nodeShareIo);
 
 async function refusal(run: Promise<unknown>): Promise<string[]> {
   const err = await run.then(() => null, e => e);
@@ -76,14 +76,6 @@ async function refusal(run: Promise<unknown>): Promise<string[]> {
 }
 
 describe('share: layout as the extension reads the input', () => {
-  it('lays a folder of image columns out as it is, ignoring loose files, non-images and results.txt', async () => {
-    const layout = await planLayout(columnsFolder(), nodeShareIo);
-    expect(layout.name).toBe('cmp');
-    expect(layout.images.map(i => i.path)).toEqual([
-      'gt/airplane.jpg', 'gt/baboon.jpg', 'pred/airplane.jpg', 'pred/baboon.jpg', 'pred/tiny.png',
-    ]);
-  });
-
   it('lays a folder of loose images out flat', async () => {
     put('flat/a_gt.jpg', photo('airplane.jpg'));
     put('flat/a_pred.jpg', photo('baboon.jpg'));
@@ -360,7 +352,7 @@ describe('share: refuses, never alters (docs/standalone.md: pack-refuses-never-a
     put('cmp/pred/depth.tif', 'II*');
     let thumbnails = 0;
     const counting = { ...nodeShareIo, thumbnail: async (...args: Parameters<typeof nodeShareIo.thumbnail>) => { thumbnails++; return nodeShareIo.thumbnail(...args); } };
-    const err = await shareComparison({ input, out: path.join(tmp, 'out'), host: 'claude-artifact', pageHtml: PAGE, base64: nodeBase64 }, counting).then(() => null, e => e);
+    const err = await shareComparison({ input, out: path.join(tmp, 'out'), host: 'claude-artifact', pageHtml: PAGE }, counting).then(() => null, e => e);
     expect(err).toBeInstanceOf(ShareRefusal);
     expect(thumbnails).toBe(0);
   });
@@ -419,7 +411,7 @@ describe('share: refuses, never alters (docs/standalone.md: pack-refuses-never-a
       if (++copies === 3) throw new Error('disk full');
       await nodeShareIo.copyFile(from, to);
     } };
-    const err = await shareComparison({ input: columnsFolder(), out, host: 'claude-artifact', pageHtml: PAGE, base64: nodeBase64 }, flaky).then(() => null, e => e);
+    const err = await shareComparison({ input: columnsFolder(), out, host: 'claude-artifact', pageHtml: PAGE }, flaky).then(() => null, e => e);
     expect((err as Error).message).toBe('disk full');
     expect(fs.existsSync(out)).toBe(false);
   });

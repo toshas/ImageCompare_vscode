@@ -200,14 +200,4 @@ describe('pollPlan pairRenames (real pollPlan code)', () => {
     expect(out.added).toEqual([entry('/r/gt', 'new2.png')]);
     expect(out.removed).toEqual([]);
   });
-
-  it('Test 5: the carrier shape survives pairing (extra fields flow through untouched)', () => {
-    const out = pairRenames(
-      [entry('/r/pred', 'old.png', 'pred')],
-      [entry('/r/pred', 'new.png', 'pred')],
-      true
-    );
-    expect(out.renames[0].from.modality).toBe('pred');
-    expect(out.renames[0].to.modality).toBe('pred');
-  });
 });

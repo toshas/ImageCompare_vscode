@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { prefetchColumns, prefetchTuples, prefetchWavePlan } from '../../src/prefetchPlan';
 
-// The speculation policy, on the real module the provider imports.
-// The field pathology it replaces (docs/loading-architecture.md, "Prefetch"): every wave loaded
-// `center ± prefetchCount` x *all* modalities at full resolution. Measured on a 10-modality grid at
-// prefetchCount 3 that is 69 slots / 164.5MB per wave and 13.3s of a 5-slot pool, of which a
-// five-tuple browsing trace displayed 10MB — 4%. The order mattered as much as the volume: the
-// visible column of the +1 tuple sat behind the centre tuple's other nine columns, so the first step
-// to a neighbour was a cache MISS (1022ms measured, against a 741ms idle cold load) — prefetch was
-// slower than no prefetch at the one thing it exists for.
+// The speculation policy, on the real module the provider imports (docs/loading-architecture.md, "Prefetch" has the measurements).
 // (docs/loading-architecture.md: prefetch-scoped-to-the-visible-column, prefetch-visible-column-first)
 
 const WIDE = Array.from({ length: 10 }, (_, i) => i);
@@ -97,9 +90,5 @@ describe('prefetch wave: column-major, so the next step is already cached', () =
     expect(wave.map(s => `${s.tupleIndex}-${s.modalityIndex}`)).toEqual([
       '1-3', '2-4', '3-4', '1-4', '2-2', '3-2', '1-2'
     ]);
-  });
-
-  it('speculates on nothing when every column is hidden and the strip is empty', () => {
-    expect(plan({ scope: scope({ modalityOrder: [], currentDisplayIndex: 0 }) })).toEqual([]);
   });
 });

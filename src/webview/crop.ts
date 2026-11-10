@@ -118,24 +118,21 @@ function createOverlay(viewerEl: HTMLElement): void {
     dimEls.push(dim);
   }
 
-  // Crop rectangle (hidden until user draws)
   rectEl = document.createElement('div');
   rectEl.className = 'crop-rect';
   rectEl.style.display = 'none';
   overlayEl.appendChild(rectEl);
 
-  // Resize handles
   const handles: HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
   for (const id of handles) {
     const handle = document.createElement('div');
     handle.className = 'crop-handle';
     handle.dataset.handle = id;
-    handle.style.cursor = getCursorForHandle(id);
+    handle.style.cursor = `${id}-resize`;
     overlayEl.appendChild(handle);
     handleEls.set(id, handle);
   }
 
-  // Toolbar (confirm/cancel)
   toolbarEl = document.createElement('div');
   toolbarEl.className = 'crop-toolbar';
   toolbarEl.innerHTML = `
@@ -155,7 +152,6 @@ function createOverlay(viewerEl: HTMLElement): void {
     exitCropMode();
   });
 
-  // Initially hide handles and toolbar
   setHandlesVisible(false);
   toolbarEl.style.display = 'none';
 }
@@ -175,14 +171,6 @@ function setHandlesVisible(visible: boolean): void {
   for (const el of handleEls.values()) {
     el.style.display = visible ? 'block' : 'none';
   }
-}
-
-function getCursorForHandle(id: HandleId): string {
-  const map: Record<HandleId, string> = {
-    nw: 'nw-resize', n: 'n-resize', ne: 'ne-resize', e: 'e-resize',
-    se: 'se-resize', s: 's-resize', sw: 'sw-resize', w: 'w-resize'
-  };
-  return map[id];
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +201,6 @@ export function exitCropMode(): void {
   lastViewport = null;
   destroyOverlay();
 
-  // Update crop button state
   const btn = document.getElementById('crop-btn');
   if (btn) btn.classList.remove('active');
 }
@@ -231,7 +218,6 @@ function confirmCrop(): void {
 export function handleCropMouseDown(e: MouseEvent): boolean {
   if (!overlayEl || !lastViewport) return false;
 
-  // Check if clicking on a handle
   const target = e.target as HTMLElement;
   if (target.classList.contains('crop-handle') && target.dataset.handle) {
     e.preventDefault();
@@ -264,12 +250,10 @@ export function handleCropMouseDown(e: MouseEvent): boolean {
     return true;
   }
 
-  // Check if clicking inside the crop-toolbar
   if (target.closest('.crop-toolbar')) {
     return true;
   }
 
-  // Check if clicking inside existing crop rect (to move)
   if (cropRect && rectEl) {
     const screenPos = imageToScreen(cropRect.x, cropRect.y, lastViewport);
     const screenEnd = imageToScreen(cropRect.x + cropRect.w, cropRect.y + cropRect.h, lastViewport);
@@ -290,7 +274,6 @@ export function handleCropMouseDown(e: MouseEvent): boolean {
     }
   }
 
-  // Start drawing a new crop rectangle
   e.preventDefault();
   e.stopPropagation();
   isDrawing = true;
@@ -329,7 +312,6 @@ export function handleCropMouseMove(e: MouseEvent): boolean {
     const dy = imgPos.y - moveStartImg.y;
     let newX = moveStartRect.x + dx;
     let newY = moveStartRect.y + dy;
-    // Clamp to image bounds
     newX = Math.max(0, Math.min(lastViewport.imgW - moveStartRect.w, newX));
     newY = Math.max(0, Math.min(lastViewport.imgH - moveStartRect.h, newY));
     cropRect = { x: Math.round(newX), y: Math.round(newY), w: moveStartRect.w, h: moveStartRect.h };
@@ -342,7 +324,6 @@ export function handleCropMouseMove(e: MouseEvent): boolean {
     const imgPos = screenToImage(e.clientX, e.clientY, lastViewport);
     const r = { ...cropRect };
 
-    // Adjust edges based on which handle is being dragged
     if (activeHandle.includes('n')) {
       const newTop = Math.max(0, Math.min(r.y + r.h - MIN_CROP_PX, imgPos.y));
       r.h = r.y + r.h - newTop;
@@ -368,7 +349,7 @@ export function handleCropMouseMove(e: MouseEvent): boolean {
   return false;
 }
 
-export function handleCropMouseUp(_e: MouseEvent): boolean {
+export function handleCropMouseUp(): boolean {
   const wasDrawing = isDrawing;
   const wasActive = isDrawing || isMoving || isResizing;
   isDrawing = false;
@@ -431,7 +412,6 @@ export function renderCropOverlay(vp: ViewportInfo): void {
   lastViewport = vp;
 
   if (!overlayEl || !rectEl || !cropRect) {
-    // Hide everything if no rect
     if (overlayEl) overlayEl.style.display = cropMode ? 'block' : 'none';
     for (const dim of dimEls) dim.style.display = 'none';
     if (rectEl) rectEl.style.display = 'none';
@@ -444,7 +424,6 @@ export function renderCropOverlay(vp: ViewportInfo): void {
 
   const viewerRect = vp.viewerEl.getBoundingClientRect();
 
-  // Convert crop rect corners to screen-relative coordinates (within viewer)
   const topLeft = imageToScreen(cropRect.x, cropRect.y, vp);
   const bottomRight = imageToScreen(cropRect.x + cropRect.w, cropRect.y + cropRect.h, vp);
 
@@ -458,26 +437,17 @@ export function renderCropOverlay(vp: ViewportInfo): void {
   const ow = viewerRect.width;
   const oh = viewerRect.height;
 
-  // Position dim overlays (top, bottom, left, right)
-  if (dimEls.length >= 4) {
-    // Top
-    dimEls[0].style.cssText = `display:block; left:0; top:0; width:${ow}px; height:${Math.max(0, sy)}px;`;
-    // Bottom
-    dimEls[1].style.cssText = `display:block; left:0; top:${ey}px; width:${ow}px; height:${Math.max(0, oh - ey)}px;`;
-    // Left
-    dimEls[2].style.cssText = `display:block; left:0; top:${sy}px; width:${Math.max(0, sx)}px; height:${sh}px;`;
-    // Right
-    dimEls[3].style.cssText = `display:block; left:${ex}px; top:${sy}px; width:${Math.max(0, ow - ex)}px; height:${sh}px;`;
-  }
+  dimEls[0].style.cssText = `display:block; left:0; top:0; width:${ow}px; height:${Math.max(0, sy)}px;`;
+  dimEls[1].style.cssText = `display:block; left:0; top:${ey}px; width:${ow}px; height:${Math.max(0, oh - ey)}px;`;
+  dimEls[2].style.cssText = `display:block; left:0; top:${sy}px; width:${Math.max(0, sx)}px; height:${sh}px;`;
+  dimEls[3].style.cssText = `display:block; left:${ex}px; top:${sy}px; width:${Math.max(0, ow - ex)}px; height:${sh}px;`;
 
-  // Position crop rect
   rectEl.style.display = 'block';
   rectEl.style.left = sx + 'px';
   rectEl.style.top = sy + 'px';
   rectEl.style.width = sw + 'px';
   rectEl.style.height = sh + 'px';
 
-  // Position handles
   const hs = HANDLE_SIZE;
   const hh = hs / 2;
   const positions: Record<HandleId, { left: number; top: number }> = {
@@ -499,7 +469,6 @@ export function renderCropOverlay(vp: ViewportInfo): void {
     el.style.height = hs + 'px';
   }
 
-  // Position toolbar below the crop rect
   if (toolbarEl && toolbarEl.style.display !== 'none') {
     const tbLeft = sx + sw / 2;
     const tbTop = ey + 8;

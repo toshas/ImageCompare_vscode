@@ -117,7 +117,7 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === 'win32')('mutation harness isolation', () => {
-  it('a completed run kills its mutation, drops the sandbox, and never writes the working tree', async () => {
+  it('a completed run kills its mutation, drops the sandbox, never writes the working tree, and brands itself a subset that refuses to exit 0', async () => {
     const before = hash(PROBE_ABS);
     const run = startHarness({ only: PROBE_MUTATION });
     const box = await sandboxOf(run);
@@ -128,6 +128,12 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
     expect(code).toBe(SUBSET_EXIT);
     expect(hash(PROBE_ABS)).toBe(before);
     expect(fs.existsSync(box)).toBe(false);
+
+    expect(run.output()).toContain('SUBSET RUN - NOT THE GATE');
+    expect(run.output()).not.toMatch(/mutations killed\./);
+    const lines = run.output().trimEnd().split('\n');
+    expect(lines[lines.length - 1]).toMatch(/NOT A GATE/);
+    expect(lines[lines.length - 1]).toContain('1 of ');
   }, 120_000);
 
   it('the sandbox is complete enough to resolve the vscode mock alias', async () => {
@@ -272,20 +278,6 @@ describe.skipIf(process.platform === 'win32')('mutation harness isolation', () =
     expect(code).toBe(1);
     expect(hash(PROBE_ABS)).toBe(before);
     expect(fs.existsSync(box)).toBe(false);
-  }, 120_000);
-
-  it('brands a seam-narrowed run a subset and refuses to exit 0, so it cannot pass for the gate', async () => {
-    const run = startHarness({ only: PROBE_MUTATION });
-    await sandboxOf(run);
-    const { code } = await run.exit;
-
-    expect(run.output()).toContain('SUBSET RUN - NOT THE GATE');
-    expect(run.output()).not.toMatch(/mutations killed\./);
-    const lines = run.output().trimEnd().split('\n');
-    expect(lines[lines.length - 1]).toMatch(/NOT A GATE/);
-    expect(lines[lines.length - 1]).toContain('1 of ');
-    expect(code).not.toBe(0);
-    expect(code).toBe(SUBSET_EXIT);
   }, 120_000);
 
   it('reports an actionable failure, not a raw abort, when the sandbox vanishes before the restore', async () => {

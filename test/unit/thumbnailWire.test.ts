@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig } from '../mocks/vscode';
 import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { emptyTierStats } from '../../src/debugLog';
 
 // The `thumbnail` wire shape, on the REAL provider's post path. The packfile hands out
 // `key -> offset/length` slices of ONE shared buffer, so a thumbnail served from the pack is a
@@ -36,12 +37,7 @@ function makeRig(thumbnailBytes: () => Buffer) {
   provider.thumbnailService = {
     getThumbnail: async () => thumbnailBytes(),
     loadFullImage: async () => ({ bytes: new Uint8Array(8), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    })
+    thumbTierStats: emptyTierStats
   };
 
   const tuples = Array.from({ length: TUPLES }, (_, t) => ({

@@ -50,7 +50,7 @@ export class TransportBudget<T> {
   private sweeping = false;
   private readonly parked = new Map<string, DeferredPush<T>>();
 
-  constructor(private limitBytes: number, private readonly maxDeferred: number = MAX_DEFERRED_PUSHES) {}
+  constructor(private limitBytes: number) {}
 
   /** False when the budget is unlimited — the provider then skips the ack plumbing entirely. */
   get active(): boolean {
@@ -104,7 +104,7 @@ export class TransportBudget<T> {
   defer(key: string, item: T, bytes: number): void {
     this.parked.delete(key);
     this.parked.set(key, { key, bytes, item });
-    while (this.parked.size > this.maxDeferred) {
+    while (this.parked.size > MAX_DEFERRED_PUSHES) {
       const oldest = this.parked.keys().next().value;
       if (oldest === undefined) break;
       this.parked.delete(oldest);

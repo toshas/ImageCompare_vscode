@@ -1,5 +1,5 @@
-import { test, expect, Page } from '@playwright/test';
-import { loadInited, getState, hideModalityViaMenu } from './helpers';
+import { test, expect } from '@playwright/test';
+import { loadInited, getState, hideModalityViaMenu, wallOffset } from './helpers';
 import { DEFAULT_SPEC, FixtureSpec } from '../fixtures/messages';
 import { TouchDriver, centreOf } from './touchDriver';
 import { WEBVIEW_STYLES } from '../../src/webviewShell';
@@ -18,12 +18,6 @@ const STRIP: FixtureSpec = {
   modalities: ['M0', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7'],
   tupleNames: Array.from({ length: 40 }, (_, i) => `scene_${String(i).padStart(3, '0')}`),
 };
-
-/** The middle of the image area, clear of the bar and of the (closed) strip. */
-async function imageCentre(page: Page) {
-  const box = (await page.locator('#viewer').boundingBox())!;
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
 
 test.describe('touch layout gate', () => {
   test('a fine primary pointer keeps the desktop layout: no touch-ui, no ▦, the strip beside the image', async ({ page }) => {
@@ -133,7 +127,7 @@ test.describe('touch layout (coarse pointer)', () => {
     expect((await getState(page)).hiddenModalities).toEqual([1]);
 
     const touch = await TouchDriver.attach(page);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await touch.drag(c, { x: c.x - 120, y: c.y });
     expect((await getState(page)).currentModalityIndex).toBe(2);
     await touch.drag(c, { x: c.x + 120, y: c.y });
@@ -143,7 +137,7 @@ test.describe('touch layout (coarse pointer)', () => {
   test('an up swipe on the image steps to the next tuple, a down swipe back', async ({ page }) => {
     await loadInited(page);
     const touch = await TouchDriver.attach(page);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await touch.drag(c, { x: c.x, y: c.y - 120 });
     expect((await getState(page)).currentTupleIndex).toBe(1);
     await touch.drag(c, { x: c.x, y: c.y + 120 });
@@ -160,7 +154,7 @@ test.describe('touch layout (coarse pointer)', () => {
     const touch = await TouchDriver.attach(page);
     await touch.tap(await centreOf(page, '#modality-selector .modality-btn >> nth=1'));
     await expect.poll(async () => (await getState(page)).currentModalityIndex).toBe(1);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await touch.start(c);
     await page.waitForTimeout(500);
     expect((await getState(page)).currentModalityIndex).toBe(0);
@@ -175,7 +169,7 @@ test.describe('touch layout (coarse pointer)', () => {
       document.getElementById('viewer')!.addEventListener('mousedown', () => { (window as any).__mousedowns++; });
     });
     const touch = await TouchDriver.attach(page);
-    await touch.tap(await imageCentre(page));
+    await touch.tap(await centreOf(page, '#viewer'));
     await page.waitForTimeout(100);
     expect(await page.evaluate(() => (window as any).__mousedowns)).toBe(0);
   });
@@ -183,7 +177,7 @@ test.describe('touch layout (coarse pointer)', () => {
   test('a two-finger pinch zooms, and lifting one finger never swipes', async ({ page }) => {
     await loadInited(page);
     const touch = await TouchDriver.attach(page);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await touch.start({ x: c.x - 30, y: c.y }, { x: c.x + 30, y: c.y });
     for (let i = 1; i <= 8; i++) {
       await touch.move({ x: c.x - 30 - 12 * i, y: c.y }, { x: c.x + 30 + 12 * i, y: c.y });
@@ -202,7 +196,7 @@ test.describe('touch layout (coarse pointer)', () => {
   test('two fingers dragged together pan the image', async ({ page }) => {
     await loadInited(page);
     const touch = await TouchDriver.attach(page);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await touch.start({ x: c.x - 40, y: c.y }, { x: c.x + 40, y: c.y });
     for (let i = 1; i <= 8; i++) {
       await touch.move({ x: c.x - 40 + 10 * i, y: c.y + 5 * i }, { x: c.x + 40 + 10 * i, y: c.y + 5 * i });
@@ -221,7 +215,7 @@ test.describe('touch layout (coarse pointer)', () => {
   test('a tap on the zoom readout resets zoom and pan', async ({ page }) => {
     await loadInited(page);
     const touch = await TouchDriver.attach(page);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await touch.start({ x: c.x - 30, y: c.y - 20 }, { x: c.x + 30, y: c.y - 20 });
     for (let i = 1; i <= 6; i++) {
       await touch.move({ x: c.x - 30 - 15 * i, y: c.y }, { x: c.x + 30 + 15 * i, y: c.y });
@@ -262,15 +256,11 @@ test.describe('touch layout (coarse pointer)', () => {
     await expect(page.locator('#viewer')).toHaveClass(/strip-closed/);
 
     await open();
-    const wallY = () => page.evaluate(() => {
-      const m = /translateY\((-?[\d.]+)px\)/.exec(document.getElementById('carousel-wall')!.style.transform);
-      return m ? 0 - parseFloat(m[1]) : 0;
-    });
-    const before = await wallY();
+    const before = await wallOffset(page);
     const c = await centreOf(page, '#carousel');
     await touch.drag(c, { x: c.x, y: c.y - 200 });
     // A finger dragged up 200 px scrolls the rows down by about that much (the slop eats the first few).
-    await expect.poll(wallY).toBeGreaterThan(before + 150);
+    await expect.poll(() => wallOffset(page)).toBeGreaterThan(before + 150);
     expect((await getState(page)).currentTupleIndex).toBe(2);
     await expect(page.locator('#viewer')).not.toHaveClass(/strip-closed/);
   });
@@ -279,7 +269,7 @@ test.describe('touch layout (coarse pointer)', () => {
     await loadInited(page);
     await page.locator('#modality-selector .modality-btn').first().click({ button: 'right' });
     await expect(page.locator('#context-menu')).not.toHaveClass(/visible/);
-    const c = await imageCentre(page);
+    const c = await centreOf(page, '#viewer');
     await page.mouse.click(c.x, c.y, { button: 'right' });
     await expect(page.locator('#context-menu')).not.toHaveClass(/visible/);
     const prevented = await page.evaluate(() => {

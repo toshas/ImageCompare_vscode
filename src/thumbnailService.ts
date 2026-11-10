@@ -10,10 +10,7 @@ import { DECK_IMAGE_MAX_DIM, DECK_JPEG_QUALITY } from './pptxDeck';
 import { passthroughMime } from './imageMime';
 import { debugEnabled, debugVerbose, emptyPackLoadStat, emptyTierStats, formatBytes, PackLoadStat, ThumbTier, TierStats } from './debugLog';
 
-/** Byte-capped, not entry-capped: `thumbnailSize` maxes at 200, so entries range 4x in size. Sized
- *  past a realistic session — a real cache of 26k thumbnails at ~4.3KB of raw JPEG each is ~110MB,
- *  and a cap that bites turns every revisit into a disk read on the mounts this extension exists to
- *  serve. The cap also bounds the packfile snapshot built from this cache. */
+/** Byte-capped, not entry-capped: entries range 4x in size (docs/image-backends.md). */
 const MEMORY_CACHE_MAX_BYTES = 192 * 1024 * 1024;
 const PACK_SNAPSHOT_IDLE_MS = 30_000;
 

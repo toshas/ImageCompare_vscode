@@ -10,7 +10,7 @@
  *   green  = covered and ALL mapped tests pass
  *   red    = covered but a mapped test FAILS
  *   gray   = no test mapped yet (an honest gap)
- *   yellow = mapped to a test title that wasn't found (stale mapping)
+ *   yellow = a mapped title was not found (stale mapping, or its suite wrote no JSON)
  *
  * Usage:
  *   node test/dashboard/generate.mjs           # run suites, then generate
@@ -41,13 +41,12 @@ function run(cmd, env = {}) {
 
 /** Run a command and write its stdout to `outFile` (used for vitest, whose
  *  --outputFile is unreliable under execSync). stderr is inherited for logs. */
-function runCaptureStdout(cmd, outFile, env = {}) {
+function runCaptureStdout(cmd, outFile) {
   console.log(`\n$ ${cmd}`);
   let out = '';
   try {
     out = execSync(cmd, {
       cwd: ROOT,
-      env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'inherit'],
       maxBuffer: 64 * 1024 * 1024,
     }).toString();
@@ -141,12 +140,10 @@ const staleRows = [];
 const areas = catalog.areas.map((area) => {
   const features = area.features.map((f) => {
     let status;
-    const detail = [];
     if (!f.tests || f.tests.length === 0) {
       status = 'gray';
     } else {
       const looked = f.tests.map((t) => ({ ...t, ...lookup(t.suite, t.match) }));
-      detail.push(...looked);
       if (looked.some((l) => !l.found)) status = 'yellow';
       else if (looked.every((l) => l.ok)) status = 'green';
       else status = 'red';
@@ -156,7 +153,7 @@ const areas = catalog.areas.map((area) => {
       }
     }
     counts[status]++;
-    return { ...f, status, detail };
+    return { ...f, status };
   });
   return { area: area.area, features };
 });
@@ -174,7 +171,6 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-const generatedAt = process.env.IC_DASHBOARD_TIME || '(run-time)';
 const missingSuites = Object.entries(suites)
   .filter(([, s]) => !s.present)
   .map(([k]) => k);
@@ -206,7 +202,7 @@ const html = `<!DOCTYPE html>
 <body>
 <header>
   <h1>ImageCompare — Feature Coverage Dashboard</h1>
-  <div class="sub">${counts.green}/${total} features tested &middot; generated ${esc(generatedAt)}${missingSuites.length ? ` &middot; <span style="color:${COLOR.yellow}">missing suite JSON: ${missingSuites.join(', ')}</span>` : ''}</div>
+  <div class="sub">${counts.green}/${total} features tested &middot; generated (run-time)${missingSuites.length ? ` &middot; <span style="color:${COLOR.yellow}">missing suite JSON: ${missingSuites.join(', ')}</span>` : ''}</div>
   <div class="bar"><i></i></div>
   <div class="legend">
     <span style="color:${COLOR.green}">tested ${counts.green}</span>
@@ -237,8 +233,6 @@ ${a.features
 </main></body></html>`;
 
 writeFileSync(join(__dirname, 'dashboard.html'), html);
-
-
 
 console.log(`\n✔ Dashboard: ${counts.green} tested, ${counts.red} failing, ${counts.gray} no-test, ${counts.yellow} stale (of ${total}).`);
 console.log('  → test/dashboard/dashboard.html');

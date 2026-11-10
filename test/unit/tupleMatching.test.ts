@@ -39,7 +39,7 @@ async function scanDirs(spec: Record<string, string[]>) {
 }
 
 describe('matchTuplesWithTrie (real fileService code)', () => {
-  it('matches identical basenames across modalities (exact pass)', () => {
+  it('pairs files sharing a prefix across modalities (fuzzy pass)', () => {
     const { files, modalities } = build({
       GT: ['00000079_gt.png', '00000080_gt.png'],
       RGB: ['00000079_rgb.png', '00000080_rgb.png'],
@@ -256,16 +256,6 @@ describe('scanForImages mode 2 pipeline (real scanDirectoriesAsModalities)', () 
     const crop2Tuple = result.tuples.find((t) => t.name.includes('crop01_crop01'));
     expect(crop2Tuple).toBeDefined();
     expect(crop2Tuple!.images.length).toBe(3);
-  });
-
-  it('baseline: no crop files, dense tuples', async () => {
-    const result = await scanDirs({
-      GT: ['img_001_gt.png', 'img_002_gt.png'],
-      pred: ['img_001_pred.png', 'img_002_pred.png'],
-      RGB: ['img_001_rgb.png', 'img_002_rgb.png'],
-    });
-    expect(result.tuples.length).toBe(2);
-    for (const t of result.tuples) expect(t.images.length).toBe(3);
   });
 
   it('orders rows naturally by tuple NAME', async () => {

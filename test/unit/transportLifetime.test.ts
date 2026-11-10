@@ -6,6 +6,7 @@ import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, __set
 import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { emptyPackLoadStat, emptyTierStats } from '../../src/debugLog';
 import { Priority } from '../../src/workPool';
 
 // Lifetime half of the transport policy, on the REAL provider: the sweep flag parks every
@@ -90,13 +91,8 @@ function makeRig(opts: RigOptions = {}): Rig {
         ? new Promise<Buffer>(resolve => { thumbResolvers.push(resolve); })
         : Promise.resolve(Buffer.alloc(4)),
     loadFullImage: async () => ({ bytes: new Uint8Array(1000), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
+    thumbTierStats: emptyTierStats,
+    thumbPackLoadStat: emptyPackLoadStat
   };
 
   const tuples = Array.from({ length: opts.tuples ?? TUPLES }, (_, t) => ({

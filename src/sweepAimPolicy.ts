@@ -2,7 +2,7 @@
 import { SweepAim } from './thumbnailPlan';
 import { LOAD_DEBOUNCE_MS } from './webview/tupleLoadPlan';
 
-/** The `tupleFullyLoaded` report as the webview sends it: the one message that carries the strip (docs/loading-architecture.md: thumbnails-centre-out). */
+/** A strip report as the webview sends it — `tupleFullyLoaded` or `setCurrentModality` (docs/loading-architecture.md: thumbnails-centre-out). */
 export interface AimStripReport {
   modalityOrder: readonly number[];
   currentDisplayIndex: number;
@@ -44,7 +44,7 @@ export class SweepAimPolicy {
     }, AIM_DWELL_MS);
   }
 
-  /** A raw `tupleFullyLoaded`: the column is un-permuted here, and an unreadable report is not an aim (docs/tuple-matching.md: wire-index-is-original). */
+  /** A raw `tupleFullyLoaded` or `setCurrentModality`: the column is un-permuted here, and an unreadable report is not an aim (docs/tuple-matching.md: wire-index-is-original). */
   noteStrip(report: AimStripReport): void {
     const modality = report.modalityOrder[report.currentDisplayIndex];
     if (modality === undefined) return;

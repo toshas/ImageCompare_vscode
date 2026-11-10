@@ -43,7 +43,7 @@ derive diffs and run the gates, so its "never modify" rule is prose backed by re
 not structure. This is the same trade Anthropic's own `claude-code-action` repo makes: its reviewer
 agents omit write tools where they can, and rely on instruction where the job needs a shell.
 
-## The three agents
+## The agents
 
 | Agent | Writes? | Job |
 |---|---|---|
@@ -52,13 +52,15 @@ agents omit write tools where they can, and rely on instruction where the job ne
 | `fix-verifier` | no | Derives the diff itself, runs the gates, default REJECT. |
 | `change-implementer` | yes | Implements **one** formalized fix/feature contract. Never reviews its own work. |
 | `change-verifier` | no* | Derives the diff from pre-images, re-proves RED, audits close-out obligations, default REJECT. |
+| `bloat-auditor` | no | Reads one change's diff or one slice of the repo, returns a cut ledger. Never cuts. |
 
-The first three are dispatched by `skills/verify-docs/SKILL.md`, the last two by
-`skills/fix-issue/SKILL.md` and `skills/implement-feature/SKILL.md` — none invoked directly.
+The first three are dispatched by `skills/verify-docs/SKILL.md`, the last three by
+`skills/fix-issue/SKILL.md`, `skills/implement-feature/SKILL.md` and `skills/prune/SKILL.md` — none
+invoked directly.
 (*`change-verifier` holds no Edit/Write but does hold Bash for its swap-restore RED check; it must
 leave the tree byte-identical, and proving that is part of its own protocol.)
 
-Two design points that are easy to undo by accident:
+Three design points that are easy to undo by accident:
 
 - **The verifier is dispatched without the generator's reasoning.** Not an efficiency measure — a
   model grades a change framed as its own work measurably softer than the identical change attributed
@@ -79,11 +81,5 @@ $EDITOR agents/<name>.md                                    # write it
 ln -sfn ../../agents/<name>.md .claude/agents/<name>.md     # Claude Code
 ```
 
-`.gitignore` ignores local agent state (`.claude/*`) but re-includes `.claude/agents/`, so the
-symlinks are committable while `settings.local.json` and caches are not.
-
-## Windows caveat
-
-Symlinks need `git config core.symlinks true` (and Developer Mode or admin) on Windows checkouts.
-Without it, replace the symlinks with copies kept in sync by a pre-commit hook — the canonical file
-under `agents/` stays the source either way.
+`.gitignore` and the Windows symlink caveat: as skills/README.md, with `.claude/agents/` in place of
+the skill dirs.

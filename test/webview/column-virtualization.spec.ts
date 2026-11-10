@@ -1,6 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
-import { HARNESS_URL } from './harness';
-import { initMessage, DEFAULT_SPEC } from '../fixtures/messages';
+import { sendInit } from './helpers';
+import { DEFAULT_SPEC } from '../fixtures/messages';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -22,9 +22,7 @@ const wide = (mods: number) => ({
 });
 
 async function load(page: Page, mods: number): Promise<void> {
-  await page.goto(HARNESS_URL);
-  await page.waitForFunction(() => (window as any).__ic_outbound.some((m: any) => m?.type === 'ready'));
-  await page.evaluate((m) => (window as any).__ic_send(m), initMessage(wide(mods)) as any);
+  await sendInit(page, wide(mods));
   await page.waitForFunction(() => (window as any).__ic_test.getState().tupleCount === 60);
   await expect(page.locator('#viewer')).toHaveClass(/active/);
 }

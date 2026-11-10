@@ -21,21 +21,10 @@ size is a suspicious result, not a reassuring one, and must be justified.
 
 ## What to verify — every factual claim, not just citations
 
-For each doc, extract its factual claims and check each against the code:
-
-- **Locations** — does `getResultsTarget` actually live where the doc says? (grep, then read the file.)
-- **Numbers and values** — suite counts, timeouts, JPEG quality, sizes, priority order, platform
-  count, dependency lists, VSIX size — against the real constant/file, never memory.
-- **Behaviour** — does the function do what the sentence says? Read it and trace it.
-- **Invariant enforcement** — does the cited code site actually enforce the invariant's claim? An
-  invariant whose code no longer does the thing is the highest-value find.
-- **Absolute quantifiers** — "always", "never", "only", "both", "every". These are where an
-  authoritative sentence goes wrong. Count the call sites: "only on the prefetch path" is false if a
-  thumbnail path does it too. Every absolute word is a claim to disprove.
-- **Cross-references** — every `docs/<file>.md: <key>` citation and section pointer resolves to
-  something that exists. (Write example citations with `<…>` placeholders, never a fake doc name like
-  `docs/x.md` — the checker scans tracked *and* untracked-but-unignored files, skills included, and
-  reads a real-looking citation as a real one.)
+Each `doc-auditor` checks every factual claim (agents/doc-auditor.md → "What to check"). Write
+example citations with `<…>` placeholders, never a fake doc name like `docs/x.md` — the checker
+scans tracked *and* untracked-but-unignored files, skills included, and reads a real-looking
+citation as a real one.
 
 ## Procedure
 
@@ -112,12 +101,7 @@ pass 2: re-verify the corrected passages → fix → count how many were NEW dri
 **A rewrite that makes a sentence "more precise" by adding a closed list or an absolute is the single
 largest source of new drift.** Both findings at pass 3 of the measured run were exactly this: an
 enumeration written *in the paragraph warning against enumerations*, and the word "only" in a sentence
-rewritten to remove a *different* overstatement. When fixing:
-
-- Prefer **deleting the second copy** over keeping two copies correct. A list that duplicates what a
-  script prints should say "run it — that output is the list", not restate it shorter.
-- Treat every new "only / every / never / all / the two X" you write as a claim you must count call
-  sites for, exactly as you would when auditing someone else's.
+rewritten to remove a *different* overstatement.
 
 ## Fix — one entry, one generator, one verifier
 
@@ -145,14 +129,8 @@ match the bug. Fixing the code — with the maintainer's ok — beats weakening 
 ## Verify after each fixing pass
 
 Each `fix-verifier` already ran these against its own entry; this is the pass-level gate that catches
-what only shows up once every entry has landed together. All must pass — run them, don't assume:
-```
-node scripts/check-invariants.mjs      # every invariant cited, every citation resolves
-node scripts/comment-lint.mjs          # no multi-line // blocks in src/ or scripts/ (test/ exempt)
-npm test                               # the suites listed in package.json
-node scripts/mutation-check.mjs        # the suites actually pin their rules
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
-```
+what only shows up once every entry has landed together. All must pass: run the CLAUDE.md →
+Verification battery, verbatim; don't assume.
 Confirm no agent left a file mid-edit (`git status`).
 
 **If `node` or `npm` is not on `PATH`, abort the pass and say so.** Do not locate another interpreter,

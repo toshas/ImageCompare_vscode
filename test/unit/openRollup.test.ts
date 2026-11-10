@@ -10,8 +10,6 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { Uri, __channelLines, __resetChannels, __resetConfig, __setConfig, workspace } from '../mocks/vscode';
 import { beginOpenMarks, formatOpenRollup, OpenMarks } from '../../src/debugLog';
@@ -103,6 +101,9 @@ describe('open rollup — the formatter (src/debugLog.ts)', () => {
   });
 });
 
+beforeEach(() => { __resetConfig(); __resetChannels(); disposeDebugLog(); });
+afterEach(() => { disposeDebugLog(); __resetConfig(); __resetChannels(); });
+
 const tmpRoots: string[] = [];
 afterAll(() => {
   for (const r of tmpRoots) fs.rmSync(r, { recursive: true, force: true });
@@ -175,17 +176,8 @@ async function sendInit(provider: ImageCompareProvider, state: Record<string, un
 
 describe('open rollup — the real provider emits it (src/imageCompareProvider.ts)', () => {
   beforeEach(() => {
-    __resetConfig();
-    __resetChannels();
-    disposeDebugLog();
     __setConfig('debug', true);
     initDebugLog();
-  });
-
-  afterEach(() => {
-    disposeDebugLog();
-    __resetConfig();
-    __resetChannels();
   });
 
   it('sendInitData closes the trace and logs exactly one [IC-OPEN] line, ahead of the sweep', async () => {
@@ -307,17 +299,8 @@ function fakePanel(posted: unknown[], burnOnSubscribe: number) {
 
 describe('open rollup — where the marks are taken (src/imageCompareProvider.ts)', () => {
   beforeEach(() => {
-    __resetConfig();
-    __resetChannels();
-    disposeDebugLog();
     __setConfig('debug', true);
     initDebugLog();
-  });
-
-  afterEach(() => {
-    disposeDebugLog();
-    __resetConfig();
-    __resetChannels();
   });
 
   it('the html mark sits at the html assignment: panel construction shows as `other`, never as boot', async () => {
@@ -390,18 +373,6 @@ describe('the scan reports its own numbers for the rollup (src/fileService.ts)',
     return root;
   }
 
-  beforeEach(() => {
-    __resetConfig();
-    __resetChannels();
-    disposeDebugLog();
-  });
-
-  afterEach(() => {
-    disposeDebugLog();
-    __resetConfig();
-    __resetChannels();
-  });
-
   it('counts the image files handed to the matcher, and times the matcher inside the scan', async () => {
     __setConfig('debug', true);
     initDebugLog();
@@ -438,7 +409,7 @@ describe('the scan reports its own numbers for the rollup (src/fileService.ts)',
 // distinguishes "sized the payload and threw the number away" from "never sized it", so the real
 // file's shape is the only thing a test can hold. (docs/loading-architecture.md: debug-off-costs-nothing)
 describe('the open trace is created and used only behind the debug flag', () => {
-  const src = readFileSync(resolve(__dirname, '../../src/imageCompareProvider.ts'), 'utf8');
+  const src = fs.readFileSync(path.resolve(__dirname, '../../src/imageCompareProvider.ts'), 'utf8');
   const lines = src.split('\n');
 
   /** Line indices that sit inside an `if (marks) {` / `if (openMarks) {` block. */
@@ -490,18 +461,6 @@ describe('the open trace is created and used only behind the debug flag', () => 
 // shape above cannot tell "gated" from "gated and then run anyway"; these count the work itself, on
 // the real open path. (docs/loading-architecture.md: debug-off-costs-nothing)
 describe('the open trace costs nothing measurable when debug is off', () => {
-  beforeEach(() => {
-    __resetConfig();
-    __resetChannels();
-    disposeDebugLog();
-  });
-
-  afterEach(() => {
-    disposeDebugLog();
-    __resetConfig();
-    __resetChannels();
-  });
-
   /** Runs one real open and reports how many times the init payload was handed to JSON.stringify. */
   async function initSerializations(debug: boolean): Promise<number> {
     __setConfig('debug', debug);
@@ -537,18 +496,6 @@ describe('the open trace costs nothing measurable when debug is off', () => {
 // not through the provider's own bookkeeping.
 // (docs/file-watching.md: watched-dirs-have-watchers)
 describe('open and close leave no handles behind (src/imageCompareProvider.ts)', () => {
-  beforeEach(() => {
-    __resetConfig();
-    __resetChannels();
-    disposeDebugLog();
-  });
-
-  afterEach(() => {
-    disposeDebugLog();
-    __resetConfig();
-    __resetChannels();
-  });
-
   // `FSEventWrap` is node's own name for an fs.watch handle, on every platform this suite runs on.
   // An ALLOWLIST, deliberately: a denylist of the runner's noise (timers, fs requests, the worker's
   // sockets) silently counts any resource kind a different platform or node version reports and that
@@ -586,9 +533,7 @@ describe('open and close leave no handles behind (src/imageCompareProvider.ts)',
 
   // Three 1500ms polls worst case (4500ms) inside Vitest's 5s default — thin, but a failing run can
   // only burn one, since each poll is followed immediately by an assertion on its own result.
-  // A poll that outlived the test would die as a bare timeout, indistinguishable from a hang.
   it('every fs.watch handle the open created is closed with the panel, and none before', async () => {
-    // Whatever an earlier test left watching drains first; the counts below are relative to it.
     // Poll the leftovers of earlier tests down to a known zero. Settling on whatever happened to be
     // there instead is a real flake: a base that locked onto three draining handles reads the open's
     // own three as zero, indistinguishable from a regression.

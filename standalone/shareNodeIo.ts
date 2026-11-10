@@ -33,5 +33,3 @@ export const nodeShareIo: ShareIo = {
   writeFile: (p, content) => writeFile(p, content),
   removeTree: p => rm(p, { recursive: true, force: true }),
 };
-
-export const nodeBase64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64');

@@ -28,6 +28,10 @@ package-lock.json
 # skills/imagecompare/ is deliberately NOT excluded: it ships so a user's agent can drive the extension.
 skills/README.md
 skills/verify-docs/**
+skills/fix-issue/**
+skills/implement-feature/**
+skills/prune/**
+agents/**
 CLAUDE.md
 CONTRIBUTING.md
 docs/**
@@ -47,7 +51,6 @@ out-integration/**
 .words-to-check.txt
 NIGHT-RUN-NOTES.md
 ITERATION-TIPS.md
-.dashboard-data/**
 .vscode-test.mjs
 
 # Test data

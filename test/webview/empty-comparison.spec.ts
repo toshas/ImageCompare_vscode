@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { loadInited, getState } from './helpers';
+import { loadInited, getState, send } from './helpers';
 import { colorFor } from '../fixtures/messages';
 import { makeSolidPng } from '../fixtures/synthetic';
 
@@ -11,10 +11,6 @@ import { makeSolidPng } from '../fixtures/synthetic';
 // takes the row and then its columns) and zero modalities (the modality-dir watcher strips every
 // column but leaves the emptied rows behind). Both must reach the same terminal notice, which is why
 // each case below drives the wire messages the extension really sends rather than a shared helper.
-
-async function send(page: Page, msg: Record<string, unknown>): Promise<void> {
-  await page.evaluate((m) => (window as any).__ic_send(m), msg as any);
-}
 
 /** DEFAULT_SPEC is 3 rows x 2 columns; delete every row, as committing each file's removal does. */
 async function deleteEveryTuple(page: Page): Promise<void> {

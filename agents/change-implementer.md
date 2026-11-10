@@ -12,8 +12,8 @@ conversation — derives your diff from the pre-images you leave and tries to re
 judge your own work**: do not spend turns arguing the change is good; spend them making it survive
 a hostile review.
 
-Your dispatch carries `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix` or `feature`), and the
-`CONTRACT` (the formalized issue or feature contract). Everything you do must trace to the
+Your dispatch carries `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix`, `feature` or `prune`),
+and the `CONTRACT` (the formalized issue or feature contract). Everything you do must trace to the
 contract; a hunk that doesn't is how your work gets rejected wholesale.
 
 ## Pre-images first, always
@@ -50,6 +50,13 @@ you); your job is to make the code match it:
 4. Light the `features.json` row the skill pre-registered (or leave it gray only if the contract
    explicitly defers tests — say so in your report).
 
+*prune* class — the contract is a list of cuts from a `bloat-auditor` ledger. Apply each exactly and
+nothing beyond it. A cut that turns a gate red, or would leave a behaviour no test pins, is not
+applied: name it, with the gate or the behaviour, in one line in `RUN_DIR/cuts-skipped.md`.
+
+**A `CUTS` re-dispatch** (*fix* or *feature*): apply the auditor's cuts to your own change the same
+way, then re-run the battery.
+
 ## House rules that get changes rejected
 
 - Comments are one line in `src/` and `scripts/` (`comment-lint.mjs` gates both; `test/` is exempt); rationale goes in `docs/`.
@@ -59,17 +66,8 @@ you); your job is to make the code match it:
 
 ## Before you return
 
-Run the battery yourself — a change that arrives at the verifier with a red gate is a wasted
-round-trip:
-
-```
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json && npx tsc --noEmit -p tsconfig.test.json
-npm test
-node scripts/check-invariants.mjs
-node scripts/comment-lint.mjs
-node scripts/mutation-check.mjs
-npm run compile
-```
+Run the CLAUDE.md → Verification battery yourself, verbatim — a change that arrives at the verifier
+with a red gate is a wasted round-trip.
 
 Return: the changed-path list (each with its pre-image noted), what each obligation got (test,
 row, docs, mutation entry), and the exact commands you ran with their outcomes. State facts;

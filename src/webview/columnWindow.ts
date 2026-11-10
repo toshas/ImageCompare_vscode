@@ -1,12 +1,6 @@
 /** Pure (no vscode, no DOM): which modality columns a carousel row must materialize, mirroring what the row pool does down the other axis (docs/loading-architecture.md: columns-virtualize-like-rows). */
 
-/**
- * The smallest pitch a tile can occupy on EITHER axis: the tile-size floor plus the gap. Both pools
- * are sized from it (a row is this tall at its smallest, a column this wide), and the floor itself is
- * derived back out of it in main.ts, so this is the one number that sets how dense the grid may get.
- * Raising it trades columns-on-screen for tiles-on-screen, which is the cost that bounds a fill
- * (docs/loading-architecture.md: images-fill-progressively).
- */
+/** The tile floor plus the gap: the one pitch both pools are sized from, and the floor main.ts derives (docs/loading-architecture.md: images-fill-progressively). */
 export const MIN_TILE_PITCH = 26;
 
 /** Columns kept bound beyond each edge of the horizontal viewport. */

@@ -3,20 +3,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
-import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
-import { LOAD_DEBOUNCE_MS } from '../../src/webview/tupleLoadPlan';
+import { panelState, thumbnailServiceStub } from './providerRig';
 
-// The host half of the centre-out sweep, on the REAL provider: it supplies `the shared aim policy` as the
-// sweep's centre and must read it LIVE, since a settled `setCurrentTuple` mutates that field while the
-// sweep is draining. A snapshot taken at sweep start would pass every ordering assertion at open and
-// silently never re-aim. (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded)
+// The host half of the centre-out sweep, on the REAL provider: it supplies the shared aim policy as the
+// sweep's centre. The live re-aim on a settled `setCurrentTuple` is pinned in sweepCentreDwell.test.ts.
+// (docs/loading-architecture.md: thumbnails-centre-out, sweep-dispatch-bounded)
 
 const MODALITIES = ['gt', 'ours'];
 const TUPLES = 30;
 const OPEN_AT = 20;
-const JUMP_TO = 3;
 /** Wide enough that every dispatched slot starts immediately, so what getThumbnail sees IS the dispatch order. */
 const POOL_WIDTH = 64;
 
@@ -45,17 +42,9 @@ async function settle(rounds = 6): Promise<void> {
   for (let i = 0; i < rounds; i++) await tick();
 }
 
-// Navigation as the panel really receives it: the message handler, then the dwell the sweep's centre
-// waits out before it re-aims (docs/loading-architecture.md: sweep-centre-dwells).
-async function navigate(rig: Rig, tupleIndex: number): Promise<void> {
-  await rig.provider.handlePanelMessage(rig.state, { type: 'setCurrentTuple', tupleIndex });
-  await new Promise(r => setTimeout(r, LOAD_DEBOUNCE_MS + 20));
-}
-
 interface Rig {
   provider: any;
   state: any;
-  posts: any[];
   /** Rows getThumbnail has been called for, in call order. */
   asked: number[];
   /** The same calls as `modality-row`, so the COLUMN the sweep aims at is visible too. */
@@ -68,68 +57,23 @@ function makeRig(): Rig {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-sweep-centre-'));
   tmpRoots.push(root);
   __setConfig('maxConcurrentReads', POOL_WIDTH);
-  const posts: any[] = [];
   const asked: number[] = [];
   const askedSlots: string[] = [];
   const resolvers: Array<() => void> = [];
-  const rig: Rig = { provider: undefined, state: undefined, posts, asked, askedSlots, resolvers, maxConcurrent: 0 };
+  const rig: Rig = { provider: undefined, state: undefined, asked, askedSlots, resolvers, maxConcurrent: 0 };
   rigs.push(rig);
   let live = 0;
 
   const provider = new ImageCompareProvider({ globalStorageUri: Uri.file(root) } as any);
-  (provider as any).thumbnailService = {
-    getThumbnail: (uri: Uri) =>
-      new Promise<Buffer>(resolve => {
-        asked.push(Number(/frame(\d+)/.exec(uri.path)![1]));
-        askedSlots.push(`${/imgs\/([^/]+)\//.exec(uri.path)![1]}-${/frame(\d+)/.exec(uri.path)![1]}`);
-        live++;
-        rig.maxConcurrent = Math.max(rig.maxConcurrent, live);
-        resolvers.push(() => { live--; resolve(Buffer.alloc(4)); });
-      }),
-    loadFullImage: async () => ({ bytes: new Uint8Array(10), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
-  };
-
-  const name = (t: number) => `frame${String(t).padStart(2, '0')}`;
-  const tuples = Array.from({ length: TUPLES }, (_, t) => ({
-    name: name(t),
-    images: MODALITIES.map(m => ({ uri: Uri.file(`/imgs/${m}/${name(t)}.png`), name: `${name(t)}.png`, modality: m }))
-  }));
+  (provider as any).thumbnailService = thumbnailServiceStub(resolvers, uri => {
+    asked.push(Number(/frame(\d+)/.exec(uri.path)![1]));
+    askedSlots.push(`${/imgs\/([^/]+)\//.exec(uri.path)![1]}-${/frame(\d+)/.exec(uri.path)![1]}`);
+    live++;
+    rig.maxConcurrent = Math.max(rig.maxConcurrent, live);
+  }, () => { live--; });
 
   rig.provider = provider;
-  rig.state = {
-    panel: { webview: { postMessage: (msg: any) => { posts.push(msg); return Promise.resolve(true); } } },
-    scanResult: { modalities: [...MODALITIES], tuples, mode: 2, roots: [], isMultiTupleMode: true },
-    loadedImages: new Map(),
-    modalityDirs: new Map(MODALITIES.map(m => [m, Uri.file(`/imgs/${m}`)])),
-    recentlyDeleted: [],
-    winners: new Map(),
-    votingEnabled: false,
-    currentTupleIndex: OPEN_AT,
-    sweepAim: newSweepAimPolicy(),
-    disposed: false,
-    visible: true,
-    poolKey: `centre-${Math.random().toString(36).slice(2)}`,
-    prefetchWaveKey: 'unset',
-    prefetchWaveCounter: 0,
-    imageLoadKeys: new Set<string>(),
-    webviewReady: true,
-    pendingDebugMessages: [],
-    lastTupleSwitchAt: 0,
-    heldImagePosts: new Map(),
-    watchedDirs: new Set<string>(),
-    fileWatchers: [],
-    nodeWatchers: [],
-    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
-    prefetchWaves: new Map(),
-    transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(8, 'ssh-remote'))
-  };
+  rig.state = panelState({ modalities: MODALITIES, tuples: TUPLES, openAt: OPEN_AT, poolKeyPrefix: 'centre' });
   return rig;
 }
 
@@ -183,9 +127,7 @@ describe('open-time sweep aims at the provider\'s live current tuple', () => {
     rig.provider.generateAllThumbnails(rig.state);
     await settle();
     // 60 slots planned; the pool is wide enough for all of them, so the bound seen here is the sweep's own.
-    expect(rig.state.scanResult.tuples.length * MODALITIES.length).toBe(60);
     expect(rig.asked.length).toBe(SWEEP_CHUNK);
-    expect(rig.maxConcurrent).toBe(SWEEP_CHUNK);
     let guard = 0;
     while (rig.resolvers.length && guard++ < 500) {
       for (const r of rig.resolvers.splice(0)) r();
@@ -194,37 +136,5 @@ describe('open-time sweep aims at the provider\'s live current tuple', () => {
     // Every wave stayed inside the bound: 60 slots swept, never more than 32 outstanding.
     expect(rig.asked.length).toBe(60);
     expect(rig.maxConcurrent).toBe(SWEEP_CHUNK);
-  });
-
-  it('re-aims mid-sweep when setCurrentTuple moves the panel, and still covers every slot exactly once', async () => {
-    const rig = makeRig();
-    rig.provider.generateAllThumbnails(rig.state);
-    await settle();
-    const dispatchedBefore = rig.asked.length;
-    expect(dispatchedBefore).toBe(SWEEP_CHUNK);
-
-    // The real message path, dwell included; the sweep must read the new centre on its next dispatch.
-    await navigate(rig, JUMP_TO);
-    for (const r of rig.resolvers.splice(0, 4)) r();
-    await settle();
-    // The cross from (3, gt): the tile itself, its row's other modality, then rows 4 and 2 in that
-    // column — row 3 was outside the radius of the aim the panel opened on, so it is untouched.
-    expect(rig.asked.slice(dispatchedBefore, dispatchedBefore + 4)).toEqual([3, 3, 4, 2]);
-
-    let guard = 0;
-    while (rig.resolvers.length && guard++ < 500) {
-      for (const r of rig.resolvers.splice(0)) r();
-      await settle(3);
-    }
-    await settle(20);
-
-    const thumbs = rig.posts.filter(p => p.type === 'thumbnail');
-    const slots = thumbs.map(p => `${p.tupleIndex}-${p.modalityIndex}`);
-    expect(slots.length).toBe(60);
-    expect(new Set(slots).size).toBe(60);
-    const progress = rig.posts.filter(p => p.type === 'thumbnailProgress');
-    expect(progress[progress.length - 1]).toMatchObject({ current: 60, total: 60 });
-    // The wire claim is released exactly once the re-centred sweep drains (docs/loading-architecture.md: speculation-yields-the-wire).
-    expect(rig.state.transport.sweepActive).toBe(false);
   });
 });

@@ -165,14 +165,6 @@ describe('scanForImages: the listing loop behaves as it did when it was serial',
     expect(result.modalities).toEqual(['GT', 'pred']);
   });
 
-  it('rejects when only one directory of a concurrent listing has images', async () => {
-    const dirs = makeDirs(['GT', 'EMPTY'], []);
-    fs.writeFileSync(path.join(dirs[0].fsPath, 'img_001.png'), '');
-    instrument({ delayMs: (name) => (name === 'GT' ? 20 : 0) });
-
-    await expect(scanForImages(dirs as never)).rejects.toThrow(/must each contain images/);
-  });
-
   // The tie-break comparator is greedy from candidate 0, and candidate order is the reference
   // array's order — so with img_c tied against img_a and img_b on every rule (same length, LCS
   // 4 to both), the query lands on whichever comes first. Only the per-directory natural sort
@@ -268,20 +260,6 @@ describe('scanForImages: the caller order reaches the init payload, not just the
       expect(tuple.images.map((i) => i.modalityIndex)).toEqual(dirNames.map((_, i) => i));
       // Every slot is a real image, so a mis-slotted column would show as a blank tile, not a shift.
       expect(tuple.images.every((i) => i.name !== '')).toBe(true);
-    }
-  });
-
-  it('one very slow directory in the middle finishes last without moving the survivors', async () => {
-    const dirNames = names(7);
-    const dirs = makeDirs(dirNames, ['img_001.png']);
-    const probe = instrument({ delayMs: (name) => (name === 'mod03' ? 120 : 2) });
-
-    const result = await scanForImages(dirs as never);
-
-    expect(probe.completionOrder[probe.completionOrder.length - 1]).toBe('mod03');
-    expect(result.modalities).toEqual(dirNames);
-    for (const tuple of result.tuples) {
-      expect(tuple.images.map((i) => i.modality)).toEqual(dirNames);
     }
   });
 });

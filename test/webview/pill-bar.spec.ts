@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { loadInited } from './helpers';
+import { loadInited, pillRowSettled } from './helpers';
 import { DEFAULT_SPEC, FixtureSpec } from '../fixtures/messages';
 
 /**
@@ -46,17 +46,6 @@ async function expectNoLead(page: Page): Promise<void> {
   expect(g.pillLead).toBeLessThanOrEqual(16);
 }
 
-/** Wait until the row's scrollLeft stops changing (navigation slides it). */
-async function rowSettled(page: Page): Promise<void> {
-  let last = -1;
-  await expect.poll(async () => {
-    const now = await page.evaluate(() => document.getElementById('modality-selector')!.scrollLeft);
-    const stable = now === last;
-    last = now;
-    return stable;
-  }, { timeout: 4000 }).toBe(true);
-}
-
 /** The pill's painted rect (transformed box grown by its scaled ring) against the row's clip rect. */
 const paintedVsClip = (page: Page, i: number) =>
   page.evaluate((i) => {
@@ -83,11 +72,11 @@ const paintedVsClip = (page: Page, i: number) =>
 /** `grows`: an end pill keeps the hover scale; a sole pill, with no inner side to grow into, does not. */
 async function expectEndPillInside(page: Page, i: number, scrollTo: number, grows = true): Promise<void> {
   await page.evaluate((x) => { document.getElementById('modality-selector')!.scrollLeft = x; }, scrollTo);
-  await rowSettled(page);
+  await pillRowSettled(page);
   // A real click makes it current and leaves the mouse over it, so it is hovered and current at once.
   const pill = page.locator('#modality-selector .modality-btn').nth(i);
   await pill.click();
-  await rowSettled(page);
+  await pillRowSettled(page);
   // Measured once the hover transition has finished, so a growing pill is caught at its full size.
   await expect.poll(() => pill.evaluate((el) => el.matches(':hover') && el.getAnimations().length === 0)).toBe(true);
   const g = await paintedVsClip(page, i);

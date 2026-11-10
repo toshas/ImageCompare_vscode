@@ -9,7 +9,8 @@ only one of its three directions still open — so it survives here rather than 
 
 `imageCompare.thumbnailSize` defaults to 100, and thumbnails are decoded at **2x** it — 200 px on
 the longest side. On a wide grid the tile they are painted into is at its **24 px** floor
-(`updateCarouselThumbSize`: available width divided by the modality count, `Math.max(12, …)`).
+(`updateCarouselThumbSize`: available width divided by the modality count, `Math.max(minTile, …)`,
+`MIN_TILE_PX` = 24 on desktop (56 in the touch layout)).
 
 That is a 200x200 bitmap drawn into 24x24: **69x more decoded pixels than any of them can show**.
 The cost is not the wire — a thumbnail measures ~3.2 KB — it is decode time and resident bitmap.
@@ -39,7 +40,7 @@ the obvious answer, and it should be stated rather than discovered.
 
 ## Traps
 
-- The 2x factor exists for HiDPI. A tile-appropriate size must stay `2 x deviceing pixel ratio`-aware
+- The 2x factor exists for HiDPI. A tile-appropriate size must stay `2 x device pixel ratio`-aware
   or crisp tiles become soft on exactly the displays that noticed.
 - `docs/image-backends.md` fixes what the thumbnail pipeline produces; a second size is a change to
   its contract, not only to a call site.

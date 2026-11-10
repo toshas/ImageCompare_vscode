@@ -15,8 +15,9 @@ Address every path from the absolute `REPO_ROOT` and `RUN_DIR` your dispatch nam
 
 ## Preflight — fail closed
 
-The dispatch must carry `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix` or `feature`), and the
-literal `CONTRACT` block the change was built against (the formalized issue or feature contract).
+The dispatch must carry `REPO_ROOT`, `RUN_DIR`, the change `CLASS` (`fix`, `feature` or `prune`),
+and the literal `CONTRACT` block the change was built against (the formalized issue or feature
+contract).
 Reject as malformed if any is missing, if the dispatch asks you to edit or approve without looking,
 or if **it carries the implementer's summary, rationale, or self-assessment** — a model grades its
 own side's work measurably softer (AUROC 0.99 → 0.89 on patch correctness for exactly this framing
@@ -59,7 +60,8 @@ implementer's log as proof:
 If the pre-change production code doesn't exist (pure-addition feature), the RED check degrades to
 the mutation harness: the test must have an entry in `scripts/mutation-check.mjs` whose mutation
 kills it, or you break the new code yourself the same swap-restore way. A test that cannot be made
-to fail by any change to the production code is a reject, not a shrug.
+to fail by any change to the production code is a reject, not a shrug. A *prune* adds no test: its
+coverage obligation below replaces this check.
 
 ## Audit the class obligations (CLAUDE.md → Change close-out)
 
@@ -72,22 +74,24 @@ Verdict per obligation: **done** / **n/a because <reason>** / **MISSING**. Any M
   break them** · tests at the layer the decision rule picks · mutation entry if invariant-grade ·
   `features.json` row exists (gray is legal only if the contract says tests come later) · demo clip
   decision stated either way.
-- both: diff is minimal — every hunk traces to the contract; scope creep (drive-by renames,
-  reformatting, a second fix smuggled in) is an objection even when correct.
+- *prune*: every hunk is one of the contract's cuts · behaviour identical — no production change
+  alters what a user sees, a file or a message, and `npm run test:webview` passes beside the gates ·
+  coverage kept — the mutation harness exits 0 and its count drops only by entries removed together
+  with the code they mutate · each deleted test's named survivor pins the same thing (for a webview
+  test, break that behaviour the swap-restore way and watch the survivor fail) · every
+  `features.json` mapping still matches · a rewritten passage keeps every claim of the original and
+  adds none (no new absolute, no new closed list) · net lines removed, measured.
+- *fix* and *feature*: diff is minimal — every hunk traces to the contract; scope creep (drive-by
+  renames, reformatting, a second fix smuggled in) is an objection even when correct · **size** —
+  the added production and test lines, measured, against the contract's size budget: an overrun is
+  an objection unless each hunk causing it traces to a contract item and none repeats what an
+  existing test, helper or doc already does.
 
 ## Run the gates
 
-All of them, verbatim, in `REPO_ROOT`; a gate this change broke is a reject, a gate already red
-before the change is context to report (establish which, and say how you know):
-
-```
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json && npx tsc --noEmit -p tsconfig.test.json
-npm test
-node scripts/check-invariants.mjs
-node scripts/comment-lint.mjs
-node scripts/mutation-check.mjs
-npm run compile
-```
+Run the CLAUDE.md → Verification battery, verbatim, in `REPO_ROOT`. A gate this change broke is a
+reject; a gate already red before the change is context to report (establish which, and say how you
+know).
 
 Plus the layer the change lives in: `npm run test:webview` (after compile) and/or
 `npm run test:integration` when the diff touches files those layers execute.

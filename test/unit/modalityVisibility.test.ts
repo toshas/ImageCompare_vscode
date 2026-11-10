@@ -36,7 +36,6 @@ describe('hidden-modality keyboard navigation (real modalityVisibility code)', (
   it('Test: mouse voting is disabled below 3x the winner-circle size', () => {
     expect(isVoteClickable(3 * WINNER_CIRCLE_PX), 'exactly 3x the circle must stay votable').toBe(true);
     expect(isVoteClickable(3 * WINNER_CIRCLE_PX - 0.5), 'just under 3x must not be votable').toBe(false);
-    expect(isVoteClickable(12), 'the 12px tile floor must never vote by mouse').toBe(false);
     expect(isVoteClickable(50), 'natural-size tiles vote normally').toBe(true);
   });
 

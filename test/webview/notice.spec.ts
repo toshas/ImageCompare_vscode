@@ -1,20 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { loadInited } from './helpers';
-import { DEFAULT_SPEC } from '../fixtures/messages';
+import { loadInited, send } from './helpers';
+import { NO_REVEAL_SPEC } from '../fixtures/messages';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // These used to be vscode.window.showInformationMessage/showErrorMessage calls, so the standalone
 // said nothing at all when an export or a copy finished. Now the host reports the event and the
 // webview words it, for both (docs/standalone.md: affordances-rendered-by-the-webview).
-
-const NO_REVEAL = {
-  ...DEFAULT_SPEC,
-  capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false },
-};
-
-const send = (page: import('@playwright/test').Page, msg: unknown) =>
-  page.evaluate((m) => (window as any).__ic_send(m), msg as any);
 
 test.describe('notices', () => {
   test('a host event is worded by the webview and offers reveal where the host can', async ({ page }) => {
@@ -31,7 +23,7 @@ test.describe('notices', () => {
   });
 
   test('a host that cannot reveal gets the same words and no action', async ({ page }) => {
-    await loadInited(page, NO_REVEAL);
+    await loadInited(page, NO_REVEAL_SPEC);
     await send(page, { type: 'notice', event: { kind: 'sessionSaved', path: '/out/x.imagecompare' } });
 
     await expect(page.locator('#copy-toast')).toContainText('Session saved: /out/x.imagecompare');

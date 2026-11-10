@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Where the dashboard's intermediate JSON goes, and the commands that write it.
  *
@@ -18,7 +17,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Throws unless `p` is absolute — a relative report path re-anchors silently (see above). */
-export function assertAbsolute(name, p) {
+function assertAbsolute(name, p) {
   if (typeof p !== 'string' || !isAbsolute(p)) {
     throw new Error(
       `${name} must be an absolute path, got ${JSON.stringify(p)}.\n` +
@@ -41,6 +40,6 @@ export const INTEGRATION_JSON = assertAbsolute('INTEGRATION_JSON', join(RESULTS,
 export const WEBVIEW_CMD = 'npx playwright test --config test/webview/playwright.config.ts --reporter=json';
 
 /** Env for WEBVIEW_CMD: cwd-anchored (the generator runs every suite with cwd = ROOT). */
-export const webviewEnv = (outFile = WEBVIEW_JSON) => ({
+export const webviewEnv = (outFile) => ({
   PLAYWRIGHT_JSON_OUTPUT_FILE: assertAbsolute('PLAYWRIGHT_JSON_OUTPUT_FILE', outFile),
 });

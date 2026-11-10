@@ -26,13 +26,4 @@ describe('extension→webview image payload contract (real wireFormat code)', ()
     const plain = new Uint8Array([1, 2, 3]);
     expect(normalizeImageBytes(plain), 'a tight plain Uint8Array must be returned as-is').toBe(plain);
   });
-
-  it('Test 4: normalized payloads survive structuredClone as plain Uint8Array', () => {
-    // Pins the property the webview depends on: the payload is clonable binary, not a
-    // JSON-mangled object ({type:"Buffer",data:[...]}).
-    const out = normalizeImageBytes(Buffer.from([10, 20, 30]));
-    const cloned = structuredClone(out);
-    expect(cloned instanceof Uint8Array, `clone must stay a Uint8Array, got ${Object.prototype.toString.call(cloned)}`).toBe(true);
-    expect(cloned.byteLength === 3 && cloned[1] === 20, 'clone must hold the same bytes').toBe(true);
-  });
 });

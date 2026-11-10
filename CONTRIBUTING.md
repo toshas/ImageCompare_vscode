@@ -49,28 +49,14 @@ the classification in the PR description.
 
 ## The verification battery (run before pushing)
 
-```bash
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json && npx tsc --noEmit -p tsconfig.test.json
-npm test                            # Vitest unit layer
-node scripts/check-invariants.mjs
-node scripts/comment-lint.mjs
-node scripts/mutation-check.mjs
-npm run compile
-```
-
-CI re-runs all of this plus the integration and webview layers on **ubuntu, windows, and macos**
-for every push and PR, and the coverage dashboard build **fails on stale `features.json`
-mappings** — a test you renamed without updating its registry entry turns the build red, not gray.
-
-## Where a new test goes (decision rule, in order)
-
-1. Webview DOM/interaction behavior → Playwright spec in `test/webview/`.
-2. Real VS Code API behavior (fs scanning, commands, activation) → `test/integration/`.
-3. Pure logic → Vitest in `test/unit/`, importing the real module.
-
-Demos (`test/demos/`) are **not** tests — add one only when a new user-visible flow is worth a
-gallery clip. Details, harness docs, and the manual pre-release checklist:
+Before pushing, run the battery in CLAUDE.md → Verification, verbatim. Put a new test where
+CLAUDE.md → Testing (decision rule) says; demos are not tests. The manual pre-release walk is in
 [docs/testing.md](docs/testing.md).
+
+CI re-runs all of this plus the integration and webview layers on **ubuntu, windows, and macos** for
+every pull request and every push to `main` or `test/**`, and the coverage dashboard build **fails
+on stale `features.json` mappings** — a test you renamed without updating its registry entry turns
+the build red, not gray.
 
 ## PR checklist
 

@@ -1,7 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
-import { loadInited, getState } from './helpers';
-import { DEFAULT_SPEC, initMessage } from '../fixtures/messages';
-import { HARNESS_URL } from './harness';
+import { loadInited, getState, sendInit, pillRowSettled, wallOffset } from './helpers';
+import { DEFAULT_SPEC } from '../fixtures/messages';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -27,15 +26,6 @@ const TALL = {
   tupleNames: Array.from({ length: 80 }, (_, i) => `scene_${String(i).padStart(3, '0')}`),
 };
 
-/** The wall's applied scroll offset, read from the DOM so the production test hook stays read-only. */
-const wallOffset = (page: Page) =>
-  page.evaluate(() => {
-    const w = document.getElementById('carousel-wall') as HTMLElement | null;
-    if (!w) return 0;
-    const m = /translateY\((-?[\d.]+)px\)/.exec(w.style.transform);
-    return m ? -Number(m[1]) : 0;
-  });
-
 const pillScroll = (page: Page) =>
   page.evaluate(() => {
     const el = document.getElementById('modality-selector')!;
@@ -47,17 +37,6 @@ const hScroll = (page: Page) =>
     const el = document.getElementById('carousel-hscroll') as HTMLElement | null;
     return el ? { left: el.scrollLeft, overflow: el.scrollWidth - el.clientWidth } : null;
   });
-
-/** Wait until the strip's scrollLeft stops changing — navigation animates, so a single read can land mid-slide. */
-async function settled(page: Page): Promise<void> {
-  let last = -1;
-  await expect.poll(async () => {
-    const now = (await pillScroll(page)).left;
-    const stable = now === last;
-    last = now;
-    return stable;
-  }, { timeout: 4000 }).toBe(true);
-}
 
 /** The pill strip's visible window, and where the active pill sits inside the strip. */
 const activePillGeometry = (page: Page) =>
@@ -106,7 +85,7 @@ test.describe('axis scrolling', () => {
 
     await page.keyboard.press('ArrowRight');
     await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(1);
-    await settled(page);
+    await pillRowSettled(page);
 
     const g = await activePillGeometry(page);
     expect(g.pillStart).toBeGreaterThanOrEqual(g.viewStart);
@@ -143,7 +122,7 @@ test.describe('axis scrolling', () => {
     await page.keyboard.press('Digit5');
     await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(4);
     await expect.poll(async () => (await pillScroll(page)).left).toBeLessThan(parkedRight);
-    await settled(page);
+    await pillRowSettled(page);
     let g = await activePillGeometry(page);
     expect(g.pillStart).toBeGreaterThanOrEqual(g.viewStart);
     expect(g.pillEnd).toBeLessThanOrEqual(g.viewEnd);
@@ -152,7 +131,7 @@ test.describe('axis scrolling', () => {
     await page.locator('.modality-btn').nth(9).click();
     await expect.poll(() => getState(page).then((s) => s.currentModalityIndex)).toBe(9);
     await expect.poll(async () => (await pillScroll(page)).left).toBeGreaterThan(0);
-    await settled(page);
+    await pillRowSettled(page);
     g = await activePillGeometry(page);
     expect(g.pillStart).toBeGreaterThanOrEqual(g.viewStart);
     expect(g.pillEnd).toBeLessThanOrEqual(g.viewEnd);
@@ -273,7 +252,7 @@ test.describe('axis scrolling', () => {
     expect(await behaviors()).toEqual(['smooth']);
 
     // And it arrives, however the platform chose to get there.
-    await settled(page);
+    await pillRowSettled(page);
     expect((await pillScroll(page)).left).toBeLessThan(parked);
   });
 
@@ -405,13 +384,11 @@ test.describe('axis scrolling', () => {
   // covered (test/CLAUDE.md rule 3).
   test('a slow scroll keeps its images, a flick gives them up', async ({ page }) => {
     const MODS = 24;
-    await page.goto(HARNESS_URL);
-    await page.waitForFunction(() => (window as any).__ic_outbound.some((m: any) => m?.type === 'ready'));
-    await page.evaluate((m) => (window as any).__ic_send(m), initMessage({
+    await sendInit(page, {
       ...DEFAULT_SPEC,
       tupleNames: Array.from({ length: 120 }, (_, i) => `s_${i}`),
       modalities: Array.from({ length: MODS }, (_, i) => `M${i}`),
-    }) as any);
+    });
     await page.waitForFunction(() => (window as any).__ic_test.getState().tupleCount === 120);
     // One round trip: a message per tile would be thousands.
     await page.evaluate((mods) => {

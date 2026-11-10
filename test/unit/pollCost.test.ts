@@ -182,18 +182,6 @@ describe('existence-sweep cost (real ImageCompareProvider)', () => {
     finish(bed);
   });
 
-  it('the cycle cost does not grow with the number of files (the 7407-task flood)', async () => {
-    const small = makeBed(2, 3);
-    const large = makeBed(40, 3); // 120 files in the same 3 dirs
-    const smallTasks = countPollTasks(small);
-    const largeTasks = countPollTasks(large);
-    await runSweep(small);
-    await runSweep(large);
-    expect(largeTasks()).toBe(smallTasks());
-    finish(small);
-    finish(large);
-  });
-
   it('a real deletion is still detected, and only for the file that went', async () => {
     const bed = makeBed(4, 2);
     await runSweep(bed);

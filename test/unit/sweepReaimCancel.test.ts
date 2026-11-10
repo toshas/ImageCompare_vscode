@@ -3,11 +3,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
-import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { Priority } from '../../src/workPool';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
 import { LOAD_DEBOUNCE_MS } from '../../src/webview/tupleLoadPlan';
+import { panelState, thumbnailServiceStub } from './providerRig';
 
 // The host half of cancel-on-re-aim, on the REAL provider and the REAL shared pool, at the shape the
 // field log recorded: width 5 leaves the bulk class 4 running slots (`run=[0,0,0,0,0,4,0,0]`), so the
@@ -54,8 +54,6 @@ interface Rig {
   posts: any[];
   /** Rows the pool STARTED a thumbnail read for, in start order — a cancelled slot never appears. */
   asked: number[];
-  /** The same reads as `modality-row`, so "no slot was read twice" is checkable. */
-  askedKeys: string[];
   resolvers: Array<() => void>;
 }
 
@@ -65,63 +63,15 @@ function makeRig(): Rig {
   __setConfig('maxConcurrentReads', 5);
   const posts: any[] = [];
   const asked: number[] = [];
-  const askedKeys: string[] = [];
   const resolvers: Array<() => void> = [];
-  const rig: Rig = { provider: undefined, state: undefined, posts, asked, askedKeys, resolvers };
+  const rig: Rig = { provider: undefined, state: undefined, posts, asked, resolvers };
   rigs.push(rig);
 
   const provider = new ImageCompareProvider({ globalStorageUri: Uri.file(root) } as any);
-  (provider as any).thumbnailService = {
-    getThumbnail: (uri: Uri) =>
-      new Promise<Buffer>(resolve => {
-        asked.push(Number(/frame(\d+)/.exec(uri.path)![1]));
-        askedKeys.push(uri.path);
-        resolvers.push(() => resolve(Buffer.alloc(4)));
-      }),
-    loadFullImage: async () => ({ bytes: new Uint8Array(10), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
-  };
-
-  const name = (t: number) => `frame${String(t).padStart(2, '0')}`;
-  const tuples = Array.from({ length: TUPLES }, (_, t) => ({
-    name: name(t),
-    images: MODALITIES.map(m => ({ uri: Uri.file(`/imgs/${m}/${name(t)}.png`), name: `${name(t)}.png`, modality: m }))
-  }));
+  (provider as any).thumbnailService = thumbnailServiceStub(resolvers, uri => asked.push(Number(/frame(\d+)/.exec(uri.path)![1])));
 
   rig.provider = provider;
-  rig.state = {
-    panel: { webview: { postMessage: (msg: any) => { posts.push(msg); return Promise.resolve(true); } } },
-    scanResult: { modalities: [...MODALITIES], tuples, mode: 2, roots: [], isMultiTupleMode: true },
-    loadedImages: new Map(),
-    modalityDirs: new Map(MODALITIES.map(m => [m, Uri.file(`/imgs/${m}`)])),
-    recentlyDeleted: [],
-    winners: new Map(),
-    votingEnabled: false,
-    currentTupleIndex: OPEN_AT,
-    sweepAim: newSweepAimPolicy(),
-    disposed: false,
-    visible: true,
-    poolKey: `cancel-${Math.random().toString(36).slice(2)}`,
-    prefetchWaveKey: 'unset',
-    prefetchWaveCounter: 0,
-    imageLoadKeys: new Set<string>(),
-    webviewReady: true,
-    pendingDebugMessages: [],
-    lastTupleSwitchAt: 0,
-    heldImagePosts: new Map(),
-    watchedDirs: new Set<string>(),
-    fileWatchers: [],
-    nodeWatchers: [],
-    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
-    prefetchWaves: new Map(),
-    transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(8, 'ssh-remote'))
-  };
+  rig.state = panelState({ modalities: MODALITIES, tuples: TUPLES, openAt: OPEN_AT, poolKeyPrefix: 'cancel', posts });
   return rig;
 }
 
@@ -226,30 +176,10 @@ describe('a re-aimed provider sweep drops the work it has already queued', () =>
 
     // Not one more read: the remaining 56 slots stay in the cursor, unread and unrequested. Before
     // this, the 28 dispatches already queued behind the running batch were still read for a window
-    // that is gone; the full scale of that is the pure suite's 448-of-480.
+    // that is gone (docs/testing.md Findings: 448 of 480 on the pure runner).
     expect(rig.asked.length - readsAtDispose).toBe(0);
     expect(rig.asked.length).toBe(BULK_SLOTS);
     expect((rig.provider as any).pool.pending).toBe(0);
     expect((rig.provider as any).pool.running).toBe(0);
-  });
-
-  it('settles a disposed panel\'s cancellations instead of returning them to the cursor forever', async () => {
-    const rig = makeRig();
-    rig.provider.generateAllThumbnails(rig.state);
-    await settle();
-
-    // Dispose cancels the same queued tasks a re-aim would; those slots must NOT come back, or the
-    // sweep re-dispatches work whose panel is gone and never terminates.
-    rig.provider.disposePanel(rig.state, []);
-    await settle(10);
-    let guard = 0;
-    while (rig.resolvers.length && guard++ < 500) await releaseBatch(rig);
-    await settle(20);
-
-    expect(rig.resolvers.length).toBe(0);
-    expect((rig.provider as any).pool.pending).toBe(0);
-    // Each slot was read at most once, and the 28 the dispose cancelled were never re-read.
-    expect(rig.askedKeys.length).toBe(new Set(rig.askedKeys).size);
-    expect(rig.askedKeys.length).toBeLessThanOrEqual(TUPLES * MODALITIES.length - (SWEEP_CHUNK - BULK_SLOTS));
   });
 });

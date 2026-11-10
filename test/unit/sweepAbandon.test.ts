@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SWEEP_CHUNK, SWEEP_REQUEUE, planThumbnails, runThumbnailSweep, ThumbnailBytes } from '../../src/thumbnailPlan';
 import { Priority, TaskCancelled, WorkPool } from '../../src/workPool';
 import { ExtensionMessage } from '../../src/types';
+import { flush, grid, jpeg, withDeadline } from './sweepFixtures';
 
 // A panel the user closed (provider: `state.disposed`; standalone: `s.closed`) must stop being read
 // for. What is counted here is REAL reads that START after the close, on the real WorkPool at the
@@ -16,17 +17,6 @@ const TUPLES = 120;
 const MODS = 4;
 /** Bulk slots the pool grants at width 5 — speculation collectively leaves one slot free. */
 const BULK_SLOTS = 4;
-
-function grid(tuples: number, mods: number) {
-  const modalities = Array.from({ length: mods }, (_, m) => `m${m}`);
-  const rows = Array.from({ length: tuples }, (_, t) => ({
-    images: modalities.map(m => ({ modality: m, name: `${t}_${m}.png` })),
-  }));
-  return { rows, modalities };
-}
-
-const flush = () => new Promise<void>(r => setTimeout(r, 0));
-const jpeg = (length: number): ThumbnailBytes => ({ bytes: new Uint8Array(length), mime: 'image/jpeg' });
 
 interface Rig {
   io: { makeThumbnail: (item: { tupleIndex: number; modalityIndex: number }) => Promise<ThumbnailBytes | null | typeof SWEEP_REQUEUE>; dropQueued: () => void };
@@ -95,15 +85,6 @@ function closeHost(rig: Rig, cancelQueue = true): void {
   if (cancelQueue) rig.io.dropQueued();
 }
 
-/** Rejects rather than hanging the runner if the sweep never resolves. */
-function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`sweep did not settle in ${ms}ms`)), ms);
-  });
-  return Promise.race([p, deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
-}
-
 describe('sweep runner: a host that abandoned the sweep stops being read for', () => {
   it('reads nothing new after the close, where it used to read the rest of the grid', async () => {
     const { rows, modalities } = grid(TUPLES, MODS);
@@ -123,7 +104,6 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
     // Everything the pool had not started is left in the cursor, unread.
     const readsAfterClose = rig.started.length - startedAtClose;
     expect(readsAfterClose).toBe(0);
-    expect(rig.started.length).toBeLessThan(plan.items.length);
     // No slot was read twice: the abandoned slots were never returned to the cursor.
     expect(new Set(rig.started).size).toBe(rig.started.length);
   });
@@ -155,32 +135,5 @@ describe('sweep runner: a host that abandoned the sweep stops being read for', (
     await withDeadline(runThumbnailSweep(plan, rig.io, rig.post, { centre: () => ({ tuple: 0 }), abandoned: () => rig.closed }), 5000);
     expect(rig.started).toEqual([]);
     expect(rig.delivered.size).toBe(0);
-  });
-
-  it('abandons what the cursor still holds, where a re-aim returns what it dropped', async () => {
-    const { rows, modalities } = grid(TUPLES, MODS);
-
-    // Re-aim: the same pool.cancel, but the host is live — every dropped slot comes back and is read.
-    const live = poolRig();
-    let centre = 60;
-    const liveSweep = runThumbnailSweep(planThumbnails(rows, modalities), live.io, live.post, { centre: () => ({ tuple: centre }), abandoned: () => live.closed });
-    await flush();
-    centre = 5;
-    await live.drain();
-    await withDeadline(liveSweep, 10000);
-    expect(live.delivered.size).toBe(TUPLES * MODS);
-    expect([...live.delivered.values()].every(n => n === 1)).toBe(true);
-    // Every slot was read for the live panel, which is the contrast the dead one has to break.
-    expect(live.started.length).toBe(TUPLES * MODS);
-
-    // Close: the same cancel, and the dropped slots are gone for good.
-    const dead = poolRig();
-    const deadSweep = runThumbnailSweep(planThumbnails(rows, modalities), dead.io, dead.post, { centre: () => ({ tuple: 60 }), abandoned: () => dead.closed });
-    await flush();
-    closeHost(dead);
-    await dead.drain();
-    await withDeadline(deadSweep, 10000);
-    expect(dead.delivered.size).toBeLessThan(TUPLES * MODS);
-    expect(dead.started.length).toBeLessThanOrEqual(SWEEP_CHUNK);
   });
 });

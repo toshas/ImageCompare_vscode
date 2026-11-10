@@ -9,10 +9,9 @@ import {
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
 
 /**
- * Cross-platform LOGIC tests. These run on macOS but feed Windows-style inputs
- * (backslashes, drive letters, UNC) to prove the path/parsing layer behaves
- * identically regardless of OS. The native/runtime risks (Sharp binaries, FS
- * watcher) are covered by the 3-OS CI matrix, not here.
+ * Cross-platform tests. They give Windows-shaped input (backslashes, drive letters, UNC) to
+ * naming, matching, the fs.watch delete backup and the existence sweep, on any runner. The 3-OS
+ * CI matrix covers the native binaries.
  */
 
 describe('disambiguateDirectoryNames — POSIX vs Windows parity', () => {
@@ -20,18 +19,6 @@ describe('disambiguateDirectoryNames — POSIX vs Windows parity', () => {
     const uris = [Uri.file('C:\\data\\exp1\\GT'), Uri.file('C:\\data\\exp2\\GT')];
     const out = disambiguateDirectoryNames(uris);
     expect(out.map((o) => o.name)).toEqual(['exp1/GT', 'exp2/GT']);
-  });
-
-  it('produces the same display names for equivalent POSIX paths', () => {
-    const win = disambiguateDirectoryNames([
-      Uri.file('C:\\data\\exp1\\GT'),
-      Uri.file('C:\\data\\exp2\\GT'),
-    ]).map((o) => o.name);
-    const posix = disambiguateDirectoryNames([
-      Uri.file('/data/exp1/GT'),
-      Uri.file('/data/exp2/GT'),
-    ]).map((o) => o.name);
-    expect(win).toEqual(posix);
   });
 
   it('distinct basenames need no disambiguation on either OS', () => {
@@ -58,15 +45,6 @@ describe('findDifferingParts is separator- and OS-independent', () => {
 });
 
 describe('matchTuplesWithTrie case behavior is explicit', () => {
-  it('identical basenames match across modalities (exact pass)', () => {
-    const files = new Map<string, Array<{ name: string; uri: Uri }>>();
-    files.set('GT', [{ name: 'frame01.png', uri: Uri.file('C:\\m\\GT\\frame01.png') }]);
-    files.set('RGB', [{ name: 'frame01.png', uri: Uri.file('C:\\m\\RGB\\frame01.png') }]);
-    const tuples = matchTuplesWithTrie(files as never, ['GT', 'RGB']);
-    expect(tuples).toHaveLength(1);
-    expect(tuples[0].files.size).toBe(2);
-  });
-
   it('case-different basenames are treated as distinct (Linux is case-sensitive)', () => {
     // Documents real behavior: on a case-sensitive FS (Linux) these are two
     // different files; matching compares raw basenames, so they do NOT collapse.

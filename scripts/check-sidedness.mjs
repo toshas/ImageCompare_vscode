@@ -8,22 +8,21 @@
 // (b) the shared-module list in docs/standalone.md ("Architecture", ingredient 2) must equal the
 // computed SHARED set — the list is the backticked src/ basenames inside that numbered list item
 // (the convention is stated in the doc), and this checker is what keeps it honest;
-// (c) a host may supply DATA to a shared runner, never a DECISION — see POLICY_SEAMS below. Gate (c)
-// lives here because its precondition is exactly what this script already derives: the module the
+// (c) a host may supply DATA to a shared runner, never a DECISION — see POLICY_SEAMS below. The module the
 // hosts must delegate to has to be genuinely SHARED, which only the real import graph can say;
 // (d) shim parity — every `Buffer.x` / `path.x` / `vscode.a.b` the standalone bundle's own closure
-// touches must exist on the shim it runs against. Same reason as (c): the closure is this script's
-// output. Shared modules typecheck against node's real types and run against the hand-rolled shims,
+// touches must exist on the shim it runs against.
+// Shared modules typecheck against node's real types and run against the hand-rolled shims,
 // so a missing static compiles clean and throws in the browser, at the user's click. The surface is
 // read by bundling and evaluating the real shim (esbuild, as the build does), never by parsing it;
 // presence only, never behaviour — behaviour is a test's job (docs/standalone.md).
-// (f) no host-declared affordance — the manifest may not contribute a `webview/context` menu, and a
-// menu item's label may exist only in the model. Same reason again: an affordance a host declares is a
-// decision outside the import graph, which is exactly what every other gate here can see and this one
-// cannot (docs/standalone.md: affordances-rendered-by-the-webview).
 // (e) host-only wire facts — a message one host is in a position to state and the other is not may be
-// posted from that host alone. Same reason as (c) and (d): the sets it needs are the ones this script
-// already derives, and nothing else in the tree can see a *silence* being broken.
+// posted from that host alone. Nothing else in the tree can see a *silence* being broken.
+// (f) no host-declared affordance — the manifest may not contribute a `webview/context` menu, and a
+// menu item's label may exist only in the model. A host-declared affordance is a decision outside
+// the import graph, which the other gates read and this one cannot
+// (docs/standalone.md: affordances-rendered-by-the-webview).
+// Gates (c)-(f) live here because each needs sets only this script derives.
 // Run: node scripts/check-sidedness.mjs        (--print emits the full module table)
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';

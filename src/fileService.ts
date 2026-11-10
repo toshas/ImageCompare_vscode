@@ -3,7 +3,7 @@ import { ImageFile, ImageTuple, ScanResult, isImageFile } from './types';
 import { disambiguateDirectoryNames, uniquify } from './modalityNames';
 export { disambiguateDirectoryNames };
 import { applyLabels } from './sessionFile';
-import { parseResults, serializeResults } from './resultsFile';
+import { parseResults } from './resultsFile';
 import { debugEnabled, debugWrite } from './debugLog';
 /**
  * Debug logging for tuple matching (controlled by imageCompare.debug setting); the shared
@@ -18,14 +18,9 @@ import { naturalCompare as naturalSort } from './watcherLogic';
 import { CROP_SUFFIX_RE, enumeratedImages } from './cropPlan';
 import { MODES } from './modePolicy';
 
-/**
- * Strip file extension from filename
- */
 function stripExtension(filename: string): string {
   return filename.replace(/\.[^.]+$/, '');
 }
-
-/** Prepend parent segments until basenames are unique: ["/a/x/results", "/b/y/results"] → ["x/results", "y/results"]. */
 
 /** Longest Common Subsequence length (two-row, O(n) space) — the last tie-break in tuple matching. */
 function lcsLength(a: string, b: string): number {
@@ -63,7 +58,6 @@ export function matchTuplesWithTrie(
   modalities: string[]
 ): MatchedTuple[] {
   if (modalities.length < 2) {
-    // Single modality - return each file as its own tuple
     if (modalities.length === 1) {
       const mod = modalities[0];
       const files = modalityFiles.get(mod) || [];
@@ -117,13 +111,11 @@ export function matchTuplesWithTrie(
     }
   }
 
-  // Build a lookup from ref basename -> ref index for exact matching
   const refBaseToIdx = new Map<string, number>();
   for (let i = 0; i < refFiles.length; i++) {
     refBaseToIdx.set(stripExtension(refFiles[i].name), i);
   }
 
-  // Create tuple map: refIndex -> Map(modality -> file)
   const tupleMap = new Map<number, Map<string, { name: string; uri: vscode.Uri }>>();
   // Every reference file seeds exactly one tuple; nothing else creates tuples (docs/tuple-matching.md: reference-seeds-one-tuple).
   for (let i = 0; i < refFiles.length; i++) {
@@ -154,13 +146,11 @@ export function matchTuplesWithTrie(
     const files = modalityFiles.get(mod) || [];
     for (const file of files) {
       const query = stripExtension(file.name);
-      // Skip if already matched exactly in pass 1
       if (refBaseToIdx.has(query)) {
         if (debugEnabled()) debugLog(`  SKIP (exact): ${mod}/${file.name}`);
         continue;
       }
 
-      // Walk trie to find deepest matching node (longest common prefix)
       let node = trie;
       let bestNode = trie;
       let lcpLength = 0;
@@ -237,9 +227,6 @@ export function matchTuplesWithTrie(
   return result;
 }
 
-/**
- * Find longest common substring between two strings
- */
 function longestCommonSubstring(s1: string, s2: string): string {
   if (!s1 || !s2) return '';
 
@@ -317,7 +304,6 @@ export async function scanForImages(uris: vscode.Uri[], labels?: Map<string, str
     throw new Error('No files or directories provided');
   }
 
-  // Classify URIs as files or directories
   const classified = await classifyUris(uris);
 
   // Case 1: Single directory → check for subdirectories as modalities
@@ -349,9 +335,6 @@ export async function scanForImages(uris: vscode.Uri[], labels?: Map<string, str
   throw new Error('Please select at least 2 image files or 2 directories');
 }
 
-/**
- * Classify URIs into files and directories
- */
 async function classifyUris(uris: vscode.Uri[]): Promise<{ files: vscode.Uri[]; directories: vscode.Uri[] }> {
   const files: vscode.Uri[] = [];
   const directories: vscode.Uri[] = [];
@@ -376,9 +359,6 @@ async function classifyUris(uris: vscode.Uri[]): Promise<{ files: vscode.Uri[]; 
   return { files, directories };
 }
 
-/**
- * Scan a directory for images (may have subdirectories as modalities)
- */
 async function scanDirectory(dirUri: vscode.Uri): Promise<ScanResult> {
   const entries = await vscode.workspace.fs.readDirectory(dirUri);
 
@@ -523,7 +503,6 @@ async function scanDirectoriesAsModalities(
       }
     }
 
-    // Only create tuple if at least one image exists
     if (images.length > 0) {
       const baseName = findCommonSubstring(names) || matched.key;
       // Suffix collisions ` (2)`, `(3)`… in tuple order (docs/session-files.md: durable-vote-key).
@@ -544,9 +523,6 @@ async function scanDirectoriesAsModalities(
   };
 }
 
-/**
- * Scan selected files as a single tuple
- */
 async function scanFiles(uris: vscode.Uri[]): Promise<ScanResult> {
   // No crop filter: a hand-picked selection is respected as picked (docs/session-files.md: folder-of-images-is-a-file-list).
   const imageUris = uris.filter(uri => isImageFile(uri.path));
@@ -580,9 +556,6 @@ function scanEnumeratedFiles(files: Array<{ name: string; uri: vscode.Uri }>): S
   return scanFilesAsTuple([...chosen].sort((a, b) => naturalSort(a.name, b.name)));
 }
 
-/**
- * Convert a list of files into a single tuple
- */
 function scanFilesAsTuple(
   files: Array<{ name: string; uri: vscode.Uri }>
 ): ScanResult {
@@ -623,25 +596,8 @@ export async function readResultsFile(baseUri: vscode.Uri, filename: string = RE
     // IO wrapper only: the format is decided in resultsFile.ts (docs/standalone.md: results-format-shared).
     return parseResults(Buffer.from(data).toString('utf-8'));
   } catch {
-    // File doesn't exist or can't be read - that's OK
     return new Map<string, string>();
   }
-}
-
-/** Write the human-editable `<tuple name> = <winner modality>` results file (docs/session-files.md). */
-// Retained for the integration round-trip test; the provider persists via resultsFile.persistResults.
-export async function writeResultsFile(
-  baseUri: vscode.Uri,
-  tuples: ImageTuple[],
-  winners: Map<number, string>, // tupleIndex -> modality name
-  modalities: string[],
-  filename: string = RESULTS_FILENAME
-): Promise<void> {
-  const resultsUri = vscode.Uri.joinPath(baseUri, filename);
-
-  // IO wrapper only: the format is decided in resultsFile.ts (docs/standalone.md: results-format-shared).
-  const content = serializeResults(tuples, winners, modalities);
-  await vscode.workspace.fs.writeFile(resultsUri, Buffer.from(content, 'utf-8'));
 }
 
 /** Resolve loaded winners (by tuple name) to Map<tupleIndex, modalityIndex>; unknown names are dropped. */
@@ -654,7 +610,7 @@ export function mapWinnersToIndices(
 
   for (let tupleIndex = 0; tupleIndex < tuples.length; tupleIndex++) {
     const tuple = tuples[tupleIndex];
-    // Must look up by the same durable key writeResultsFile wrote (docs/session-files.md: durable-vote-key).
+    // Must look up by the same durable key persistResults wrote (docs/session-files.md: durable-vote-key).
     const winnerModality = winners.get(tuple.name);
 
     if (winnerModality) {

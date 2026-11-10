@@ -38,9 +38,7 @@ const published = new Map<string, Buffer>();
 const requested: string[] = [];
 
 test.beforeAll(async () => {
-  // The artifact is built ONCE by globalSetup (test/webview/standaloneArtifact.ts); every worker
-  // that runs this file only reads it, so no build can race a read. Reading a page that is missing,
-  // half-written or older than its sources is the failure this guards, not just an absent file.
+  // Built once by globalSetup; this only asserts it is current (docs/testing.md, "The standalone artifact").
   assertStandaloneArtifactFresh();
   const html = fs.readFileSync(ARTIFACT);
   server = http.createServer((req, res) => {
@@ -72,6 +70,9 @@ test.afterAll(async () => {
   if (!server) return;
   await new Promise(resolve => server.close(resolve));
 });
+
+const icState = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => (window as unknown as { __ic_test: { getState(): IcStateLite & Record<string, unknown> } }).__ic_test.getState());
 
 test('standalone landing shows the ported dropzone chrome', async ({ page }) => {
   await page.goto(pageUrl);
@@ -110,10 +111,6 @@ test('standalone build boots the real webview and matches via the real scanForIm
   });
   await page.goto(pageUrl);
 
-  // Landing chrome is up, showing the injected version.
-  await expect(page.locator('#ic-landing')).toBeVisible();
-  await expect(page.locator('#ic-landing .ic-version')).toContainText('standalone build');
-
   // Build a real directory tree in OPFS: 2 modality subdirs, 2 images each, distinct
   // dimensions per file, and basenames that only the fuzzy trie matcher can pair.
   await page.evaluate(async () => {
@@ -121,29 +118,14 @@ test('standalone build boots the real webview and matches via the real scanForIm
     try {
       await root.removeEntry('fixtures', { recursive: true });
     } catch { /* fresh profile */ }
-    const fix = await root.getDirectoryHandle('fixtures', { create: true });
-    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d')!;
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, w, h);
-      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
-      return new Uint8Array(await blob.arrayBuffer());
-    };
-    const write = async (dir: FileSystemDirectoryHandle, name: string, bytes: Uint8Array) => {
-      const fh = await dir.getFileHandle(name, { create: true });
-      const w = await fh.createWritable();
-      await w.write(bytes.slice().buffer as ArrayBuffer);
-      await w.close();
-    };
-    const gt = await fix.getDirectoryHandle('gt', { create: true });
-    const pred = await fix.getDirectoryHandle('pred', { create: true });
-    await write(gt, 'scene_01_gt.png', await makePng(8, 6, '#f00'));
-    await write(gt, 'scene_02_gt.png', await makePng(9, 7, '#0f0'));
-    await write(pred, 'scene_01_pred.png', await makePng(5, 4, '#00f'));
-    await write(pred, 'scene_02_pred.png', await makePng(6, 5, '#ff0'));
+    await root.getDirectoryHandle('fixtures', { create: true });
+  });
+  await writeOpfsPng(page, 'fixtures', 'gt', 'scene_01_gt.png', 8, 6, '#f00');
+  await writeOpfsPng(page, 'fixtures', 'gt', 'scene_02_gt.png', 9, 7, '#0f0');
+  await writeOpfsPng(page, 'fixtures', 'pred', 'scene_01_pred.png', 5, 4, '#00f');
+  await writeOpfsPng(page, 'fixtures', 'pred', 'scene_02_pred.png', 6, 5, '#ff0');
+  await page.evaluate(async () => {
+    const fix = await (await navigator.storage.getDirectory()).getDirectoryHandle('fixtures');
     await (window as unknown as { __ic_standalone: { open(h: FileSystemDirectoryHandle): Promise<void> } })
       .__ic_standalone.open(fix);
   });
@@ -155,9 +137,7 @@ test('standalone build boots the real webview and matches via the real scanForIm
   });
   await expect(page.locator('#viewer')).toHaveClass(/active/);
 
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   // Literals pinned from the real pipeline: 2 tuples paired across differing basenames,
   // named by findCommonSubstring ('scene_01_gt' ∩ 'scene_01_pred' → 'scene_01'), rows
   // natural-sorted, modality dirs natural-sorted (gt before pred) under the OPFS root.
@@ -308,9 +288,7 @@ test('standalone opens a folder of loose images, and never polls a results.txt i
   });
   await expect(page.locator('#viewer')).toHaveClass(/active/);
 
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.tupleCount).toBe(1);
   // The crop, the .txt and the results file are all out; the two parents are the columns.
   expect(state.modalityCount).toBe(2);
@@ -323,9 +301,7 @@ test('standalone opens a folder of loose images, and never polls a results.txt i
   await page.waitForTimeout(600);
   const seen = await page.evaluate(() => (window as unknown as { __ic_seen: string[] }).__ic_seen);
   expect(seen).not.toContain('winnersReset');
-  const after = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const after = await icState(page);
   expect(after.winners).toEqual([]);
   expect(after.modalityCount).toBe(2);
 
@@ -427,9 +403,7 @@ test('standalone no-FSA drop path walks webkit entries into the read-only backen
     const t = (window as unknown as { __ic_test?: { getState(): { tupleCount: number } } }).__ic_test;
     return !!t && t.getState().tupleCount > 0;
   });
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   // Same literals the FSA path pins: the walker feeds the SAME matcher through the FileList backend.
   expect(state.tupleCount).toBe(2);
   expect(state.modalityCount).toBe(2);
@@ -479,9 +453,7 @@ test('standalone page published next to an imagecompare.json opens that comparis
     return !!t && t.getState().tupleCount > 0;
   });
   await expect(page.locator('#ic-landing')).toBeHidden();
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   // The listing feeds the same scanner a dropped folder does: same pairing, naming and column order.
   expect(state.tupleCount).toBe(2);
   expect(state.modalityCount).toBe(2);
@@ -546,9 +518,7 @@ test('standalone page keeps a folder the user opened while the manifest was stil
   });
   // The manifest lands ~3 s after load, long after the folder opened; it must not replace it.
   await publishedBootSettled(page);
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.modalityPaths).toEqual(['/race/gt', '/race/pred']);
   expect(state.votingEnabled).toBe(true);
 });
@@ -597,9 +567,6 @@ async function waitForRows(page: import('@playwright/test').Page, rows: number):
     return !!t && t.getState().tupleCount === n;
   }, rows);
 }
-
-const icState = (page: import('@playwright/test').Page) =>
-  page.evaluate(() => (window as unknown as { __ic_test: { getState(): IcStateLite } }).__ic_test.getState());
 
 /** The viewer layer's IndexedDB keys — read to know a write has landed before a reload, never to judge behaviour. */
 const layerKeys = (page: import('@playwright/test').Page) => page.evaluate(() => new Promise<string[]>((resolve) => {
@@ -994,34 +961,19 @@ async function bootPolledFixture(page: import('@playwright/test').Page, dirName:
     });
   });
   await page.goto(pageUrl);
-  await page.evaluate(async ({ dir, interval, wrap }) => {
+  await page.evaluate(async (dir) => {
     const root = await navigator.storage.getDirectory();
     try {
       await root.removeEntry(dir, { recursive: true });
     } catch { /* fresh profile */ }
-    const fix = await root.getDirectoryHandle(dir, { create: true });
-    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d')!;
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, w, h);
-      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
-      return new Uint8Array(await blob.arrayBuffer());
-    };
-    const write = async (d: FileSystemDirectoryHandle, name: string, bytes: Uint8Array) => {
-      const fh = await d.getFileHandle(name, { create: true });
-      const w = await fh.createWritable();
-      await w.write(bytes.slice().buffer as ArrayBuffer);
-      await w.close();
-    };
-    const gt = await fix.getDirectoryHandle('gt', { create: true });
-    const pred = await fix.getDirectoryHandle('pred', { create: true });
-    await write(gt, 'scene_01_gt.png', await makePng(8, 6, '#f00'));
-    await write(gt, 'scene_02_gt.png', await makePng(9, 7, '#0f0'));
-    await write(pred, 'scene_01_pred.png', await makePng(5, 4, '#00f'));
-    await write(pred, 'scene_02_pred.png', await makePng(6, 5, '#ff0'));
+    await root.getDirectoryHandle(dir, { create: true });
+  }, dirName);
+  await writeOpfsPng(page, dirName, 'gt', 'scene_01_gt.png', 8, 6, '#f00');
+  await writeOpfsPng(page, dirName, 'gt', 'scene_02_gt.png', 9, 7, '#0f0');
+  await writeOpfsPng(page, dirName, 'pred', 'scene_01_pred.png', 5, 4, '#00f');
+  await writeOpfsPng(page, dirName, 'pred', 'scene_02_pred.png', 6, 5, '#ff0');
+  await page.evaluate(async ({ dir, interval, wrap }) => {
+    const fix = await (await navigator.storage.getDirectory()).getDirectoryHandle(dir);
     const seam = (window as unknown as { __ic_standalone: { pollIntervalMs: number; open(h: FileSystemDirectoryHandle): Promise<void> } }).__ic_standalone;
     // Injected test interval — the seam the poll loop reads when it arms its timer.
     seam.pollIntervalMs = interval;
@@ -1079,24 +1031,26 @@ async function writeOpfsPng(page: import('@playwright/test').Page, dir: string, 
   }, { dir, sub, name, w, h, color });
 }
 
-test('standalone poll detects an external new file as a granular tupleAdded with view state intact', async ({ page }) => {
-  await bootPolledFixture(page, 'pollfix');
-
-  // Zoom in so the poll's granular update can be proven not to reset the view.
+/** Wheel the canvas in one notch and return the zoom it lands at. */
+async function zoomIn(page: import('@playwright/test').Page): Promise<number> {
   await page.waitForFunction(() => {
     const c = document.getElementById('canvas') as HTMLCanvasElement | null;
     return !!c && c.width > 0;
   });
-  const canvas = page.locator('#canvas');
-  await canvas.hover();
+  await page.locator('#canvas').hover();
   await page.mouse.wheel(0, -240);
   await page.waitForFunction(() => {
     const t = (window as unknown as { __ic_test: { getState(): { zoom: number } } }).__ic_test;
     return t.getState().zoom > 1;
   });
-  const zoomBefore = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): { zoom: number } } }).__ic_test.getState().zoom,
-  );
+  return (await icState(page)).zoom as number;
+}
+
+test('standalone poll detects an external new file as a granular tupleAdded with view state intact', async ({ page }) => {
+  await bootPolledFixture(page, 'pollfix');
+
+  // Zoom in so the poll's granular update can be proven not to reset the view.
+  const zoomBefore = await zoomIn(page);
 
   // An external writer (e.g. a training run) adds a new file into a modality dir after boot.
   await writeOpfsPng(page, 'pollfix', 'gt', 'scene_03_gt.png', 7, 5, '#0ff');
@@ -1112,9 +1066,7 @@ test('standalone poll detects an external new file as a granular tupleAdded with
   expect(msgs.filter(m => m === 'init')).toHaveLength(1);
 
   // View state survived: same tuple under the cursor, zoom untouched.
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.currentTupleName).toBe('scene_01');
   expect(state.zoom).toBe(zoomBefore);
 });
@@ -1151,9 +1103,7 @@ test('standalone poll delivers external deletes, content changes and results.txt
       () => (window as unknown as { __ic_test: { getState(): { tupleCount: number } } }).__ic_test.getState().tupleCount,
     ), { timeout: 15000 })
     .toBe(1);
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.currentTupleName).toBe('scene_02');
   expect(state.winners).toEqual([[0, 1]]);
   const msgsAfterDelete = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
@@ -1194,9 +1144,7 @@ test('standalone poll re-verifies a removal with stat before reporting it', asyn
   const msgs = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
   expect(msgs.filter(m => m.startsWith('tupleDeleted:'))).toEqual([]);
   expect(msgs.filter(m => m.startsWith('fileDeleted:'))).toEqual([]);
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.tupleCount).toBe(2);
   expect(state.currentTupleName).toBe('scene_01');
   expect(state.modalityPaths).toEqual(['/statfix/gt', '/statfix/pred']);
@@ -1211,27 +1159,12 @@ test('standalone re-open cancels the previous root: no stale poll posts after th
     try {
       await root.removeEntry('pollfixB', { recursive: true });
     } catch { /* fresh */ }
-    const fix = await root.getDirectoryHandle('pollfixB', { create: true });
-    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d')!;
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, w, h);
-      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
-      return new Uint8Array(await blob.arrayBuffer());
-    };
-    const write = async (d: FileSystemDirectoryHandle, name: string, bytes: Uint8Array) => {
-      const fh = await d.getFileHandle(name, { create: true });
-      const w = await fh.createWritable();
-      await w.write(bytes.slice().buffer as ArrayBuffer);
-      await w.close();
-    };
-    const m1 = await fix.getDirectoryHandle('m1', { create: true });
-    const m2 = await fix.getDirectoryHandle('m2', { create: true });
-    await write(m1, 'item_01_m1.png', await makePng(4, 3, '#123'));
-    await write(m2, 'item_01_m2.png', await makePng(4, 3, '#321'));
+    await root.getDirectoryHandle('pollfixB', { create: true });
+  });
+  await writeOpfsPng(page, 'pollfixB', 'm1', 'item_01_m1.png', 4, 3, '#123');
+  await writeOpfsPng(page, 'pollfixB', 'm2', 'item_01_m2.png', 4, 3, '#321');
+  await page.evaluate(async () => {
+    const fix = await (await navigator.storage.getDirectory()).getDirectoryHandle('pollfixB');
     await (window as unknown as { __ic_standalone: { open(h: FileSystemDirectoryHandle): Promise<void> } })
       .__ic_standalone.open(fix);
   });
@@ -1252,9 +1185,7 @@ test('standalone re-open cancels the previous root: no stale poll posts after th
   await page.waitForTimeout(1200);
   const msgs = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
   expect(msgs.filter(m => m.startsWith('tupleAdded:'))).toEqual([]);
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.tupleCount).toBe(1);
   expect(state.currentTupleName).toBe(nameB);
 });
@@ -1331,19 +1262,7 @@ test('standalone poll adopts a modality directory copied in after boot', async (
   await bootPolledFixture(page, 'adoptfix');
 
   // Zoom in so the adoption can be proven to leave view state intact.
-  await page.waitForFunction(() => {
-    const c = document.getElementById('canvas') as HTMLCanvasElement | null;
-    return !!c && c.width > 0;
-  });
-  await page.locator('#canvas').hover();
-  await page.mouse.wheel(0, -240);
-  await page.waitForFunction(() => {
-    const t = (window as unknown as { __ic_test: { getState(): { zoom: number } } }).__ic_test;
-    return t.getState().zoom > 1;
-  });
-  const zoomBefore = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): { zoom: number } } }).__ic_test.getState().zoom,
-  );
+  const zoomBefore = await zoomIn(page);
 
   // A user copies a whole modality directory in beside gt and pred after boot.
   await writeOpfsPng(page, 'adoptfix', 'mask', 'scene_01_mask.png', 6, 4, '#909');
@@ -1360,9 +1279,7 @@ test('standalone poll adopts a modality directory copied in after boot', async (
   expect(msgs.filter(m => m === 'init')).toHaveLength(1);
 
   // 'mask' lands between gt and pred — the real modalityInsertIndex position, not an append.
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.modalityPaths).toEqual(['/adoptfix/gt', '/adoptfix/mask', '/adoptfix/pred']);
   expect(state.tupleCount).toBe(2);
   await expect(page.locator('#modality-selector .modality-btn')).toHaveCount(3);
@@ -1373,75 +1290,6 @@ test('standalone poll adopts a modality directory copied in after boot', async (
     .toEqual(expect.arrayContaining(['fileRestored:0-1', 'fileRestored:1-1', 'thumbnail:0-1', 'thumbnail:1-1']));
 
   // View state survived the adoption.
-  expect(state.currentTupleName).toBe('scene_01');
-  expect(state.zoom).toBe(zoomBefore);
-});
-
-test('standalone poll executes a modality dir rename as remove-then-adopt with view state preserved', async ({ page }) => {
-  await bootPolledFixture(page, 'renamefix');
-
-  await page.waitForFunction(() => {
-    const c = document.getElementById('canvas') as HTMLCanvasElement | null;
-    return !!c && c.width > 0;
-  });
-  await page.locator('#canvas').hover();
-  await page.mouse.wheel(0, -240);
-  await page.waitForFunction(() => {
-    const t = (window as unknown as { __ic_test: { getState(): { zoom: number } } }).__ic_test;
-    return t.getState().zoom > 1;
-  });
-  const zoomBefore = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): { zoom: number } } }).__ic_test.getState().zoom,
-  );
-
-  // A rename on disk is delete + create of the directory; delete-first keeps the wire order deterministic.
-  await page.evaluate(async () => {
-    const root = await navigator.storage.getDirectory();
-    const fix = await root.getDirectoryHandle('renamefix');
-    await fix.removeEntry('pred', { recursive: true });
-    const renamed = await fix.getDirectoryHandle('aaa_pred', { create: true });
-    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d')!;
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, w, h);
-      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
-      return new Uint8Array(await blob.arrayBuffer());
-    };
-    const write = async (d: FileSystemDirectoryHandle, name: string, bytes: Uint8Array) => {
-      const fh = await d.getFileHandle(name, { create: true });
-      const w = await fh.createWritable();
-      await w.write(bytes.slice().buffer as ArrayBuffer);
-      await w.close();
-    };
-    await write(renamed, 'scene_01_pred.png', await makePng(5, 4, '#00f'));
-    await write(renamed, 'scene_02_pred.png', await makePng(6, 5, '#ff0'));
-  });
-
-  // The pill reappears under the new name at its sorted position (aaa_pred sorts before gt).
-  await expect
-    .poll(async () => page.evaluate(
-      () => (window as unknown as { __ic_test: { getState(): { modalityPaths: string[] } } }).__ic_test.getState().modalityPaths,
-    ), { timeout: 15000 })
-    .toEqual(['/renamefix/aaa_pred', '/renamefix/gt']);
-
-  const msgs = await page.evaluate(() => (window as unknown as { __ic_msgs: string[] }).__ic_msgs);
-  // Old column removed, new one adopted — remove-then-adopt, never a re-init.
-  expect(msgs).toContain('modalityRemoved');
-  expect(msgs).toContain('modalityAdded');
-  expect(msgs.indexOf('modalityRemoved')).toBeLessThan(msgs.indexOf('modalityAdded'));
-  expect(msgs.filter(m => m === 'init')).toHaveLength(1);
-
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
-  expect(state.modalityCount).toBe(2);
-  expect(state.tupleCount).toBe(2);
-  await expect(page.locator('#modality-selector .modality-btn').filter({ hasText: 'aaa_pred' })).toHaveCount(1);
-
-  // View state survived the rename.
   expect(state.currentTupleName).toBe('scene_01');
   expect(state.zoom).toBe(zoomBefore);
 });
@@ -1464,22 +1312,20 @@ test('standalone re-open picks up a modality dir added while the comparison was 
     const t = (window as unknown as { __ic_test?: { getState(): { modalityCount: number } } }).__ic_test;
     return !!t && t.getState().modalityCount === 3;
   });
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.modalityPaths).toEqual(['/reopenfix/gt', '/reopenfix/mask', '/reopenfix/pred']);
   expect(state.tupleCount).toBe(2);
 });
 
 /**
- * The same rename, pinned deterministically: one poll cycle, both halves of the rename already on
+ * A dir rename, pinned deterministically: one poll cycle, both halves of the rename already on
  * disk before it runs.
  *
- * The spec above can be satisfied for the wrong reason. Its rename mutates a live fixture while the
- * 150 ms poll is running, so `pred`'s disappearance and `aaa_pred`'s images routinely land in
- * DIFFERENT cycles — and a two-cycle split emits modalityRemoved then modalityAdded whatever the
- * order of the two blocks inside a cycle is. Measured on this box: with adoption moved ahead of the
- * removals in `runPollCycle`, that spec still passed 18 runs out of 20 at --workers=4.
+ * A live-poll spec, since deleted, was satisfied for the wrong reason. Its rename mutated a live
+ * fixture while the 150 ms poll ran, so `pred`'s disappearance and `aaa_pred`'s images routinely
+ * landed in DIFFERENT cycles — and a two-cycle split emits modalityRemoved then modalityAdded
+ * whatever the order of the two blocks inside a cycle is. Measured on this box: with adoption moved
+ * ahead of the removals in `runPollCycle`, it still passed 18 runs out of 20 at --workers=4.
  *
  * So this one removes the split instead of observing it. `pollIntervalMs` is set to a sentinel that
  * an init script intercepts: the interval the adapter arms is captured rather than started (every
@@ -1509,32 +1355,16 @@ test('standalone poll orders a same-cycle dir rename remove-then-adopt within on
 
   // The poll armed its interval through the seam and this spec now holds the only trigger.
   expect(await page.evaluate(() => typeof (window as unknown as { __ic_cycle?: unknown }).__ic_cycle)).toBe('function');
+  const zoomBefore = await zoomIn(page);
 
   // Both halves of the rename land on disk while no cycle can run.
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
     const fix = await root.getDirectoryHandle('renameonecycle');
     await fix.removeEntry('pred', { recursive: true });
-    const renamed = await fix.getDirectoryHandle('aaa_pred', { create: true });
-    const makePng = async (w: number, h: number, color: string): Promise<Uint8Array> => {
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d')!;
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, w, h);
-      const blob: Blob = await new Promise(res => c.toBlob(b => res(b!), 'image/png'));
-      return new Uint8Array(await blob.arrayBuffer());
-    };
-    const write = async (d: FileSystemDirectoryHandle, name: string, bytes: Uint8Array) => {
-      const fh = await d.getFileHandle(name, { create: true });
-      const w = await fh.createWritable();
-      await w.write(bytes.slice().buffer as ArrayBuffer);
-      await w.close();
-    };
-    await write(renamed, 'scene_01_pred.png', await makePng(5, 4, '#00f'));
-    await write(renamed, 'scene_02_pred.png', await makePng(6, 5, '#ff0'));
   });
+  await writeOpfsPng(page, 'renameonecycle', 'aaa_pred', 'scene_01_pred.png', 5, 4, '#00f');
+  await writeOpfsPng(page, 'renameonecycle', 'aaa_pred', 'scene_02_pred.png', 6, 5, '#ff0');
 
   // Nothing reacted: the timer is held and no observer is left to accelerate a cycle, so the
   // events asserted below cannot come from a cycle that saw only one half of the rename.
@@ -1563,12 +1393,14 @@ test('standalone poll orders a same-cycle dir rename remove-then-adopt within on
   expect(msgs.indexOf('modalityRemoved')).toBeLessThan(msgs.indexOf('modalityAdded'));
   expect(msgs.filter(m => m === 'init')).toHaveLength(1);
 
-  const state = await page.evaluate(
-    () => (window as unknown as { __ic_test: { getState(): Record<string, unknown> } }).__ic_test.getState(),
-  );
+  const state = await icState(page);
   expect(state.modalityCount).toBe(2);
   expect(state.tupleCount).toBe(2);
+  await expect(page.locator('#modality-selector .modality-btn').filter({ hasText: 'aaa_pred' })).toHaveCount(1);
+
+  // View state survived the rename.
   expect(state.currentTupleName).toBe('scene_01');
+  expect(state.zoom).toBe(zoomBefore);
 });
 
 // The bug this whole change exists for: in the browser, right-click hit Chrome's own menu, so

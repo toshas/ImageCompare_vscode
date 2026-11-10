@@ -1,8 +1,7 @@
 /**
  * Synthetic, deterministic test assets shared across all test layers.
  *
- * Everything here is procedurally generated (no photos) so that byte output —
- * and therefore visual-regression screenshots — is stable across runs.
+ * Everything here is procedurally generated (no photos) so that byte output is stable across runs.
  */
 
 /**

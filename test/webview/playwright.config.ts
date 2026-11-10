@@ -31,8 +31,7 @@ export default defineConfig({
   // at its default put it at <cwd>/test-results, the report's own parent. Both paths are covered
   // by the `test-results/` .gitignore rule, which matches that directory name at any depth.
   outputDir: './test-results',
-  // HTML report lands under the repo-root test-results/ (gitignored); CI uploads
-  // it as an artifact only when the suite fails.
+  // CI uploads the HTML report as an artifact only when the suite fails.
   reporter: [
     ['list'],
     ['html', { outputFolder: '../../test-results/webview-html-report', open: 'never' }],

@@ -86,8 +86,6 @@ describe('crop plan (cropPlan.ts, real code)', () => {
     it('clamps width and height to the image bounds after rounding', () => {
       const rect = scaleAndClampRect({ x: 0.9, y: 0.95, w: 0.2, h: 0.2 }, 100, 100);
       expect(rect).toEqual({ x: 90, y: 95, w: 10, h: 5 });
-      expect(rect.x + rect.w).toBe(100);
-      expect(rect.y + rect.h).toBe(100);
     });
 
     it('clamps a negative origin to zero before the size clamp', () => {

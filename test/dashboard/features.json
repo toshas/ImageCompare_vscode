@@ -1,5 +1,4 @@
 {
-  "_comment": "Feature catalog for the ImageCompare test dashboard. Each feature maps to the test(s) that cover it. `tests` references {suite: unit|webview|integration, match: <substring of the test title>}. An empty `tests` array means the feature is NOT yet covered (shown gray in the dashboard). The generator (generate.mjs) fills in pass/fail from real JSON reports.",
   "areas": [
     {
       "area": "Keyboard — navigation",
@@ -85,7 +84,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "reorders the current modality left"
+              "match": "the reorder buttons are gone and [ ] still reorder"
             }
           ]
         },
@@ -172,7 +171,7 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "clicking a modality pill switches modality"
+              "match": "a click, and a 3 px wobble, select the pill without reordering"
             }
           ]
         },
@@ -247,15 +246,7 @@
             },
             {
               "suite": "unit",
-              "match": "re-saves after EVERY step"
-            },
-            {
-              "suite": "unit",
               "match": "indices pre-shifted for earlier splices"
-            },
-            {
-              "suite": "unit",
-              "match": "deletes every file before executing the removal plan"
             },
             {
               "suite": "unit",
@@ -338,16 +329,6 @@
     {
       "area": "Crop tool",
       "features": [
-        {
-          "id": "crop-enter",
-          "name": "Enter crop mode (crosshair)",
-          "tests": [
-            {
-              "suite": "webview",
-              "match": "C enters crop mode"
-            }
-          ]
-        },
         {
           "id": "crop-draw",
           "name": "Draw crop rectangle",
@@ -470,10 +451,6 @@
             {
               "suite": "unit",
               "match": "divides x/w by the width and y/h by the height"
-            },
-            {
-              "suite": "unit",
-              "match": "round-trips through scaleAndClampRect"
             }
           ]
         },
@@ -684,16 +661,6 @@
       "area": "Winner voting",
       "features": [
         {
-          "id": "winner-enter",
-          "name": "Toggle winner via Enter",
-          "tests": [
-            {
-              "suite": "webview",
-              "match": "Enter toggles a winner and posts setWinner"
-            }
-          ]
-        },
-        {
           "id": "winner-circle",
           "name": "Toggle winner via carousel circle click",
           "tests": [
@@ -724,23 +691,11 @@
           "tests": [
             {
               "suite": "integration",
-              "match": "write then read round-trips"
-            },
-            {
-              "suite": "unit",
-              "match": "maps winner indices to durable modality names"
-            },
-            {
-              "suite": "integration",
               "match": "CRLF-encoded results"
             },
             {
               "suite": "unit",
               "match": "serializes the exact header and vote lines"
-            },
-            {
-              "suite": "unit",
-              "match": "round-trips through serialize and parse"
             },
             {
               "suite": "unit",
@@ -1254,10 +1209,6 @@
           "tests": [
             {
               "suite": "webview",
-              "match": "copy writes the displayed image to the clipboard"
-            },
-            {
-              "suite": "webview",
               "match": "copy after navigation writes the currently displayed image"
             }
           ]
@@ -1618,10 +1569,6 @@
             {
               "suite": "unit",
               "match": "survives a scrambled completion order over 12 directories"
-            },
-            {
-              "suite": "unit",
-              "match": "one very slow directory in the middle finishes last"
             }
           ]
         },
@@ -1641,7 +1588,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "matches identical basenames"
+              "match": "_pred matches _gt, not _crop01, when lenDiff ties"
             }
           ]
         },
@@ -1684,10 +1631,6 @@
             {
               "suite": "unit",
               "match": "a steady-state cycle costs one pooled task per watched directory"
-            },
-            {
-              "suite": "unit",
-              "match": "the cycle cost does not grow with the number of files"
             },
             {
               "suite": "unit",
@@ -1793,10 +1736,6 @@
           "id": "match-crossplatform",
           "name": "Path disambiguation, and the URI-vs-filesystem path space at the node fs seam (POSIX/Windows parity)",
           "tests": [
-            {
-              "suite": "unit",
-              "match": "same display names for equivalent POSIX paths"
-            },
             {
               "suite": "unit",
               "match": "Windows drive-letter paths disambiguate"
@@ -1977,7 +1916,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "version gate — missing and current pass, future is rejected"
+              "match": "version gate — current passes, future and non-positive-integer versions are rejected"
             }
           ]
         },
@@ -2177,10 +2116,6 @@
             {
               "suite": "unit",
               "match": "a wave with a hole in the middle still logs both lines"
-            },
-            {
-              "suite": "unit",
-              "match": "still rolls the wave up on the debug channel"
             }
           ]
         },
@@ -2486,15 +2421,15 @@
             },
             {
               "suite": "unit",
-              "match": "skips its own test and test-full jobs on a pull_request"
+              "match": "skips its own test-full job on a pull_request"
             },
             {
               "suite": "unit",
-              "match": "still runs the whole chain on a tag when both gates pass"
+              "match": "still runs the whole chain on a tag when test-full passes"
             },
             {
               "suite": "unit",
-              "match": "refuses to build on a tag when either gate failed or was cancelled"
+              "match": "refuses to build on a tag when test-full failed or was cancelled"
             },
             {
               "suite": "unit",
@@ -2566,10 +2501,6 @@
             {
               "suite": "unit",
               "match": "is three columns per tuple at the field shape, not ten"
-            },
-            {
-              "suite": "unit",
-              "match": "caches the on-screen column of both neighbours"
             }
           ]
         },
@@ -2741,10 +2672,6 @@
             },
             {
               "suite": "unit",
-              "match": "re-aims mid-sweep when setCurrentTuple moves the panel"
-            },
-            {
-              "suite": "unit",
               "match": "serves the new centre after one running batch"
             },
             {
@@ -2859,19 +2786,11 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "every slot is handed out exactly once however often the centre jumps"
-            },
-            {
-              "suite": "unit",
               "match": "a returned slot is handed out again exactly once"
             },
             {
               "suite": "unit",
               "match": "every slot is delivered exactly once when the centre moves on every batch"
-            },
-            {
-              "suite": "unit",
-              "match": "settles a disposed panel's cancellations instead of returning them"
             },
             {
               "suite": "unit",
@@ -2888,14 +2807,6 @@
             {
               "suite": "unit",
               "match": "resolves without dispatching anything when the host was already gone at sweep start"
-            },
-            {
-              "suite": "unit",
-              "match": "abandons what the cursor still holds, where a re-aim returns what it dropped"
-            },
-            {
-              "suite": "unit",
-              "match": "every planned slot is delivered exactly once, and the tail is swept"
             },
             {
               "suite": "unit",
@@ -3054,7 +2965,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "provides every Buffer static the shared modules call"
+              "match": "injects the crop tEXt and reports cropComplete"
             },
             {
               "suite": "unit",
@@ -3065,12 +2976,7 @@
         {
           "id": "standalone-pool",
           "name": "Standalone schedules IO through the shared work pool (width clamp shared with the extension)",
-          "tests": [
-            {
-              "suite": "unit",
-              "match": "clamps the pool width"
-            }
-          ]
+          "tests": []
         },
         {
           "id": "standalone-polling",
@@ -3129,10 +3035,6 @@
             {
               "suite": "webview",
               "match": "standalone poll adopts a modality directory copied in after boot"
-            },
-            {
-              "suite": "webview",
-              "match": "standalone poll executes a modality dir rename as remove-then-adopt"
             },
             {
               "suite": "webview",
@@ -3416,10 +3318,6 @@
           "id": "share-comparison-script",
           "name": "Sharing script stages a comparison byte-for-byte or refuses (unservable types, size and count limits), never altering it",
           "tests": [
-            {
-              "suite": "unit",
-              "match": "lays a folder of image columns out as it is, ignoring loose files, non-images and results.txt"
-            },
             {
               "suite": "unit",
               "match": "makes each directory of a multi-directory session a column named by its label"

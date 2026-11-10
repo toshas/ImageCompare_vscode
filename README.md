@@ -226,7 +226,7 @@ PNG, JPG, JPEG, GIF, BMP, WebP, TIFF (`.tiff`, `.tif`), PPMX
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `imageCompare.thumbnailSize` | 100 | Resolution carousel thumbnails are decoded and cached at (longest side, 2x this value) — not their on-screen size, which follows the carousel width divided by the modality count |
-| `imageCompare.prefetchCount` | 3 | Tuples to preload ahead/behind (each preloads every modality) |
+| `imageCompare.prefetchCount` | 3 | Tuples to preload ahead/behind (the modality on screen and its nearest siblings) |
 | `imageCompare.maxConcurrentReads` | 0 (auto) | How many image reads/decodes run at once. Auto sizes from the CPUs actually available and caps at the extension host's libuv thread pool (4) + 2 — a wider pool only queues work ahead of the image you are looking at. Applies on the next window reload |
 | `imageCompare.keepZoomOnTupleChange` | false | Keep zoom/pan when switching tuples; off means a new tuple resets the view. Zoom always persists across modality switches |
 | `imageCompare.cacheMaxAgeDays` | 7 | Thumbnail cache lifetime, counted from last use (a cache you keep opening never expires) |
@@ -253,8 +253,8 @@ npm run test:demos       # → test/demos/gallery/index.html (a captioned clip o
 - **Feature demo gallery** — live at [toshas.github.io/ImageCompare_vscode/gallery](https://toshas.github.io/ImageCompare_vscode/gallery/), regenerated on every main push (locally: `npm run test:demos`; per-PR: the `demo-gallery` CI artifact) — short captioned
   clips of each interaction.
 
-All three layers run automatically in **CI on Windows, Linux, and macOS** for every
-push and pull request — nothing to run by hand, no machine-specific setup.
+All three layers run automatically in **CI on Windows, Linux, and macOS** for every pull request and
+every push to `main` or `test/**` — nothing to run by hand, no machine-specific setup.
 
 ### Found a bug? Fix it the testbed way
 

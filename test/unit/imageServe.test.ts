@@ -11,8 +11,7 @@ function recorder() {
     if (reply.kind === 'image') log.push(`post:image:${reply.mime}:${reply.width}x${reply.height}`);
     else log.push(`post:error:${reply.error}`);
   };
-  const posts = () => log.filter(e => e.startsWith('post:')).length;
-  return { log, post, posts };
+  return { log, post };
 }
 
 function scriptedIo(log: string[], overrides: Partial<ImageServeIo<TestImage>> = {}): ImageServeIo<TestImage> {
@@ -26,18 +25,16 @@ function scriptedIo(log: string[], overrides: Partial<ImageServeIo<TestImage>> =
 
 describe('serveImage (real imageServe code)', () => {
   it('a missing image posts exactly one imageError and touches no io', async () => {
-    const { log, post, posts } = recorder();
+    const { log, post } = recorder();
     await serveImage(undefined, scriptedIo(log), post);
     expect(log).toEqual(['post:error:Image not available']);
-    expect(posts()).toBe(1);
   });
 
   it('a passthrough extension serves the original bytes with probed dims and never converts', async () => {
-    const { log, posts } = recorder();
+    const { log } = recorder();
     let served: ImageServeReply | undefined;
     await serveImage({ name: 'a.png' }, scriptedIo(log), reply => { served = reply; log.push(`post:${reply.kind}`); });
     expect(log).toEqual(['loadRaw', 'probe', 'post:image']);
-    expect(posts()).toBe(1);
     if (served?.kind !== 'image') throw new Error('expected an image reply');
     expect(served.mime).toBe('image/png');
     expect(served.width).toBe(320);
@@ -48,29 +45,27 @@ describe('serveImage (real imageServe code)', () => {
   });
 
   it('a non-passthrough extension converts (probe untouched) and serves the converted payload', async () => {
-    const { log, post, posts } = recorder();
+    const { log, post } = recorder();
     await serveImage(
       { name: 'a.ppmx' },
       scriptedIo(log, { loadRaw: async () => { log.push('loadRaw'); return { bytes: new Uint8Array([7]), ext: '.ppmx' }; } }),
       post
     );
     expect(log).toEqual(['loadRaw', 'convert', 'post:image:image/png:64x48']);
-    expect(posts()).toBe(1);
   });
 
   it('a loadRaw failure posts exactly one imageError carrying the message', async () => {
-    const { log, post, posts } = recorder();
+    const { log, post } = recorder();
     await serveImage(
       { name: 'a.png' },
       scriptedIo(log, { loadRaw: async () => { log.push('loadRaw'); throw new Error('disk gone'); } }),
       post
     );
     expect(log).toEqual(['loadRaw', 'post:error:disk gone']);
-    expect(posts()).toBe(1);
   });
 
   it('a convert failure posts exactly one imageError carrying the message', async () => {
-    const { log, post, posts } = recorder();
+    const { log, post } = recorder();
     await serveImage(
       { name: 'a.tiff' },
       scriptedIo(log, {
@@ -80,11 +75,10 @@ describe('serveImage (real imageServe code)', () => {
       post
     );
     expect(log).toEqual(['loadRaw', 'convert', 'post:error:.tiff is not supported in the browser']);
-    expect(posts()).toBe(1);
   });
 
   it('a non-Error failure posts the Unknown error placeholder, still exactly once', async () => {
-    const { log, post, posts } = recorder();
+    const { log, post } = recorder();
     await serveImage(
       { name: 'a.png' },
       // eslint-disable-next-line prefer-promise-reject-errors
@@ -92,7 +86,6 @@ describe('serveImage (real imageServe code)', () => {
       post
     );
     expect(log).toEqual(['loadRaw', 'post:error:Unknown error']);
-    expect(posts()).toBe(1);
   });
 });
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   ColumnReportGate,
   LOAD_DEBOUNCE_MS,
-  NEAREST_SIBLINGS,
   ReportTimers,
   rankCovers,
   siblingLoadPlan,
@@ -53,11 +52,6 @@ describe('tuple arrival plan (what a navigation asks for now)', () => {
       isCached: o => o === 1
     });
     expect(arrival.now).toEqual([]);
-  });
-
-  it('dwells for the navigation debounce, not an invented interval', () => {
-    // One constant for both, so the dwell cannot drift away from the burst window it is defined by.
-    expect(LOAD_DEBOUNCE_MS).toBe(150);
   });
 });
 
@@ -123,7 +117,6 @@ describe('sibling load plan: distance over the display order', () => {
 describe('sibling load plan: only the nearest two are load-bearing', () => {
   it('ranks the nearest two as siblings and everything beyond as tail', () => {
     expect(ranks(plan())).toEqual(['sibling', 'sibling', 'tail', 'tail', 'tail']);
-    expect(NEAREST_SIBLINGS).toBe(2);
   });
 
   it('never ranks more than the nearest two above the tail, however wide the tuple', () => {

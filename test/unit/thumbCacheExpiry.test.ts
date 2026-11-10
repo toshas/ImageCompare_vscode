@@ -15,7 +15,7 @@ import { makeSolidPng } from '../fixtures/synthetic';
 
 const tmpRoots: string[] = [];
 afterAll(async () => {
-  // Same reason as thumbPackFlush: an un-awaited `dispose()` may still be checking the cache dir.
+  // An un-awaited `dispose()` may still be stat-ing the pack pair in `packGone()`.
   await new Promise(r => setTimeout(r, 100));
   for (const r of tmpRoots) fs.rmSync(r, { recursive: true, force: true });
 });

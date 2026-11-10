@@ -527,7 +527,7 @@ body {
 }
 #carousel.active { display: block; }
 #carousel-wall { position: relative; will-change: transform; }
-/* Horizontal scroll kicks in only when even 12px tiles cannot fit the pane width. */
+/* Horizontal scroll kicks in only when tiles at their floor cannot fit the pane width. */
 #carousel-hscroll { position: absolute; inset: 0; overflow-x: auto; overflow-y: hidden; }
 #carousel-hscroll::-webkit-scrollbar { height: 6px; }
 #carousel-hscroll::-webkit-scrollbar-track { background: transparent; }
@@ -562,7 +562,7 @@ body {
   cursor: pointer;
   contain: content;
 }
-/* The row's padding is the column axis's origin: main.ts mirrors it as CAROUSEL_ROW_PAD to place a tile and to centre a column (docs/loading-architecture.md: columns-virtualize-like-rows, selection-centres-on-navigation). The gap between columns is no longer CSS — tiles are positioned by arithmetic, so it lives in CAROUSEL_TILE_GAP alone. */
+/* The row's padding is the column axis's origin: main.ts mirrors it as CAROUSEL_ROW_PAD to place a tile and to centre a column (docs/loading-architecture.md: columns-virtualize-like-rows, selection-centres-on-navigation). */
 .carousel-row:hover { background: rgba(255, 255, 255, 0.05); }
 .carousel-row.current { background: rgba(255, 255, 255, 0.1); }
 
@@ -850,4 +850,9 @@ ${WEBVIEW_BODY}
   <script nonce="${opts.nonce}" src="${opts.scriptUri}"></script>
 </body>
 </html>`;
+}
+
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }

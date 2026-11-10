@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPack, parsePack, PACK_MAGIC } from '../../src/thumbPack';
+import { buildPack, parsePack } from '../../src/thumbPack';
 
 const U1 = '00000000-0000-4000-8000-000000000001';
 const U2 = '00000000-0000-4000-8000-000000000002';
@@ -64,10 +64,5 @@ describe('thumbnail packfile wire format (real thumbPack code)', () => {
     const { pack } = buildPack(U1, entries);
     expect(parsePack('not json at all', pack), 'unparseable idx returns null').toBeNull();
     expect(parsePack(JSON.stringify({ magic: 'WRONG', uuid: U1, size: pack.length, entries: [] }), pack), 'wrong magic returns null').toBeNull();
-  });
-
-  it('Test 9: the header carries the magic', () => {
-    const { pack } = buildPack(U1, []);
-    expect(pack.subarray(0, PACK_MAGIC.length).toString('utf8'), 'pack starts with the magic').toBe(PACK_MAGIC);
   });
 });

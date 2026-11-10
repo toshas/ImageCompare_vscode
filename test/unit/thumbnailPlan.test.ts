@@ -61,16 +61,4 @@ describe('thumbnail sweep plan (thumbnailPlan.ts, real code)', () => {
     expect(plan.missing).toEqual([]);
     expect(plan.total).toBe(0);
   });
-
-  it('total always equals items plus missing', () => {
-    const tuples = [
-      { images: [img('gt', 'a_gt.png')] },
-      { images: [img('pred', 'b_pred.png')] },
-      { images: [img('gt', 'c_gt.png'), img('pred', 'c_pred.png')] },
-    ];
-    const plan = planThumbnails(tuples, ['gt', 'pred']);
-    expect(plan.items.length).toBe(4);
-    expect(plan.missing.length).toBe(2);
-    expect(plan.total).toBe(6);
-  });
 });

@@ -33,7 +33,13 @@ export const DEFAULT_SPEC: FixtureSpec = {
   votingEnabled: true,
 };
 
-/** Distinct, stable color per (tuple, modality) so screenshots differ predictably. */
+/** DEFAULT_SPEC on a host that cannot reveal a path in a file explorer. */
+export const NO_REVEAL_SPEC: FixtureSpec = {
+  ...DEFAULT_SPEC,
+  capabilities: { revealInExplorer: false, copyTextToClipboard: true, saveSessionAs: false },
+};
+
+/** Distinct, stable color per (tuple, modality). */
 export function colorFor(tupleIndex: number, modalityIndex: number): [number, number, number] {
   const r = modalityIndex === 0 ? 210 : 40;
   const b = modalityIndex === 0 ? 40 : 210;
@@ -94,11 +100,7 @@ export function imageMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   return msgs;
 }
 
-/**
- * Thumbnail messages (smaller solid pngs) for the carousel. Like the image
- * messages above, they are emitted as a dataUrl for serializability and the
- * harness's __ic_send converts each to the real binary bytes+mime wire shape.
- */
+/** Thumbnail messages (64x40 solid PNGs) for the carousel, dataUrl-shaped like imageMessages. */
 export function thumbnailMessages(spec: FixtureSpec = DEFAULT_SPEC) {
   const msgs: Array<Record<string, unknown>> = [];
   spec.tupleNames.forEach((_n, tupleIndex) => {

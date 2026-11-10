@@ -68,7 +68,7 @@ export function decodePackedThumb(entry: PackedThumb): Uint8Array | null {
 }
 
 /** UTF-8 byte length, which is what a host's text-file limit counts. */
-function utf8Length(text: string): number {
+export function utf8Length(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 

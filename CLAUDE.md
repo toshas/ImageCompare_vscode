@@ -2,23 +2,14 @@
 
 ## Git Commit Rules
 
-- Never add Co-Authored-By lines to commits. **Gated**, not advisory: `.githooks/commit-msg`
-  rejects a `Co-Authored-By`/`Claude-Session`/`Generated-By` trailer. It has to be `commit-msg` —
-  `pre-commit` runs before the message exists and cannot see one. The gate exists because the rule
-  was prose-only and an agent following a harness default that injects `Co-Authored-By: Claude …`
-  had to be told twice; prose does not gate.
-- **Hooks live in `.githooks/`, and only there.** `npm run hooks:install` points `core.hooksPath`
-  at it, which makes `.git/hooks/` unreachable *entirely* — a guard left there is dead and reads
-  like it is live. That is not hypothetical: the identity guard sat in `.git/hooks/pre-commit`
-  and had not run since the hooksPath config landed. `.githooks/pre-commit` now carries it,
-  ahead of `check-no-personal-refs.mjs`.
-- **A tracked hook names nobody.** The identity guard asserts that `user.email` is set
-  *repo-locally* — never which address it is. The failure it exists for is a commit inheriting the
-  machine's global identity from another account, and an unset local value is exactly that
-  condition; the expected address adds nothing the check needs. It was hardcoded at first, which
-  put a personal email into a tracked file and past `check-no-personal-refs.mjs`, whose word list
-  and machine-path prefixes do not look for one. A repo that names its author in a hook cannot be
-  forked or shared either.
+- Never add Co-Authored-By lines to commits. `.githooks/commit-msg` rejects a
+  `Co-Authored-By`/`Claude-Session`/`Generated-By` trailer; its header says why it must be
+  `commit-msg`.
+- **Hooks live in `.githooks/`, and only there.** `npm run hooks:install` sets `core.hooksPath` to
+  it, so a guard in `.git/hooks/` never runs.
+- **A tracked hook names nobody.** The identity guard in `.githooks/pre-commit` checks that a
+  repo-local `user.email` is set, never which address. `check-no-personal-refs.mjs` does not look
+  for an email address, so a hardcoded one passes it.
 
 ## Documentation Rules
 
@@ -26,6 +17,9 @@ Document **invariants and non-obvious "why"** — not mechanics the code already
 message types or keyboard shortcuts rots and adds nothing; "the poll must never be synchronous" or
 "crop refs are deprioritized so they never steal matches" is what saves the next person.
 
+- **Write prose in Simplified Technical English** (the ASD-STE100 writing rules, as
+  `agents/bloat-auditor.md` → "The prose standard" lists them). The `bloat-auditor` rewrites what
+  breaks them, in each change and in a `/prune` sweep.
 - **Plans are disposable, decisions are durable.** Delete an implementation plan once executed —
   it describes intent, some of which always changes, and a reader can't tell intent from truth.
   Fold anything durable (the diagnosis, the invariants) into the relevant `docs/` file. Plans
@@ -37,43 +31,30 @@ message types or keyboard shortcuts rots and adds nothing; "the poll must never 
 - **If a doc claim can't be verified in the code, fix it or delete it.** Several claims here were
   aspirational (a fallback tier that isn't installed; a test script that doesn't exist). An
   untrue doc is worse than no doc.
-- **Every invariant in `docs/` is referenced from the code or config that could break it**, by a one-line
-  comment naming the doc and the invariant's key: `(docs/file-watching.md: rename-never-guessed)`.
-  Invariants are **named**, not numbered — each `## Invariants` bullet leads with a kebab-case key
-  (`- **`rename-never-guessed`** — …`). A key never renumbers, so deleting an invariant just breaks a
-  link the checker catches, reordering is free, and the slug means something to a reader where a
-  number didn't. An invariant you cannot reach from the source is one nobody will honour — read once
-  at design time, never at the moment someone is about to violate it; if no code site could break it,
-  it is not an invariant, so merge/rephrase/delete it. A mention from another *doc*, from `scripts/`, or from a test does not count
-  as coverage. Packaging invariants legitimately live in `.vscodeignore`, `webpack.config.js` or the
-  workflow — those count. **Mark every site the invariant names**: if its text says "reads *and*
-  writes" or "Sharp *and* Jimp must agree", one citation leaves the other trap unmarked behind a green
-  check. `node scripts/check-invariants.mjs` enforces this (uncited key, dangling citation, duplicate
-  key) and runs in CI. Keys are kebab-case and unique within a doc; that is the only naming rule.
-- **A code comment is one line. If it doesn't fit, it belongs in `docs/`.** Not a style preference: a
-  paragraph in a source file is documentation hiding where nobody maintains it, it drifts from the
-  code beside it, and it is invisible to anyone reading the design. Put the explanation in the
-  relevant `docs/` file and leave a one-line comment — ideally naming the doc. Applies to JSDoc too:
-  state the contract, don't narrate the rationale. `node scripts/comment-lint.mjs` enforces it (a run
-  of 2+ consecutive `//` lines fails) and runs in CI. It reads `src/**/*.ts` **and**
-  `scripts/**/*.{mjs,js}` — the gate scripts are held to the rule they gate. `test/` is exempt **on
-  its merits, not by an accident of scope**: a comment explaining why a fixture triggers an edge case
-  is correctly co-located with the fixture, and the rule exists to keep *production* code from
-  carrying design prose that belongs in `docs/`. `webpack.config.js` and `.github/` stay outside —
-  convention there, not a gate. Exempt in both scanned scopes: banner (`// ----`) and directive
-  (`// eslint-`, `// @ts-`) runs. Exempt in `scripts/` **only**: the leading file-header block — the
-  `//` run starting at the file's first non-shebang, non-blank line and ending at the first
-  non-comment line, nothing else that is merely near the top. A gate script's header documents the
-  file, and `docs/` describes subsystems, not individual scripts, so it has no better home; `src/`
-  files say that in `/** */` JSDoc instead and so keep the plain threshold with no header carve-out.
-  The checker never looks inside `/** */` at all — deliberate, and stated in its own header, so the
-  "state the contract, don't narrate" half of the rule is review-enforced rather than gated.
-  Widening the gate to `test/` was **considered and declined** on measurement: 192 runs across 93
-  files, none of them the failure the rule exists to prevent, against 10 in `scripts/`. The reason
-  the scope matters at all is the diagnosis that produced this gate — **gates shape agent behaviour;
-  prose does not.** A rule expressed as a scoped gate is obeyed exactly to its scope: close-out
-  audits correctly reported "comment-lint: n/a, scans only `src/`" and moved on, and no amount of
-  wording here changed that. If a rule should hold somewhere, the *checker* has to say so.
+- **Every invariant in `docs/` is cited from the code or config that could break it.**
+  - Cite it with a one-line comment that names the doc and the key:
+    `(docs/file-watching.md: rename-never-guessed)`.
+  - Invariants are **named**, not numbered: each `## Invariants` bullet leads with a kebab-case key
+    (`- **`rename-never-guessed`** — …`). Keys are kebab-case and unique within a doc; that is the
+    only naming rule.
+  - Nobody honours an invariant that the source does not cite. If no code site could break it, it
+    is not an invariant: merge it, rephrase it or delete it.
+  - Code and config count as citation sites; packaging invariants legitimately live in
+    `.vscodeignore`, `webpack.config.js` or the workflow. A mention from another *doc*, from
+    `scripts/` or from a test does not count.
+  - **Mark every site the invariant names.** If its text says "reads *and* writes" or "Sharp *and*
+    Jimp must agree", one citation leaves the other trap unmarked behind a green check.
+  - `node scripts/check-invariants.mjs` enforces this (uncited key, dangling citation, duplicate
+    key) and runs in CI.
+- **A code comment is one line. If it does not fit, it belongs in `docs/`.** A paragraph in a source
+  file drifts from the code and hides from a reader of the design. Leave a one-line comment that
+  names the doc. In JSDoc, state the contract and do not narrate the rationale.
+  `node scripts/comment-lint.mjs` enforces the rule in `src/` and `scripts/` and runs in CI; its
+  header states the scope, the exemptions and why `test/` is exempt. `webpack.config.js` and
+  `.github/` follow it by convention. Widening the gate to `test/` was declined on measurement: 192
+  runs across 93 files, none the failure the rule prevents, against 10 in `scripts/`. **Gates shape
+  agent behaviour; prose does not.** Close-out audits reported "comment-lint: n/a, scans only
+  `src/`" and moved on, so a rule that must hold somewhere needs the checker to say so.
 
 ## Architecture Overview
 
@@ -82,58 +63,56 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 ### Key Components
 
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
-- **`sessionFile.ts`** - Pure helpers (no vscode dependency): session file parsing/validation, label application, session file name suggestion
-- **`watcherLogic.ts`** - Pure helpers (no vscode dependency) for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
-- **`pollPlan.ts`** - Pure (no vscode dependency): poll-cycle decisions — barren-dir listing policy, snapshot name/fingerprint diffing, same-cycle rename pairing — shared by the provider's existence sweep and the standalone poll → `docs/file-watching.md`
-- **`workPool.ts`** - Pure: the bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
-- **`transportBudget.ts`** - Pure (extension-only): backpressure for outbound image bytes — the pool orders *work*, this orders *bytes on the wire* so speculation cannot starve a remote session → `docs/loading-architecture.md`
-- **`debugLog.ts`** - Pure (no vscode dependency): the `imageCompare.debug` sink — cached flags, an injected line sink, elapsed stamping and the byte/tier/throughput formatters; shared with the standalone build → `docs/testing.md`, `docs/loading-architecture.md`
+- **`sessionFile.ts`** - Session file parsing/validation, label application, session file name suggestion
+- **`watcherLogic.ts`** - Helpers for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
+- **`pollPlan.ts`** - Poll-cycle decisions — barren-dir listing policy, snapshot name/fingerprint diffing, same-cycle rename pairing — shared by the provider's existence sweep and the standalone poll → `docs/file-watching.md`
+- **`workPool.ts`** - The bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`
+- **`transportBudget.ts`** - Backpressure for outbound image bytes — the pool orders *work*, this orders *bytes on the wire* so speculation cannot starve a remote session → `docs/loading-architecture.md`
+- **`debugLog.ts`** - The `imageCompare.debug` sink — cached flags, an injected line sink, elapsed stamping and the byte/tier/throughput formatters → `docs/testing.md`, `docs/loading-architecture.md`
 - **`debugChannel.ts`** - The extension's half of that sink: the "ImageCompare" `OutputChannel` and the config-change refresh → `docs/testing.md`
 - **`imageCompareProvider.ts`** - Main provider managing WebView panels, file watching, image loading, PPTX export, crop handling
 - **`webviewShell.ts`** - The webview's static HTML shell (styles + body), single source of truth for the production panel and the Playwright test harness (`test/webview/harness.ts`)
 - **`fileService.ts`** - Directory/file scanning, mode detection, trie-based image matching across modalities → `docs/tuple-matching.md`
 - **`thumbnailService.ts`** - Image processing (thumbnails, full-image loading, cropping) → `docs/image-backends.md`
 - **`sharpLoader.ts`** - Dynamic Sharp loader with the "Unsupported CPU" workaround → `docs/image-backends.md`
-- **`pngText.ts`** - Pure (no vscode dependency): PNG tEXt chunk reader/writer, CRC-32, and the crop-metadata wire format → `docs/crop-and-pptx.md`
-- **`modalityNames.ts`** - Pure (no vscode dependency): shortest-unique-tail naming of modality columns from directory paths → `docs/session-files.md`
-- **`thumbPack.ts`** - Pure (no vscode dependency): the thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
-- **`wireFormat.ts`** - Pure (no vscode dependency): image payload normalization for extension→webview transfer → `docs/loading-architecture.md`
-- **`resultsFile.ts`** - Pure (no vscode dependency): `results.txt` parse/serialize plus the persist flow (empty votes delete the file), shared with the standalone build → `docs/standalone.md`
-- **`cropPlan.ts`** - Pure (no vscode dependency): `_cropNN` output naming, crop-rect scale/clamp, and which of a folder's loose images its enumeration keeps (`enumeratedImages`, shared with the sharing script) → `docs/crop-and-pptx.md`, `docs/standalone.md`
-- **`cropFlow.ts`** - Pure (no vscode dependency): the whole crop sequence (`performCrop` — one name, relative rect, per-modality render/inject/write, arrivals, `cropComplete`, thumbnails) over per-product IO, shared with the standalone build → `docs/crop-and-pptx.md`, `docs/standalone.md`
-- **`pptxDeck.ts`** - Pure (no vscode dependency): PPTX slide selection, parent/crop pairing and layout over an injected IO, `comparison_NN` export-file numbering, and the export flow (`exportDeck` — name, build, save, exactly one answer) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
-- **`prefetchPlan.ts`** - Pure (extension-only, no vscode): what a prefetch wave speculates on — the
-  tuple band `prefetchCount` names, the on-screen modality column plus the nearest siblings (reusing
-  `tupleLoadPlan`'s own rule), and the column-major issue order → `docs/loading-architecture.md`
-- **`sweepAimPolicy.ts`** - Pure (no vscode/DOM): where the open-time sweep aims and when that moves — the raw `setCurrentTuple` stream trailing-edge dwelled into a settled tuple, the strip un-permuted into a column, over host-supplied timer primitives; shared, so neither product can dwell differently → `docs/loading-architecture.md`, `docs/standalone.md`
-- **`thumbnailPlan.ts`** - Pure (no vscode dependency): open-time thumbnail-sweep planning and running (slot order, missing slots, progress ticks, sweep wire traffic over injected IO), shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
-- **`imageServe.ts`** - Pure (no vscode dependency): full-image serving — passthrough-vs-convert branch, payload normalization, the single terminal reply, and the current-tuple refresh loop — shared with the standalone build → `docs/loading-architecture.md`, `docs/standalone.md`
-- **`initPayload.ts`** - Pure (no vscode dependency): `init`-message assembly (dense tuples, positional color defaults, winners record, product version for the help modal), shared with the standalone build → `docs/standalone.md`
-- **`arrivalPlan.ts`** - Pure (no vscode dependency): new-file placement (slot-fill vs new tuple, shifts, wire payloads) for provider watcher arrivals and standalone crop writes → `docs/file-watching.md`, `docs/standalone.md`
-- **`adoptionPlan.ts`** - Pure (no vscode dependency): modality-dir adoption decisions (which dirs qualify, the imageful gate, the column-insert mutations and `modalityAdded` payload), shared by the provider's three detectors and the standalone poll → `docs/file-watching.md`, `docs/standalone.md`
-- **`removalPlan.ts`** - Pure (no vscode dependency): the tuple-delete sequence (step order, emptied columns, re-save points) and the whole delete flow (per-file disk deletes before the live-index re-plan), executed by both products through injected IO → `docs/file-watching.md`, `docs/standalone.md`
-- **`imageMime.ts`** - Pure (no vscode dependency): the passthrough-mime table → `docs/image-backends.md`
+- **`pngText.ts`** - PNG tEXt chunk reader/writer, CRC-32, and the crop-metadata wire format → `docs/crop-and-pptx.md`
+- **`modalityNames.ts`** - Shortest-unique-tail naming of modality columns from directory paths → `docs/session-files.md`
+- **`thumbPack.ts`** - The thumbnail packfile wire format (build/parse, uuid pairing) → `docs/image-backends.md`
+- **`wireFormat.ts`** - Image payload normalization for extension→webview transfer → `docs/loading-architecture.md`
+- **`resultsFile.ts`** - `results.txt` parse/serialize plus the persist flow (empty votes delete the file) → `docs/standalone.md`
+- **`cropPlan.ts`** - `_cropNN` output naming, crop-rect scale/clamp, and which of a folder's loose images its enumeration keeps (`enumeratedImages`, shared with the sharing script) → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`cropFlow.ts`** - The whole crop sequence (`performCrop` — one name, relative rect, per-modality render/inject/write, arrivals, `cropComplete`, thumbnails) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`pptxDeck.ts`** - PPTX slide selection, parent/crop pairing and layout over an injected IO, `comparison_NN` export-file numbering, and the export flow (`exportDeck` — name, build, save, exactly one answer) over per-product IO → `docs/crop-and-pptx.md`, `docs/standalone.md`
+- **`prefetchPlan.ts`** - What a prefetch wave speculates on — the tuple band `prefetchCount` names, the on-screen modality column plus the nearest siblings (reusing `tupleLoadPlan`'s own rule), and the column-major issue order → `docs/loading-architecture.md`
+- **`sweepAimPolicy.ts`** - Where the open-time sweep aims and when that moves — the raw `setCurrentTuple` stream trailing-edge dwelled into a settled tuple, the strip un-permuted into a column, over host-supplied timer primitives; shared, so neither product can dwell differently → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`thumbnailPlan.ts`** - Open-time thumbnail-sweep planning and running (slot order, missing slots, progress ticks, sweep wire traffic over injected IO) → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`imageServe.ts`** - Full-image serving — passthrough-vs-convert branch, payload normalization, the single terminal reply, and the current-tuple refresh loop → `docs/loading-architecture.md`, `docs/standalone.md`
+- **`initPayload.ts`** - `init`-message assembly (dense tuples, positional color defaults, winners record, product version for the help modal) → `docs/standalone.md`
+- **`arrivalPlan.ts`** - New-file placement (slot-fill vs new tuple, shifts, wire payloads) for provider watcher arrivals and standalone crop writes → `docs/file-watching.md`, `docs/standalone.md`
+- **`adoptionPlan.ts`** - Modality-dir adoption decisions (which dirs qualify, the imageful gate, the column-insert mutations and `modalityAdded` payload), shared by the provider's three detectors and the standalone poll → `docs/file-watching.md`, `docs/standalone.md`
+- **`removalPlan.ts`** - The tuple-delete sequence (step order, emptied columns, re-save points) and the whole delete flow (per-file disk deletes before the live-index re-plan), executed by both products through injected IO → `docs/file-watching.md`, `docs/standalone.md`
+- **`imageMime.ts`** - The passthrough-mime table → `docs/image-backends.md`
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
-- **`webview/emptyNotice.ts`** - Pure (no vscode/DOM): what an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
-- **`webview/modalityVisibility.ts`** - Pure (no vscode/DOM): hidden-pill keyboard-cycling target selection → `docs/session-files.md`
-- **`webview/axisScroll.ts`** - Pure (no vscode/DOM): the one rule every scrollable axis obeys — centre the selection (optionally snapped to the item pitch), clamp to the content — plus what a wheel notch is worth with Alt held, linear and multiplicative → `docs/loading-architecture.md`
-- **`webview/columnWindow.ts`** - Pure (no vscode/DOM): which modality columns a row materializes for the horizontal viewport, the ring size that holds them, and where each one sits — the column axis's half of the carousel's virtualization → `docs/loading-architecture.md`
-- **`webview/contextMenuModel.ts`** - Pure (no vscode/DOM): which items the comparison's context menu offers for a target, given the host's `HostCapabilities`, plus the help text derived from the same model → `docs/standalone.md`, `docs/session-files.md`
+- **`webview/emptyNotice.ts`** - What an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
+- **`webview/modalityVisibility.ts`** - Hidden-pill keyboard-cycling target selection → `docs/session-files.md`
+- **`webview/axisScroll.ts`** - The one rule every scrollable axis obeys — centre the selection (optionally snapped to the item pitch), clamp to the content — plus what a wheel notch is worth with Alt held, linear and multiplicative → `docs/loading-architecture.md`
+- **`webview/columnWindow.ts`** - Which modality columns a row materializes for the horizontal viewport, the ring size that holds them, and where each one sits — the column axis's half of the carousel's virtualization → `docs/loading-architecture.md`
+- **`webview/contextMenuModel.ts`** - Which items the comparison's context menu offers for a target, given the host's `HostCapabilities`, plus the help text derived from the same model → `docs/standalone.md`, `docs/session-files.md`
 - **`webview/contextMenu.ts`** - The menu's DOM only: positioning, dismissal, click routing — it renders what the model returns → `docs/standalone.md`
-- **`webview/noticeChannel.ts`** - Pure (no vscode/DOM): the wording of what the user is told after a host action, and whether a reveal action rides along → `docs/standalone.md`
-- **`webview/tupleLoadPlan.ts`** - Pure (no vscode/DOM): what a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
-- **`webview/pillReorder.ts`** - Pure (no vscode/DOM): what a pill move does to every display index (`movedIndex` — a move, not a swap), the slot a lifted pill drops into (`dropSlot`) and how far each other pill slides meanwhile (`slotShift`) → `docs/pointer-input.md`
-- **`webview/viewState.ts`** - Pure (no vscode/DOM): a published page's saved view — built by name from the current state, and planned back onto the comparison as it lists now (`planRestore`) → `docs/standalone.md`
+- **`webview/noticeChannel.ts`** - The wording of what the user is told after a host action, and whether a reveal action rides along → `docs/standalone.md`
+- **`webview/tupleLoadPlan.ts`** - What a tuple arrival requests — visible-now vs dwell-gated siblings, distance order, nearest-two split — and `ColumnReportGate`, when a column move is reported (a pick at once, a key on the same debounce) → `docs/loading-architecture.md`
+- **`webview/pillReorder.ts`** - What a pill move does to every display index (`movedIndex` — a move, not a swap), the slot a lifted pill drops into (`dropSlot`) and how far each other pill slides meanwhile (`slotShift`) → `docs/pointer-input.md`
+- **`webview/viewState.ts`** - A published page's saved view — built by name from the current state, and planned back onto the comparison as it lists now (`planRestore`) → `docs/standalone.md`
 - **`webview/pillDrag.ts`** - The pill row's pointer gestures: mouse drag, touch hold-then-drag, the row's own pan and fling, the tap click, the one commit on the drop → `docs/pointer-input.md`
 - **`webview/touchInput.ts`** - The touch layout's image and strip gestures (swipe, hold-to-flip, pinch, strip drag) and its context-menu suppression; each gesture calls an action a key already takes → `docs/pointer-input.md`
 - **`webview/crop.ts`** - Crop mode module (rectangle drawing, resize handles, coordinate mapping)
 - **`standalone/adapter.ts`** (+ `standalone/shims/`, `standalone/compose.mjs`) - Browser IO backend + protocol host that reuses the real webview bundle and pure modules to build the single-file standalone page → `docs/standalone.md`
-- **`standalone/publishedPath.ts`** - Pure: the one rule for a published listing path, read by the page's manifest parser and by the sharing script's staging check → `docs/standalone.md`
-- **`standalone/hostRegimes.ts`** - Pure: the hosting-regime table a published comparison's `host` names — the capability flags the page states and the publish limits the sharing script enforces → `docs/standalone.md`
+- **`standalone/publishedPath.ts`** - The one rule for a published listing path, read by the page's manifest parser and by the sharing script's staging check → `docs/standalone.md`
+- **`standalone/hostRegimes.ts`** - The hosting-regime table a published comparison's `host` names — the capability flags the page states and the publish limits the sharing script enforces → `docs/standalone.md`
 - **`standalone/viewerLayer.ts`** - The per-viewer writable layer over a published comparison (listed files read-only, the viewer's votes and crops in IndexedDB, namespaced by the comparison's URL directory; the store is injected) → `docs/standalone.md`
-- **`standalone/packedThumbs.ts`** - Pure: the packed-thumbnails format (parse, never-failing load, split within a byte limit) and the strip's thumbnail size, shared by the page and the sharing script → `docs/standalone.md`
+- **`standalone/packedThumbs.ts`** - The packed-thumbnails format (parse, never-failing load, split within a byte limit) and the strip's thumbnail size, shared by the page and the sharing script → `docs/standalone.md`
 - **`standalone/sharePlan.ts`** (+ `standalone/shareNodeIo.ts`, `scripts/share-comparison.mjs`) - The sharing script: layout per input shape, the regime's limit checks, thumbs packing and publish batches over injected IO (`sharePlan`), the node fs + sharp IO (`shareNodeIo`), argument parsing and printing (the script) → `docs/standalone.md`
 
 ## Design docs (`docs/`)
@@ -161,9 +140,10 @@ belongs in `docs/`, not here.
 
 The two canonical loops, in order — each step is a procedure below:
 - **New feature** → `/implement-feature` (contract → docs/invariants + gray dashboard row *first* →
-  adversarial implementer/verifier build) → verification battery → (demo clip only if a new
-  user-visible flow is worth showing).
-- **Bug** → `/fix-issue` (formalize → adversarial build: failing test → minimal fix → docs) → the
+  implementer → bloat audit → adversarial verifier) → verification battery → (demo clip only if a
+  new user-visible flow is worth showing).
+- **Bug** → `/fix-issue` (formalize → adversarial build: failing test → minimal fix → docs → bloat
+  audit when it is not tiny) → the
   new test joins the feature's existing `features.json` row (a new row only if the bug exposed an
   untracked feature) → verification battery.
 
@@ -185,6 +165,7 @@ verification steps.
 | Audit docs against code | `/verify-docs` skill |
 | Fix a reported bug end-to-end | `/fix-issue` skill |
 | Implement a new feature end-to-end | `/implement-feature` skill |
+| Cut the bloat the repo has accumulated | `/prune` skill |
 | Open image comparisons programmatically | `/imagecompare` skill |
 | Publish a comparison as a web page (Claude artifact, static host) | `/imagecompare-artifact` skill |
 
@@ -252,7 +233,8 @@ npm run test:integration  # Layer 2 — @vscode/test-cli inside a real VSCode
 npm run test:all          # everything
 ```
 
-**Where a new test goes** (decision rule, in order):
+**Where a new test goes** (decision rule, in order; prefer the lowest layer that can reproduce the
+behaviour):
 1. Webview DOM/interaction behavior → a Playwright spec in `test/webview/` (drive via
    `loadInited`/`__ic_send`, assert via `window.__ic_test` and locators).
 2. Real VS Code API behavior (fs scanning, commands, activation) → `test/integration/`.
@@ -263,20 +245,10 @@ npm run test:all          # everything
 Demos (`test/demos/`) are not tests: add one only when a new user-visible flow is worth a gallery
 clip; bug fixes need a test, never a demo.
 
-- **Layer 1** (`test/unit/`) imports real production functions via a `vscode` mock
-  alias (`test/mocks/vscode.ts`); no hand-copied logic.
-- **Layer 3** (`test/webview/`) loads the real `dist/webview.js` against a harness
-  that reuses the production shell (`src/webviewShell.ts`) and stubs
-  `acquireVsCodeApi`. Specs assert via the `window.__ic_test` state hook —
-  deterministic logic checks (no pixel snapshots), so the layer runs in CI on all
-  three OSes. See docs/testing.md.
-- **Layer 2** (`test/integration/`) exercises vscode-API-coupled code (e.g.
-  `scanForImages`) on temp fixtures.
-
 ### Verification — run all of these after any change
 
 ```bash
-npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json
+npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.webview.json && npx tsc --noEmit -p tsconfig.test.json
 npm test                            # the Vitest unit layer (test/unit/)
 node scripts/check-invariants.mjs   # every docs/ invariant cited from code, every citation resolves
 node scripts/comment-lint.mjs       # no multi-line // blocks in src/ or scripts/ (test/ exempt)
@@ -285,6 +257,8 @@ node scripts/check-generated-output.mjs  # generators write only into ignored di
 node scripts/mutation-check.mjs     # the suites actually fail when the rules they pin are broken
 npm run compile                     # both webpack targets
 ```
+
+Which CI job runs which gate, and the gaps: docs/testing.md, "The three layers".
 
 **Running the mutation harness.** It must run to completion and report its **own** exit status.
 Never signal it, never `pkill` it — the pattern matches your own shell, which is how a run was once
@@ -295,35 +269,9 @@ a pass: the `Mutations: N killed: K` summary and the only exit-0 path are both a
 truncated run prints no verdict at all. A `MUTATION_CHECK_TEST` subset run is never the gate — it
 says so itself and exits 2.
 
-CI's `test` job (`.github/workflows/publish.yml`) runs all of these but the first: compile, the four
-checker scripts, the suites, the mutation check. (`check-no-personal-refs.mjs` is a fifth checker but
-runs only in `.githooks/pre-commit` — it needs the gitignored `.words-to-check.txt`; that hook also
-pins the commit identity, and `.githooks/commit-msg` rejects attribution trailers.) The `gates` job in `test.yml` runs all three
-`tsc --noEmit` configs (src, webview, and `tsconfig.test.json` for `test/`) on every PR and on
-pushes to `main` or `test/**` — its push trigger is branch-limited, so a push to any other branch
-runs nothing until a PR is open; the publish-path `test` job still has **no `tsc --noEmit`
-step** of its own — there, `src/` type errors surface only because ts-loader type-checks during
-`npm run compile`, so a `src/` file no bundle reaches would go unchecked on that path. Vitest itself
-transpiles with esbuild and type-checks nothing; `tsconfig.test.json` in the gates job is what
-catches test-file type errors. Adding a test means also adding its mutation to `scripts/mutation-check.mjs` — a test
-nothing can break is decoration. To audit the docs against the code (drift a script cannot see), use the `verify-docs`
-skill.
-
-**The copy era is over.** `tupleMatching` and `pngTextChunk` were once ts-node suites testing
-hand-copies of the shipped functions — that is exactly how a crop-breaking bug shipped green. Both
-are now Vitest suites in `test/unit/` importing the real code (`matchTuplesWithTrie`/`scanForImages`
-from `fileService.ts`, `modalityNames.ts`, `pngText.ts`) via the `vscode` mock alias, so they cannot
-drift. For `vscode`-free logic, prefer extracting a pure module (`pngText.ts`, `watcherLogic.ts`,
-`workPool.ts`, `modalityNames.ts`) over ever copying it.
-
 **A green suite is not evidence.** When you add a test, break the code it covers and watch it fail —
 this suite has passed with a tie-break inverted and with the row sort reversed. Pin values that come
 from outside the implementation; comparing the code to itself proves nothing. See `docs/testing.md`.
-
-> The **Layer 1** Vitest tests in `test/unit/` (`tupleMatching.test.ts`,
-> `pngTextChunk.test.ts`) are the *only* pinning for the matcher and the PNG
-> tEXt writer — the old ts-node copies are deleted, and the mutation gate kills
-> every suite through `vitest run`. Run with `npm test`.
 
 ### Feature Coverage Dashboard
 
@@ -353,51 +301,40 @@ Untested features show as gaps (not false-green), lit from real test results.
 
 ### Feature Demos
 
-`test/demos/` records a short, captioned clip of each feature being used (on
-real photo fixtures from `test/fixtures/images/`, processed into fake CV
-modalities by `test/demos/photoFixtures.ts`), via Playwright → ffmpeg → small
-H.264 MP4 (plays in every browser incl. Safari and VS Code's preview).
-The gallery builds to `test/demos/gallery/index.html` (generated, not versioned; every CI run also uploads it as the `demo-gallery` artifact).
-
-```bash
-npm run test:demos            # record + rebuild the gallery
-open test/demos/gallery/index.html   # after running test:demos, or download the CI artifact
-```
-
-Note: the `<video>` gallery plays in a browser, not inline in GitHub markdown.
+`npm run test:demos` records a captioned clip per demo and builds `test/demos/gallery/index.html`
+(docs/testing.md, "Viewing the generated reports").
 
 ## Publishing (GitHub Actions)
 
-Publishing is automated via GitHub Actions. A tag runs **two** gating jobs before anything is
-packaged, and `build` needs both: `test` (ubuntu — compile, the four checker scripts, the suites,
-the mutation check) and `test-full`, which is `uses: ./.github/workflows/test.yml` and therefore
-runs the whole three-OS matrix. Naming only the ubuntu job here once led to the false conclusion
-that a tag could publish a build that fails on Windows; it cannot. Then it builds one VSIX per
-platform target. **A pull request builds every target and publishes nothing**
-(`docs/image-backends.md: pull-request-builds-never-publish`): the same ten-leg `build` job and the
-`codium-smoke` install check run on `pull_request`, so a packaging defect surfaces on the PR instead
-of at the tag, while the `publish` and `verify-openvsx` jobs are gated off by event — a fork PR
-included. The two gating jobs are the ones a PR *skips*: `test` is a subset of test.yml's `gates`
-job and `test-full` IS test.yml, both of which already run on the PR, so a PR costs eleven jobs here
-(ten legs + smoke) and nothing duplicated. On a tag they still both gate `build`, whose `if:` — it
-needs one only because they are skipped on a PR — refuses a gate that failed or was cancelled, since
-an `if:` replaces the implicit `success()`. Superseded PR runs are cancelled; a tag run never is. The runner need not match the target — each build installs the target's Sharp binaries with `npm install --os/--cpu` — so the ARM64 Linux and Windows targets cross-compile on x64 runners.
+Publishing is automated via GitHub Actions.
+
+- **A tag** runs one gating job, `test-full`, before anything is packaged. `test-full` is
+  `uses: ./.github/workflows/test.yml`. It runs the `gates` battery and the whole three-OS matrix,
+  so a tag cannot publish a build that fails on Windows. Then `build` makes one VSIX per platform
+  target. `build` needs an `if:` because a PR skips `test-full`. An `if:` replaces the implicit
+  `success()`, so the `if:` refuses a gate that failed or was cancelled.
+- **A pull request builds every target and publishes nothing**
+  (`docs/image-backends.md: pull-request-builds-never-publish`). The same ten-leg `build` job and
+  the `codium-smoke` install check run on `pull_request`, so a packaging defect surfaces on the PR,
+  not at the tag. The `publish` and `verify-openvsx` jobs are gated off by event, a fork PR
+  included. A PR skips `test-full` because test.yml already runs on the PR. A PR costs eleven jobs
+  here (ten legs and the smoke check) and duplicates nothing.
+- **Superseded PR runs are cancelled**; a tag run never is.
+
+The runner need not match the target. Each build installs the target's Sharp binaries with
+`npm install --os/--cpu`, so the ARM64 Linux and Windows targets cross-compile on x64 runners.
 
 ### Release Checklist (for Claude)
 
 **A release starts on a branch and is tagged only once CI is green.** Never bump-commit-tag in one
 pass on `main`.
 
-The reason is narrower than it looks, and worth stating so nobody "optimizes" the branch step away:
-a tag would *not* publish a broken build — `publish.yml`'s `build` job declares
-`needs: [test, test-full]`, and `test-full` is `uses: ./.github/workflows/test.yml`, which runs the
-full three-OS matrix. So a red Windows suite stops the release before anything is packaged. What a
-premature tag costs is a **public tag pointing at a commit that fails CI**, and a burned version
-number: recovering means deleting a pushed tag or skipping to the next patch. The branch step turns
-that into an ordinary red build on a branch nobody has released from. Since a pull request now builds
-all ten VSIXes with the same recipe, the packaging half of a release is proven before the tag too —
-which removes a *surprise*, not the rule: the cost above is unchanged, and a branch with no PR open
-has still had none of it checked.
+What a premature tag costs is a **public tag pointing at a commit that fails CI**, and a burned
+version number: recovering means deleting a pushed tag or skipping to the next patch. The branch
+step turns that into an ordinary red build on a branch nobody has released from. Since a pull
+request now builds all ten VSIXes with the same recipe, the packaging half of a release is proven
+before the tag too — which removes a *surprise*, not the rule: the cost above is unchanged, and a
+branch with no PR open has still had none of it checked.
 
 When the user asks to "release" or "prepare a release":
 
@@ -407,11 +344,8 @@ When the user asks to "release" or "prepare a release":
    behaviour changed or anything user-visible was added. Sync the lockfile with
    `npm install --package-lock-only` and check the diff is the **two root version fields and
    nothing else** — the command will also re-resolve dependencies if the lockfile is stale, and a
-   dependency bump has no business riding into a release PR. **Gated**, not advisory: `test.yml`'s
-   `gates` job fails when the two disagree. The gate exists because the prose alone did not hold —
-   every release from 0.3.0 through 0.4.1 bumped `package.json` by itself and the lockfile sat at
-   `0.3.0` for three of them. `npm ci` runs in that same job and does *not* catch it: it verifies
-   the dependency tree, not the root version, so nothing was red.
+   dependency bump has no business riding into a release PR. **Gated**: `test.yml`'s
+   `gates` job fails when the two disagree.
 4. **Update `CHANGELOG.md`** — a `## [X.Y.Z]` section covering everything since the last tag
    (`git log`, `git diff` against it).
 5. **Run the full local battery** (Verification, above). `npm run test:integration` cannot run on a
@@ -445,26 +379,8 @@ wait to be told.
 
 ### What the CI does for each platform
 
-1. `npm ci` — installs all dependencies (including jimp, which webpack will bundle)
-2. Removes native Sharp, reinstalls for target platform (`--os=X --cpu=Y`, `--libc` on the alpine legs)
-3. Installs `@emnapi/runtime` (WASM runtime dependency), then prunes `@img` to the target's own
-   native pair — every `npm install` runs before the hand-extract, and the lockfile records no `libc`
-   for `@img`, so the flag alone leaves a glibc tier behind (`docs/image-backends.md`)
-4. Installs `@img/sharp-wasm32` via `npm pack` + extract, as the step's last action — the WASM
-   fallback for older CPUs. **This is the only way the tier ships**: npm always skips the
-   `optionalDependencies` entry, so a locally built VSIX has no WASM at all. The step order here is
-   load-bearing; step 6 is what catches you if you get it wrong. See `docs/image-backends.md`
-5. Runs `npx vsce package --target <platform>` which triggers webpack (bundles Jimp into `dist/extension.js`)
-6. **Verifies the VSIX carries the right binaries** — scans the packed zip's central directory and
-   fails the build unless `@img/sharp-wasm32/lib/sharp-wasm32.node.wasm` and `@emnapi/runtime/` are
-   present *and* the packed `@img/*` set is exactly `colour` + this target's own native pair +
-   `sharp-wasm32`. One rule, every leg — the check it replaced looked only for the WASM tier's two
-   paths and never read the `@img` set, which is how the four-tier `linux-arm64` VSIX 0.4.0 shipped
-   passed it green (a per-target deny-list, drafted as its successor and rejected, would have passed
-   it too). This is the artifact check for steps 3-4; it does *not* cover
-   the rest of the `.vscodeignore` un-ignore list (`docs/image-backends.md`)
-7. Uploads the VSIX as artifact `vsix-<target>`; the `publish` job downloads all ten and pushes each
-   to Open VSX and the Marketplace
+Per-target recipe (install, prune, wasm32 extract, package, VSIX scan):
+`.github/workflows/publish.yml`, explained in docs/image-backends.md.
 
 ### Required GitHub Secrets
 
@@ -504,21 +420,11 @@ Four rules, each learned by breaking the install:
    including two ~17 MB libvips tiers; over a network mount that can exceed two minutes. A kill
    mid-extract leaves a half-written `<id>.vsctmp` staging directory *and* has already removed the
    previous version, so you are left with no working extension. Run it in the background and wait.
-2. **Version every local install as `<next-patch>-alphaN`** (repo at 0.3.0 → local builds are
-   `0.3.1-alpha1`, `-alpha2`, …; increment only N, in the packaging step, never committed).
-   Reinstalling the version the window currently has loaded is refused ("Please restart VS Code
-   before reinstalling") and `--force` does not lift it, so every install needs a fresh N. The
-   *next-patch* base is load-bearing, both ways: semver puts `-alphaN` below its base release, so
-   an alpha of the *current* version would be silently auto-updated back to the marketplace build,
-   and a bare bumped patch (the old convention) outranks the next real release so auto-update
-   never delivers it. `vsce package` accepts the suffix. **Use `npm run alpha -- <N>`** — it bumps
-   `package.json` (the single version source: the provider reads it at runtime, the standalone
-   stamps it at build time) and builds VSIX + standalone in one window so the pair always agree.
-   The bump then STAYS in the working tree for the whole testing period — a transient bump loses
-   the race against test-driven rebuilds, which re-stamp the base version (learned when an alpha
-   install shipped beside a stale `v0.3.0` standalone twice in one day). `npm run alpha -- --restore`
-   reverts before committing; the CI gates job fails on any committed prerelease version, so a
-   forgotten restore cannot ship.
+2. **Version every local install as `<next-patch>-alphaN`** with `npm run alpha -- <N>`; increment
+   only N. Reinstalling the loaded version is refused ("Please restart VS Code before reinstalling")
+   even with `--force`. The next-patch base matters both ways: an alpha of the current version
+   auto-updates back to the marketplace build, and a bare bumped patch outranks the next real
+   release. The script header says what it builds, why the bump stays, and `--restore`.
 3. **Copy the `.vsix` to local disk first** (e.g. `/tmp`). Installing straight off a network mount is
    what makes rule 1 bite.
 4. **Interrupted leftovers can be unremovable until the window reloads.** The running extension host
@@ -549,23 +455,7 @@ but vanishes on reload, and the CLI then refuses to reinstall. Extract the VSIX 
 | `linux-armhf` | 32-bit ARM (npm calls this cpu `arm`, not `armhf`) |
 | *(universal)* | no native Sharp: WASM tier, then the Jimp backstop. The floor for any host with no build of its own |
 
-Nine platform targets plus the universal floor. VS Code matches the **server's** platform on a
-remote or WSL window, not the client's, and when nothing matches it reports "not compatible with
-the current version" — naming the version, which is never the cause. That message is VS Code's own
-and cannot be reworded, so the universal target exists to make it unreachable.
-
 ### Package Size
 
-Almost all of it is libvips, and everything else is rounding error. On Linux, Sharp splits
-`libvips-cpp.so` by libc — glibc *and* musl, ~17 MB each uncompressed — and npm installs both
-whatever `--libc` says, so the publish recipe prunes each VSIX to its own tier (a Linux VSIX that
-carries two is the pre-prune shape; `docs/image-backends.md: one-native-tier-per-target`); macOS
-ships one per arch and Windows has no separate `@img/sharp-libvips-win32-*` at all (the binary lives
-inside the platform package). `dist/extension.js` (Jimp bundled in) is under 1 MB.
-A CI build adds the wasm32 tier on top; a locally built VSIX has no WASM at all (see Publishing
-above).
-
-Don't trust a size quoted here — measure the artifact: `ls -la *.vsix`, `unzip -l <vsix> | sort -rn`
-for what actually costs. The rule to hold on to: if a VSIX grows or shrinks by more than ~1 MB and
-you did not add a native dependency, a libvips tier was added or dropped — check that before
-believing the build is fine.
+How to measure a VSIX, and what a size change means: docs/image-backends.md, "Nine platform targets,
+and a universal one underneath".

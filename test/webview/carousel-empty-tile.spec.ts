@@ -1,7 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
-import { getState, focusViewer } from './helpers';
-import { HARNESS_URL } from './harness';
-import { initMessage, colorFor, FixtureSpec } from '../fixtures/messages';
+import { getState, focusViewer, send, sendInit } from './helpers';
+import { colorFor, FixtureSpec } from '../fixtures/messages';
 import { makeSolidPng } from '../fixtures/synthetic';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -22,17 +21,9 @@ const SPEC: FixtureSpec = {
 const thumbUrl = (t: number): string =>
   'data:image/png;base64,' + makeSolidPng(64, 40, colorFor(t % 3, 0)).toString('base64');
 
-async function send(page: Page, msg: Record<string, unknown>): Promise<void> {
-  await page.evaluate((m) => (window as any).__ic_send(m), msg as any);
-}
-
 /** Init with N tuples and no thumbnails at all — every tile starts on an empty slot. */
 async function initEmpty(page: Page): Promise<void> {
-  await page.goto(HARNESS_URL);
-  await page.waitForFunction(() =>
-    (window as any).__ic_outbound.some((m: any) => m && m.type === 'ready'),
-  );
-  await send(page, initMessage(SPEC));
+  await sendInit(page, SPEC);
   await expect(page.locator('#viewer')).toHaveClass(/active/);
 }
 

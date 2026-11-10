@@ -402,7 +402,7 @@ interface WorkflowDoc {
 const doc = loadYaml(workflow) as WorkflowDoc;
 
 /** The jobs this file is expected to define — a rename or a move must fail loudly, not quietly pass. */
-const JOB_IDS = ['test', 'test-full', 'build', 'codium-smoke', 'publish', 'verify-openvsx'];
+const JOB_IDS = ['test-full', 'build', 'codium-smoke', 'publish', 'verify-openvsx'];
 
 type Value = string | number | boolean | null | undefined;
 
@@ -701,8 +701,6 @@ describe('publish workflow on a pull request', () => {
     const include = doc.jobs.build.strategy?.matrix?.include ?? [];
     const legs = include.map((e) => e.target);
     expect([...legs].sort()).toEqual([...VSCODE_PLATFORM_TARGETS, 'universal'].sort());
-    // The document and the line parser must be reading one and the same matrix.
-    expect([...legs].sort()).toEqual(buildMatrix().map((e) => e.target).sort());
 
     // "Same recipe" is only true if no step opts out by event: a package or scan step skipped on a PR
     // would leave the PR proving nothing while the job still reports green.
@@ -755,22 +753,20 @@ describe('publish workflow on a pull request', () => {
     expect(Object.keys(doc.on)).toContain('pull_request');
   });
 
-  it('skips its own test and test-full jobs on a pull_request, and runs them on a tag', () => {
+  it('skips its own test-full job on a pull_request, and runs it on a tag', () => {
     const pr = jobOutcomes('pull_request');
 
     // test.yml already runs the gate battery and the 3-OS matrix on the PR; test-full IS that workflow.
-    expect(pr.test).toBe('skipped');
     expect(pr['test-full']).toBe('skipped');
     expect(doc.jobs['test-full'].uses).toBe('./.github/workflows/test.yml');
 
     const tag = jobOutcomes('push');
-    expect(tag.test).toBe('success');
     expect(tag['test-full']).toBe('success');
   });
 });
 
 describe('publish workflow release gating', () => {
-  it('still runs the whole chain on a tag when both gates pass', () => {
+  it('still runs the whole chain on a tag when test-full passes', () => {
     // The push trigger is tags-only, so `push` here is a release run.
     expect((doc.on.push as { tags?: string[] }).tags).toEqual(['v*']);
 
@@ -779,12 +775,12 @@ describe('publish workflow release gating', () => {
     for (const id of JOB_IDS) expect(`${id}: ${tag[id]}`).toBe(`${id}: success`);
   });
 
-  it('refuses to build on a tag when either gate failed or was cancelled', () => {
-    // An `if:` on build (needed at all only because both gates are skipped on a PR) replaces the
+  it('refuses to build on a tag when test-full failed or was cancelled', () => {
+    // An `if:` on build (needed at all only because test-full is skipped on a PR) replaces the
     // implicit success() — the trap that would silently let a red Windows matrix publish.
-    expect(new Set(needsOf('build'))).toEqual(new Set(['test', 'test-full']));
+    expect(new Set(needsOf('build'))).toEqual(new Set(['test-full']));
 
-    for (const gate of ['test', 'test-full']) {
+    for (const gate of ['test-full']) {
       for (const bad of ['failure', 'cancelled'] as JobResult[]) {
         const run = jobOutcomes('push', { results: { [gate]: bad } });
         expect(`${gate}=${bad}: build ${run.build}`).toBe(`${gate}=${bad}: build skipped`);
@@ -792,9 +788,9 @@ describe('publish workflow release gating', () => {
       }
     }
 
-    // And a run cancelled after both gates went green does not sneak a build through the same door:
+    // And a run cancelled after test-full went green does not sneak a build through the same door:
     // a condition that drops the implicit success() without consulting cancelled() would build here.
-    const cancelledRun = jobOutcomes('push', { cancelled: true, results: { test: 'success', 'test-full': 'success' } });
+    const cancelledRun = jobOutcomes('push', { cancelled: true, results: { 'test-full': 'success' } });
     expect(`build ${cancelledRun.build}`).not.toBe('build success');
     expect(`publish ${cancelledRun.publish}`).not.toBe('publish success');
   });
@@ -837,10 +833,10 @@ describe('publish workflow release gating', () => {
     expect(conditionHolds(undefined, ctx({ success: true }))).toBe(true);
     // A skip carries down the whole chain, not one hop: a job whose own needs all succeeded is still
     // skipped behind a skipped grandparent — what every real PR run did to codium-smoke.
-    const behindSkippedGates = { test: 'skipped', 'test-full': 'skipped', build: 'success' } as Record<string, JobResult>;
+    const behindSkippedGates = { 'test-full': 'skipped', build: 'success' } as Record<string, JobResult>;
     expect(statusFor('codium-smoke', behindSkippedGates).success).toBe(false);
-    expect(statusFor('codium-smoke', { ...behindSkippedGates, test: 'success', 'test-full': 'success' }).success).toBe(true);
-    expect(statusFor('publish', { test: 'failure', 'test-full': 'success', build: 'skipped', 'codium-smoke': 'skipped' }).failure).toBe(true);
+    expect(statusFor('codium-smoke', { ...behindSkippedGates, 'test-full': 'success' }).success).toBe(true);
+    expect(statusFor('publish', { 'test-full': 'failure', build: 'skipped', 'codium-smoke': 'skipped' }).failure).toBe(true);
     expect(namesStatusFunction('${{ always() }}')).toBe(true);
     expect(namesStatusFunction("${{ github.event_name != 'pull_request' }}")).toBe(false);
     // Short-circuit: a taken `||` must not evaluate a right side that would throw.

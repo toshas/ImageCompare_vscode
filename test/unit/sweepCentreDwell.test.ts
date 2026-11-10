@@ -3,10 +3,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Uri, __resetConfig, __setRemoteName, __setConfig } from '../mocks/vscode';
-import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareProvider';
-import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { ImageCompareProvider } from '../../src/imageCompareProvider';
 import { SWEEP_CHUNK } from '../../src/thumbnailPlan';
 import { LOAD_DEBOUNCE_MS } from '../../src/webview/tupleLoadPlan';
+import { panelState, thumbnailServiceStub } from './providerRig';
 
 // The field case, on the REAL provider and the REAL sweep runner: the user holds Down over a 315x10
 // grid and every keystroke posts `setCurrentTuple`. That one message feeds two consumers with
@@ -78,21 +78,7 @@ function makeRig(): Rig {
   const cancelled: string[] = [];
 
   const provider = new ImageCompareProvider({ globalStorageUri: Uri.file(root) } as any);
-  (provider as any).thumbnailService = {
-    getThumbnail: (uri: Uri) =>
-      new Promise<Buffer>(resolve => {
-        asked.push(Number(/frame(\d+)/.exec(uri.path)![1]));
-        resolvers.push(() => resolve(Buffer.alloc(4)));
-      }),
-    loadFullImage: async () => ({ bytes: new Uint8Array(10), mime: 'image/png', width: 4, height: 4 }),
-    thumbTierStats: () => ({
-      memory: { count: 0, ms: 0, bytes: 0 },
-      pack: { count: 0, ms: 0, bytes: 0 },
-      disk: { count: 0, ms: 0, bytes: 0 },
-      generated: { count: 0, ms: 0, bytes: 0 }
-    }),
-    thumbPackLoadStat: () => ({ count: 0, ms: 0, bytes: 0, blocked: 0, waitedMs: 0 })
-  };
+  (provider as any).thumbnailService = thumbnailServiceStub(resolvers, uri => asked.push(Number(/frame(\d+)/.exec(uri.path)![1])));
 
   // The pool is a module singleton, so the spy is installed per rig and removed in afterEach.
   const pool = (provider as any).pool;
@@ -102,16 +88,11 @@ function makeRig(): Rig {
     return realCancel(key);
   };
 
-  const name = (t: number) => `frame${String(t).padStart(2, '0')}`;
-  const tuples = Array.from({ length: TUPLES }, (_, t) => ({
-    name: name(t),
-    images: MODALITIES.map(m => ({ uri: Uri.file(`/imgs/${m}/${name(t)}.png`), name: `${name(t)}.png`, modality: m }))
-  }));
-
-  const poolKey = `dwell-${Math.random().toString(36).slice(2)}`;
+  const state = panelState({ modalities: MODALITIES, tuples: TUPLES, openAt: OPEN_AT, poolKeyPrefix: 'dwell', posts });
+  const poolKey: string = state.poolKey;
   const rig: Rig = {
     provider,
-    state: undefined,
+    state,
     posts,
     asked,
     resolvers,
@@ -120,34 +101,6 @@ function makeRig(): Rig {
     restorePool: () => { pool.cancel = realCancel; }
   };
   rigs.push(rig);
-
-  rig.state = {
-    panel: { webview: { postMessage: (msg: any) => { posts.push(msg); return Promise.resolve(true); } } },
-    scanResult: { modalities: [...MODALITIES], tuples, mode: 2, roots: [], isMultiTupleMode: true },
-    loadedImages: new Map(),
-    modalityDirs: new Map(MODALITIES.map(m => [m, Uri.file(`/imgs/${m}`)])),
-    recentlyDeleted: [],
-    winners: new Map(),
-    votingEnabled: false,
-    currentTupleIndex: OPEN_AT,
-    sweepAim: newSweepAimPolicy(),
-    disposed: false,
-    visible: true,
-    poolKey,
-    prefetchWaveKey: 'unset',
-    prefetchWaveCounter: 0,
-    imageLoadKeys: new Set<string>(),
-    webviewReady: true,
-    pendingDebugMessages: [],
-    lastTupleSwitchAt: 0,
-    heldImagePosts: new Map(),
-    watchedDirs: new Set<string>(),
-    fileWatchers: [],
-    nodeWatchers: [],
-    wire: { thumbnails: 0, thumbBytes: 0, images: 0, imageBytes: 0 },
-    prefetchWaves: new Map(),
-    transport: new TransportBudget<unknown>(resolveTransportBudgetBytes(8, 'ssh-remote'))
-  };
   return rig;
 }
 

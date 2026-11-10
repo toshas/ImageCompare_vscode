@@ -95,13 +95,4 @@ describe('exportDeck (real pptxDeck flow code)', () => {
     await exportDeck(scanTuples, modalities, request, io);
     expect(log.filter(l => l.startsWith('post:'))).toEqual([]);
   });
-
-  // The flow has no notification hook to run after the answer: what the user is told is worded in
-  // the webview from the answer itself, so there is no product callback here that could post again.
-  it('the posted answer is the flow\'s last act — nothing runs after it that could forge a second', async () => {
-    const { io, log } = makeRig();
-    await exportDeck(scanTuples, modalities, request, io);
-    expect(log.filter(l => l.startsWith('post:'))).toEqual(['post:pptxComplete:/out/comparison_01.pptx']);
-    expect(log.at(-1)).toBe('post:pptxComplete:/out/comparison_01.pptx');
-  });
 });

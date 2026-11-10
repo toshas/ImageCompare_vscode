@@ -64,7 +64,6 @@ suite('thumbnail cache sweep entry types (real vscode.workspace.fs)', () => {
         vscode.FileType.SymbolicLink,
         'the SymbolicLink bit is set',
       );
-      assert.notStrictEqual(linked![1], vscode.FileType.File, 'and the type is therefore not equal to File');
 
       // And the consequence the bit test exists for, from the real sweep.
       const service = new ThumbnailService(

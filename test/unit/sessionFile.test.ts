@@ -86,32 +86,23 @@ describe('.imagecompare session files (real sessionFile code)', () => {
   it('Test 12: duplicate paths are rejected', () => {
     // Two identical paths become two modalities sharing one URI, and every URI-keyed lookup then
     // resolves both to the first — the second column would never receive a thumbnail.
-    let threw = false;
-    try {
-      parseSessionFile(JSON.stringify({ paths: ['/a/x.png', '/a/x.png', '/a/y.png'] }), '/base');
-    } catch (e: any) {
-      threw = /must not repeat/.test(e.message);
-    }
-    expect(threw, 'duplicate paths must be rejected').toBe(true);
+    expect(
+      () => parseSessionFile(JSON.stringify({ paths: ['/a/x.png', '/a/x.png', '/a/y.png'] }), '/base'),
+      'duplicate paths must be rejected'
+    ).toThrow(/must not repeat/);
 
     // Relative and absolute spellings of the same location collide only after resolution.
-    let threwRel = false;
-    try {
-      parseSessionFile(JSON.stringify({ paths: ['x.png', '/base/x.png'] }), '/base');
-    } catch (e: any) {
-      threwRel = /must not repeat/.test(e.message);
-    }
-    expect(threwRel, 'duplicates must be detected after resolving against baseDir').toBe(true);
+    expect(
+      () => parseSessionFile(JSON.stringify({ paths: ['x.png', '/base/x.png'] }), '/base'),
+      'duplicates must be detected after resolving against baseDir'
+    ).toThrow(/must not repeat/);
 
     // Distinct paths still parse.
     const ok = parseSessionFile(JSON.stringify({ paths: ['/a/x.png', '/a/y.png'] }), '/base');
     expect(ok.paths.length, `expected 2 paths, got ${ok.paths.length}`).toBe(2);
   });
 
-  it('Test: version gate — missing and current pass, future is rejected', () => {
-    const noVersion = parseSessionFile(JSON.stringify({ paths: ['/a'] }), '/base');
-    expect(noVersion.paths.length, 'a file without "version" must parse (pre-versioning files)').toBe(1);
-
+  it('Test: version gate — current passes, future and non-positive-integer versions are rejected', () => {
     const current = parseSessionFile(JSON.stringify({ version: CURRENT_SESSION_VERSION, paths: ['/a'] }), '/base');
     expect(current.paths.length, 'the current version must parse').toBe(1);
 

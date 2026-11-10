@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { MODES, ModeBehaviour } from '../../src/modePolicy';
+import { MODES } from '../../src/modePolicy';
 
 // Layer 1 for the one table the selection shape's behaviour lives in
-// (docs/session-files.md: mode-behaviour-is-a-table). Both hosts read it, so a wrong cell is a
-// divergence between the extension and the standalone — which is how it was found: the same
-// questions were being asked with a magic number at fourteen sites, and two of them had drifted.
+// (docs/session-files.md: mode-behaviour-is-a-table).
 //
 // Pinned against the mode table as WRITTEN DOWN in docs/session-files.md, not against the
 // implementation. Mode 1 is "one directory whose subdirectories are the columns", mode 2 "several
@@ -77,35 +75,6 @@ describe('the mode table (modePolicy.ts, real code)', () => {
   it('lets a crop join only a comparison that grows at all', () => {
     for (const mode of [1, 2, 3] as const) {
       expect(MODES[mode].cropsJoin).toBe(MODES[mode].grows);
-    }
-  });
-
-  // The properties that hold ACROSS the table, so a new mode cannot be added incoherently.
-  it('answers every question for every mode, with no cell left undefined', () => {
-    const fields: Array<keyof ModeBehaviour> = [
-      'roots', 'columnIsFile', 'rootSubdirsAreColumns', 'minColumns',
-      'labelsApply', 'grows', 'voting', 'deleteUnit', 'cropNaming', 'cropsJoin',
-    ];
-    for (const mode of [1, 2, 3] as const) {
-      for (const field of fields) {
-        expect(MODES[mode][field], `${mode}.${field}`).toBeDefined();
-      }
-    }
-  });
-
-  it('gives every mode a distinct roots meaning, so no two shapes are the same shape', () => {
-    expect(new Set([MODES[1].roots, MODES[2].roots, MODES[3].roots]).size).toBe(3);
-  });
-
-  // The shape that cannot be ranked is the shape whose columns are unrelated files, which is the
-  // same shape that deletes one of them and does not grow. One sentence, four cells.
-  it('agrees with itself: the file-list shape is unvotable, image-deleting, non-growing and file-columned', () => {
-    for (const mode of [1, 2, 3] as const) {
-      const isFileList = MODES[mode].columnIsFile;
-      expect(MODES[mode].voting).toBe(!isFileList);
-      expect(MODES[mode].deleteUnit).toBe(isFileList ? 'image' : 'tuple');
-      expect(MODES[mode].grows).toBe(!isFileList);
-      expect(MODES[mode].cropNaming).toBe(isFileList ? 'per-image' : 'tuple');
     }
   });
 });

@@ -1,12 +1,7 @@
 /**
- * Minimal `vscode` stub for Vitest unit tests.
- *
- * Only the surface actually touched by the pure functions under test is
- * implemented. The goal is to let us `import` real production modules
- * (fileService, thumbnailService) — which do `import * as vscode` at the top —
- * without pulling in the real extension host. Anything not implemented here is
- * intentionally absent: if a test trips over a missing API, that function
- * wasn't pure and belongs in Layer 2 (integration), not Layer 1.
+ * Minimal vscode stub for Vitest, so Layer 1 imports real production modules (fileService,
+ * thumbnailService, the provider's open path) without an extension host. Watchers are inert:
+ * a test that needs watcher events belongs in Layer 2.
  */
 
 import * as nodeFs from 'node:fs';
@@ -228,5 +223,4 @@ export const window = {
   },
   showWarningMessage: (..._args: unknown[]) => undefined,
   showErrorMessage: (..._args: unknown[]) => undefined,
-  showInformationMessage: (..._args: unknown[]) => undefined,
 };
