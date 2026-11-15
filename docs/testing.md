@@ -413,7 +413,9 @@ fixed.
   `standalone published comparison ...` view tests in `test/webview/standalone-build.spec.ts` and
   the three `restoresView` tests in `test/webview/published-affordances.spec.ts`, each watched
   failing against a deliberate break of its rule. The restore plan itself is mutation-covered, in
-  `test/unit/viewState.test.ts`.
+  `test/unit/viewState.test.ts`, and so is the extension's flag, in `test/unit/viewPerTab.test.ts`.
+  No layer runs VS Code keeping a tab's webview state across an HTML reset or a window reload: that
+  is manual check 7.
 - **The carousel's DOM shape, by mutation.** Tile counts and layout are not Vitest-reachable. What
   stands in: `test/webview/column-virtualization.spec.ts` asserts that doubling the modalities adds
   no DOM, that the materialized columns are contiguous and correctly placed, and that scrolling
@@ -1507,6 +1509,11 @@ run in the integration layer; placeholders and webview interactions run in the P
    readout; open ▦ and tap a tile. Emulated touch is not evidence for any of it: the drag's worst
    bug, a pill's `lostpointercapture` bubbling to the row, never fires under CDP touch emulation
    (docs/pointer-input.md: only-row-capture-ends-drag).
+7. A tab keeps its view (docs/session-files.md, "The view lives with the tab"):
+   1. Navigate, reorder and zoom, then edit the session file. The tab reloads at the same row and
+      order.
+   2. Run "Developer: Reload Window". The view comes back.
+   3. Close the tab and reopen the file. It starts at the first row.
 
 ## Debug logging
 

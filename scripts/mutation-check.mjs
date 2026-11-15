@@ -3730,6 +3730,14 @@ const mutations = [
     find: '    if (state.disposed) return Promise.resolve(false);\n    return state.panel.webview.postMessage(msg);',
     replace: '    return state.panel.webview.postMessage(msg);',
     killedBy: 'slot-delete test (a delete that finishes after the release posts nothing)'
+  },
+  {
+    name: 'view per tab: the extension\'s capability record drops restoresView (docs/session-files.md: view-lives-with-the-tab)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/viewPerTab.test.ts',
+    find: 'exportPptx: true, copyResults: false, restoresView: true },',
+    replace: 'exportPptx: true, copyResults: false },',
+    killedBy: 'init test (the init the extension sends states restoresView)'
   }
 ];
 

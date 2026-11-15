@@ -37,6 +37,24 @@ export function imageFixture(tmpRoots: string[], prefix: string): string {
   return root;
 }
 
+/** A panel the real openCompare binds to; `send` delivers a webview message to whichever state is listening. */
+export function fakePanel(posted: unknown[]) {
+  let deliver: ((m: unknown) => unknown) | undefined;
+  const panel = {
+    visible: true,
+    webview: {
+      html: '',
+      cspSource: 'vscode-webview:',
+      asWebviewUri: (u: unknown) => u,
+      postMessage: (msg: unknown) => { posted.push(msg); return Promise.resolve(true); },
+      onDidReceiveMessage: (listener: (m: unknown) => unknown) => { deliver = listener; return { dispose: () => { deliver = undefined; } }; }
+    },
+    onDidDispose: () => ({ dispose: () => undefined }),
+    onDidChangeViewState: () => ({ dispose: () => undefined })
+  };
+  return { panel: panel as unknown as import('vscode').WebviewPanel, send: (m: unknown) => deliver?.(m) };
+}
+
 export interface PanelStateOptions {
   modalities: string[];
   tuples: number;

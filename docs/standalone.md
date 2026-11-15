@@ -91,9 +91,6 @@ A published comparison states two more from its hosting regime (see "Publishing 
 - no **PPTX** button where the host blocks every download a page starts (`exportPptx`);
 - a **results.txt** button that copies the votes out (`copyResults`).
 
-It also keeps the viewer's view across a reload (`restoresView`, "The view survives a reload"); the
-extension does not.
-
 One more difference is a fact neither host may invent. An emptied comparison reaches the same
 terminal notice here, through the same bundle (`docs/loading-architecture.md: empty-comparison-is-terminal`),
 but only the extension can also say *why*. A File System Access root handle cannot distinguish a
@@ -337,8 +334,9 @@ first `init`, through the actions keys and drags take, so loading sees an ordina
 (`view-restore-is-navigation`).
 
 Only a host that states `restoresView` keeps a view (`view-kept-only-where-stated`). The published
-page states it. The extension does not, so a reloaded panel opens as it always has. Neither does a
-page opened through the folder picker, whose reload returns to the picker anyway.
+page states it, and so does the extension, in each tab's webview state (`docs/session-files.md`,
+"The view lives with the tab"). A page opened through the folder picker does not, because its
+reload returns to the picker anyway.
 
 ### The sharing script
 
@@ -519,7 +517,8 @@ recipe in the skill.
 - **`view-restore-is-navigation`** — restoring a saved view calls the actions navigation calls. No
   load, prefetch, sweep or column-report code knows that a view was restored.
 - **`view-kept-only-where-stated`** — a view is saved and restored only when the host's
-  `restoresView` capability says so. The extension never states it, so its behaviour is unchanged.
+  `restoresView` capability says so. The published page and the extension state it; the
+  folder-picker page does not.
 - **`packed-thumbs-never-required`** — a packed thumbnail replaces the full-image fetch for a
   listed image's thumbnail and nothing else. A missing, malformed or unreachable thumbs file, or a
   missing entry, falls back to decoding the full image, never to a failed slot or a stalled sweep.

@@ -949,8 +949,8 @@ ${lead}
       labelsExplicit: state.labelsExplicit,
       // Real installed version from the extension's own manifest via the activation context.
       version: String(this.context.extension.packageJSON.version ?? ''),
-      // This host's flags; Save Session As needs a session file to copy, and no view is kept (docs/standalone.md: affordances-rendered-by-the-webview) (docs/standalone.md: view-kept-only-where-stated).
-      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: !!state.sessionFileUri, exportPptx: true, copyResults: false },
+      // This host's flags; Save Session As needs a session file to copy, and each tab keeps its view in its webview state (docs/standalone.md: affordances-rendered-by-the-webview) (docs/standalone.md: view-kept-only-where-stated) (docs/session-files.md: view-lives-with-the-tab).
+      capabilities: { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: !!state.sessionFileUri, exportPptx: true, copyResults: false, restoresView: true },
       // What Del removes here, stated rather than inferred by the webview (docs/session-files.md: mode-behaviour-is-a-table).
       deleteUnit: MODES[state.scanResult.mode].deleteUnit,
       colorOverride: (mod, i) => this.resolveModalityColor(state, mod, i)

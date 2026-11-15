@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Uri, workspace } from '../mocks/vscode';
 import { ImageCompareProvider } from '../../src/imageCompareProvider';
-import { imageFixture } from './providerRig';
+import { fakePanel, imageFixture } from './providerRig';
 
 // Driven through the REAL openCompare and releasePanel.
 // (docs/session-files.md: released-state-never-posts)
@@ -12,24 +12,6 @@ afterAll(() => { for (const r of tmpRoots) fs.rmSync(r, { recursive: true, force
 afterEach(() => { vi.restoreAllMocks(); });
 
 const settle = async (): Promise<void> => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
-
-/** A panel the real openCompare binds to; `send` delivers a webview message to whichever state is listening. */
-function fakePanel(posted: unknown[]) {
-  let deliver: ((m: unknown) => unknown) | undefined;
-  const panel = {
-    visible: true,
-    webview: {
-      html: '',
-      cspSource: 'vscode-webview:',
-      asWebviewUri: (u: unknown) => u,
-      postMessage: (msg: unknown) => { posted.push(msg); return Promise.resolve(true); },
-      onDidReceiveMessage: (listener: (m: unknown) => unknown) => { deliver = listener; return { dispose: () => { deliver = undefined; } }; }
-    },
-    onDidDispose: () => ({ dispose: () => undefined }),
-    onDidChangeViewState: () => ({ dispose: () => undefined })
-  };
-  return { panel: panel as unknown as import('vscode').WebviewPanel, send: (m: unknown) => deliver?.(m) };
-}
 
 describe('a released comparison state never posts to its panel (real provider)', () => {
   it('a slot delete that finishes after the release posts nothing', async () => {

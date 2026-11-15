@@ -169,8 +169,27 @@ The tab also checks the file when it becomes active. This covers mounts where wa
 (`docs/file-watching.md`, "Three detection mechanisms").
 
 `SessionReloadGate` (`sessionReload.ts`) decides; a failed read (a rename in progress) does nothing.
-A reload is a fresh open into the same panel: it restarts at the first row. The gate is armed after
-the initial open with the text that open read, so an edit made during the initial scan still reloads.
+A reload is a fresh open into the same panel, and the tab's saved view (below) puts the user back
+where they were. The gate is armed after the initial open with the text that open read, so an edit
+made during the initial scan still reloads.
+
+### The view lives with the tab
+
+The extension states `restoresView`, so a tab keeps its view (`docs/standalone.md`, "The view
+survives a reload"). The saved view holds names, not indices, so a reload restores it onto the
+edited session.
+
+The view is kept in the webview's own state (`getState`/`setState`), which VS Code keeps for each
+tab:
+- a session reload keeps it, because the panel is reused;
+- a window reload keeps it, because VS Code restores the tab;
+- closing the tab drops it, so a reopened file starts at its first row.
+
+The view never goes into the session file. That file says what to compare, and often an agent
+writes it. A view write there would:
+- set off the reload watcher;
+- race the agent's writes;
+- give one person's view to everyone who opens the file.
 
 ### `suggestSessionFileName()` — two branches, not one rule
 
@@ -334,6 +353,9 @@ digit-jumpable, but skipped by arrow-key cycling and as a Space-flip target. The
 - **`released-state-never-posts`** — after a tab's comparison state is released, nothing that state
   started posts to the tab. A release keeps the panel, and an old post names the old session's
   slots. Every post for a state goes through one guarded function, the runners' `post` included.
+- **`view-lives-with-the-tab`** — the extension states `restoresView`, and it keeps a tab's view only
+  in the webview's own state. The view is never written to the session file, which the reload gate
+  watches, and never to a store that outlives the tab.
 - **`prune-double-guard`** — prune skips both open tabs and `openSessionUris`, and stays deferred.
   Either guard alone loses the reload race.
 - **`filename-is-tab-title`** — generated session filenames come from `suggestSessionFileName()`. VS

@@ -128,8 +128,8 @@ test.describe('Delete is greyed while its target is read-only', () => {
   });
 });
 
-// docs/standalone.md: view-kept-only-where-stated. The extension's own capability record (the
-// fixture default) states no `restoresView`, so across a reorder, a navigation, a hide and a zoom the
+// docs/standalone.md: view-kept-only-where-stated. The folder-picker page's capability record (from
+// standalone/adapter.ts) states `restoresView: false`, so across a reorder, a navigation, a hide and a zoom the
 // webview never reads or writes the host's state. The second test is the control: the same steps on
 // a host that states the flag do reach the harness's counted getState/setState, so the first test's
 // empty list means "never asked", not "the counter is blind". Outside the mutation harness like the
@@ -152,9 +152,9 @@ test.describe('only a host that states restoresView is asked to keep the view', 
     return page.evaluate(() => (window as any).__ic_stateCalls as string[]);
   };
 
-  test('with the extension\'s capabilities getState and setState are never called', async ({ page }) => {
-    await loadInited(page);
-    expect((await getState(page)).capabilities).not.toHaveProperty('restoresView');
+  test('on the folder-picker page\'s capabilities getState and setState are never called', async ({ page }) => {
+    await loadInited(page, { ...DEFAULT_SPEC, capabilities: { ...BASE_CAPS, exportPptx: true, copyResults: false, restoresView: false } });
+    expect((await getState(page)).capabilities).toHaveProperty('restoresView', false);
     expect(await steps(page)).toEqual([]);
     expect((await getState(page)).modalityOrder).toEqual([1, 0]);
   });

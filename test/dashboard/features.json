@@ -1925,6 +1925,16 @@
           ]
         },
         {
+          "id": "session-view-per-tab",
+          "name": "The extension states restoresView, so each tab saves and restores its view (the reload behaviour itself: manual check 7)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "the init the extension sends states restoresView"
+            }
+          ]
+        },
+        {
           "id": "session-version-gate",
           "name": "Session-file version gate (future versions rejected)",
           "tests": [
@@ -3565,12 +3575,12 @@
           ]
         },
         {
-          "id": "view-state-not-in-vscode",
-          "name": "The extension saves and restores no view",
+          "id": "view-state-not-in-folder-picker",
+          "name": "A host that does not state restoresView (the folder-picker page) saves and restores no view",
           "tests": [
             {
               "suite": "webview",
-              "match": "with the extension's capabilities getState and setState are never called"
+              "match": "on the folder-picker page's capabilities getState and setState are never called"
             }
           ]
         }

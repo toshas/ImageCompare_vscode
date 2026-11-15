@@ -72,7 +72,7 @@ export function initMessage(spec: FixtureSpec = DEFAULT_SPEC) {
     winners: {} as Record<number, number>,
     votingEnabled: spec.votingEnabled,
     labelsExplicit: spec.labelsExplicit ?? false,
-    capabilities: spec.capabilities ?? { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false },
+    capabilities: spec.capabilities ?? { revealInExplorer: true, copyTextToClipboard: true, saveSessionAs: true, exportPptx: true, copyResults: false, restoresView: true },
     ...(spec.version ? { version: spec.version } : {}),
     ...(spec.deleteUnit ? { deleteUnit: spec.deleteUnit } : {}),
   };
