@@ -4,10 +4,11 @@
 the entry point is a file at all, and where votes get written.
 
 Code: `sessionFile.ts` (`parseSessionFile`, `applyLabels`, `suggestSessionFileName`), `extension.ts`
-(`openSelectionAsSession`, `openCustomDocument`/`resolveCustomEditor`, pruning),
-`imageCompareProvider.ts` (`openCompare`, `getResultsTarget`), `resultsFile.ts` (`persistResults`),
-`fileService.ts` (`readResultsFile`). Pinned by `test/unit/sessionFile.test.ts` (Vitest), which
-imports the real source.
+(`openSelectionAsSession`, `openCustomDocument`/`resolveCustomEditor`, pruning), `sessionReload.ts`
+(`SessionReloadGate`), `imageCompareProvider.ts` (`openCompare`, `releasePanel`, `getResultsTarget`),
+`resultsFile.ts` (`persistResults`), `fileService.ts` (`readResultsFile`). Pinned by
+`test/unit/sessionFile.test.ts` and `test/unit/sessionReload.test.ts` (Vitest), which import the
+real source.
 
 Read this before adding an entry point, changing the file format, touching `getResultsTarget()`, or
 "simplifying" the explorer command into a direct panel creation.
@@ -157,6 +158,19 @@ through `modalityDirs`, and bails when it is empty). The directories stay watche
 
 **Directly**: a user-authored file in the workspace, `code session.imagecompare`, or a script.
 Same custom editor, same code path.
+
+### An edited session reloads its open tab
+
+An agent or a script often rewrites an open session file, for example to add a path. With
+`supportsMultipleEditorsPerDocument: false`, VS Code only reveals the existing tab and does not
+resolve the editor again. `code s.imagecompare` never reaches the extension. Each resolved tab has a
+non-recursive watcher on its own file, for create and change: an atomic write arrives as a create.
+The tab also checks the file when it becomes active. This covers mounts where watchers do not fire
+(`docs/file-watching.md`, "Three detection mechanisms").
+
+`SessionReloadGate` (`sessionReload.ts`) decides; a failed read (a rename in progress) does nothing.
+A reload is a fresh open into the same panel: it restarts at the first row. The gate is armed after
+the initial open with the text that open read, so an edit made during the initial scan still reloads.
 
 ### `suggestSessionFileName()` — two branches, not one rule
 
@@ -313,6 +327,10 @@ digit-jumpable, but skipped by arrow-key cycling and as a Space-flip target. The
   Watchers, `modalityDirs`, `results.txt`, and the pill labels all see the same names.
 - **`resolve-never-throws`** — `resolveCustomEditor()` never throws and an empty panel is never left
   unexplained: configure the webview first, then render the error or empty-scan page into it.
+- **`session-edit-reloads`** — a change to an open session file's bytes reloads its tab in place.
+  The old comparison state (watchers, timers, pool work, message and dispose subscriptions) is
+  released before the new open. At most one open runs per tab, and a trigger during one is checked
+  again when it settles. Unchanged bytes never reload, so a `touch` or a reveal costs one read.
 - **`prune-double-guard`** — prune skips both open tabs and `openSessionUris`, and stays deferred.
   Either guard alone loses the reload race.
 - **`filename-is-tab-title`** — generated session filenames come from `suggestSessionFileName()`. VS

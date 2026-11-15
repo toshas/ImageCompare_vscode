@@ -1911,6 +1911,16 @@
           ]
         },
         {
+          "id": "session-edit-reloads",
+          "name": "An edited session file reloads its open tab in place (unchanged bytes never reload)",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "session reload gate (sessionReload.ts, real code)"
+            }
+          ]
+        },
+        {
           "id": "session-version-gate",
           "name": "Session-file version gate (future versions rejected)",
           "tests": [

@@ -539,6 +539,12 @@ fixed.
   order-fragile (any earlier test that activates burns the window) and costs 16s of wall clock:
   unattractive rather than impossible. Calling `activate` directly would break the activation test
   beside it. Pinning it needs the function exported, a production change, not a test one.
+- **The session-reload wiring.** No layer tests these sites:
+  - the two triggers in `resolveCustomEditor`: the session-file watcher and the tab turning active;
+  - the gate's dispose on close;
+  - `releasePanel` in the provider.
+
+  `test/unit/sessionReload.test.ts` pins the decisions.
 - **The webview's pixels.** The Playwright layer drives the real bundle but asserts logic through
   the state hook — no pixel snapshots — so canvas rendering and visual layout are verified by eye
   (the demo gallery and the manual checks below).
@@ -1405,6 +1411,10 @@ fixed.
   holding `: * ? " < > |` to exercise the lookalike table, which no Windows file name can hold
   (NTFS reads the colon as a stream separator and silently creates `a`). That test now skips on
   Windows, where there is no such name to map.
+
+- **An open session tab ignored edits to its session file** *(fixed)* — VS Code only reveals an open
+  custom editor, so a rewritten `.imagecompare` never reached its tab. `sessionReload.ts` now reloads
+  it in place, pinned by `test/unit/sessionReload.test.ts` (`docs/session-files.md: session-edit-reloads`).
 
 ## The generated-output rule
 

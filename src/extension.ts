@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { ImageCompareProvider } from './imageCompareProvider';
 import { initDebugLog } from './debugChannel';
 import { parseSessionFile, suggestSessionFileName } from './sessionFile';
+import { SessionReloadGate } from './sessionReload';
 import { escapeHtml } from './webviewShell';
 
 let provider: ImageCompareProvider | undefined;
@@ -97,21 +98,46 @@ class SessionFileEditorProvider implements vscode.CustomReadonlyEditorProvider {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'dist')]
     };
-    try {
-      const raw = await vscode.workspace.fs.readFile(document.uri);
-      const spec = parseSessionFile(Buffer.from(raw).toString('utf8'), path.dirname(document.uri.fsPath));
-      const uris = spec.paths.map(p => vscode.Uri.file(p));
-      const labels = spec.labels
-        ? new Map(spec.labels.map((label, i) => [uris[i].toString(), label]))
-        : undefined;
-      const colors = spec.colors
-        ? new Map(spec.colors.map((color, i) => [uris[i].toString(), color]))
-        : undefined;
-      await provider!.openCompare(uris, webviewPanel, labels, document.uri, colors);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      webviewPanel.webview.html = sessionErrorHtml(document.uri.fsPath, message);
-    }
+    const read = async () => Buffer.from(await vscode.workspace.fs.readFile(document.uri)).toString('utf8');
+    // The initial open and every reload: release what the tab shows, then open the text into it (docs/session-files.md: session-edit-reloads).
+    const open = async (source: Promise<string>): Promise<string | undefined> => {
+      provider!.releasePanel(webviewPanel);
+      let text: string | undefined;
+      try {
+        text = await source;
+        const spec = parseSessionFile(text, path.dirname(document.uri.fsPath));
+        const uris = spec.paths.map(p => vscode.Uri.file(p));
+        const labels = spec.labels
+          ? new Map(spec.labels.map((label, i) => [uris[i].toString(), label]))
+          : undefined;
+        const colors = spec.colors
+          ? new Map(spec.colors.map((color, i) => [uris[i].toString(), color]))
+          : undefined;
+        await provider!.openCompare(uris, webviewPanel, labels, document.uri, colors);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        webviewPanel.webview.html = sessionErrorHtml(document.uri.fsPath, message);
+      }
+      return text;
+    };
+    const subscriptions: vscode.Disposable[] = [];
+    let closed = false;
+    webviewPanel.onDidDispose(() => { closed = true; subscriptions.forEach(d => d.dispose()); });
+    const loaded = await open(read());
+    if (closed) return;
+    // VS Code only reveals an open custom editor, so an edit reaches the tab through this gate alone (docs/session-files.md: session-edit-reloads).
+    const gate = new SessionReloadGate({
+      timers: { setTimer: (run, ms) => setTimeout(run, ms), clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+      read,
+      reload: async text => { await open(Promise.resolve(text)); }
+    }, loaded);
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.joinPath(document.uri, '..'), path.basename(document.uri.fsPath)), false, false, true);
+    subscriptions.push(gate, watcher,
+      watcher.onDidCreate(() => gate.trigger()),
+      watcher.onDidChange(() => gate.trigger()),
+      webviewPanel.onDidChangeViewState(e => { if (e.webviewPanel.active) gate.trigger(); }));
+    gate.trigger();
   }
 }
 

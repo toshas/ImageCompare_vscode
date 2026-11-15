@@ -158,6 +158,8 @@ export class ImageCompareProvider {
   private readonly pool: WorkPool = sharedWorkPool();
   // Track all open panels (for cleanup on deactivate)
   private panels: Set<PanelState> = new Set();
+  /** Each live comparison's full teardown, keyed by the panel it is bound to. */
+  private releasers = new Map<vscode.WebviewPanel, () => void>();
 
   constructor(
     private readonly context: vscode.ExtensionContext
@@ -342,7 +344,10 @@ export class ImageCompareProvider {
       if (marks) marks.htmlAt = Date.now();
       panel.webview.html = this.getHtmlContent(panel.webview);
 
-      panel.onDidDispose(() => this.disposePanel(panelState, panelSubscriptions));
+      // The dispose listener is a subscription too, so a release leaves nothing for a later close to run (docs/session-files.md: session-edit-reloads).
+      const release = () => { this.releasers.delete(panel); this.disposePanel(panelState, panelSubscriptions); };
+      this.releasers.set(panel, release);
+      panelSubscriptions.push(panel.onDidDispose(release));
     } catch (error) {
       earlyDispose.dispose();
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -354,6 +359,11 @@ export class ImageCompareProvider {
     }
   }
 
+
+  /** Release the comparison bound to this panel, if any, before the panel is reused (docs/session-files.md: session-edit-reloads). */
+  releasePanel(panel: vscode.WebviewPanel): void {
+    this.releasers.get(panel)?.();
+  }
 
   /**
    * React to this panel being shown or hidden: nothing is cancelled but the speculative prefetch

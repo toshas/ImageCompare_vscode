@@ -64,6 +64,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 
 - **`extension.ts`** - Entry point; registers the `openInCompare` command (which persists the selection as a session file) and the `.imagecompare` custom editor; prunes old generated session files on activation
 - **`sessionFile.ts`** - Session file parsing/validation, label application, session file name suggestion
+- **`sessionReload.ts`** - When an open session tab reloads from its edited file — the debounce, the byte compare, one open at a time per tab, over host-supplied timers and IO → `docs/session-files.md`
 - **`watcherLogic.ts`** - Helpers for the file-watching subsystem — rename disambiguation, index re-shifting on removal, natural-order row insertion, and mode-aware modality insertion; unit-tested in `test/unit/watcherLogic.test.ts`
 - **`pollPlan.ts`** - Poll-cycle decisions — barren-dir listing policy, snapshot name/fingerprint diffing, same-cycle rename pairing — shared by the provider's existence sweep and the standalone poll → `docs/file-watching.md`
 - **`workPool.ts`** - The bounded priority pool every image read/decode is scheduled through, crop and PPTX export included → `docs/loading-architecture.md`

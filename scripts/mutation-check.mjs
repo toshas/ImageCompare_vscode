@@ -3680,6 +3680,48 @@ const mutations = [
     find: "saved !== null && typeof saved === 'object' ? saved as Record<string, unknown> : {}",
     replace: "saved as Record<string, unknown>",
     killedBy: "malformed-save test (a bad stored value must never break the page)"
+  },
+
+  // ── Session reload: an edited session file reloads its open tab (docs/session-files.md: session-edit-reloads) ──
+  {
+    name: 'session reload: unchanged bytes reload anyway',
+    file: 'src/sessionReload.ts',
+    suite: 'test/unit/sessionReload.test.ts',
+    find: '      if (this.disposed || text === this.loaded) return;',
+    replace: '      if (this.disposed) return;',
+    killedBy: 'unchanged-bytes test (a touch or a reveal with no edit never reloads)'
+  },
+  {
+    name: 'session reload: a second open starts while the first is still running',
+    file: 'src/sessionReload.ts',
+    suite: 'test/unit/sessionReload.test.ts',
+    find: '    if (this.running) {',
+    replace: '    if (false) {',
+    killedBy: 'in-progress test (a trigger during a reload waits for it to settle)'
+  },
+  {
+    name: 'session reload: a trigger during a reload is lost',
+    file: 'src/sessionReload.ts',
+    suite: 'test/unit/sessionReload.test.ts',
+    find: '      this.again = true;',
+    replace: '      this.again = false;',
+    killedBy: 'in-progress test (once the reload settles, one more reload with the latest bytes)'
+  },
+  {
+    name: 'session reload: the baseline stays at the first open',
+    file: 'src/sessionReload.ts',
+    suite: 'test/unit/sessionReload.test.ts',
+    find: '      this.loaded = text;',
+    replace: '',
+    killedBy: 'baseline test (a trigger that reads the reloaded text does nothing)'
+  },
+  {
+    name: 'session reload: dispose leaves the gate armed',
+    file: 'src/sessionReload.ts',
+    suite: 'test/unit/sessionReload.test.ts',
+    find: '    this.disposed = true;\n    if (this.pending !== undefined) this.io.timers.clearTimer(this.pending);',
+    replace: '',
+    killedBy: 'dispose test (no read, no reload and no armed timer after the tab closes)'
   }
 ];
 
