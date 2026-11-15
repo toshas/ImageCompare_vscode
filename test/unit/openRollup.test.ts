@@ -17,6 +17,7 @@ import { ImageCompareProvider, newSweepAimPolicy } from '../../src/imageCompareP
 import { scanForImages } from '../../src/fileService';
 import { disposeDebugLog, initDebugLog } from '../../src/debugChannel';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
+import { imageFixture } from './providerRig';
 
 const CHANNEL = 'ImageCompare';
 
@@ -257,16 +258,6 @@ function span(line: string, name: string): number {
   return Number(m[1]);
 }
 
-function imageFixture(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-openpath-'));
-  tmpRoots.push(root);
-  for (const mod of ['gt', 'pred']) {
-    fs.mkdirSync(path.join(root, mod));
-    for (const n of ['a.png', 'b.png']) fs.writeFileSync(path.join(root, mod, n), '');
-  }
-  return root;
-}
-
 /**
  * A panel the real `openCompare` can drive. Attaching the message listener is a real open step that
  * sits after the watchers mark and before the html mark, so the burn there is unmarked open work.
@@ -307,7 +298,7 @@ describe('open rollup — where the marks are taken (src/imageCompareProvider.ts
     const provider = makeProvider();
     const posted: unknown[] = [];
     const p = fakePanel(posted, BURN_MS);
-    await provider.openCompare([Uri.file(imageFixture())] as never, p.panel);
+    await provider.openCompare([Uri.file(imageFixture(tmpRoots, 'ic-openpath-'))] as never, p.panel);
     await p.ready();
     p.close();
     const line = openLines()[0];
@@ -473,7 +464,7 @@ describe('the open trace costs nothing measurable when debug is off', () => {
     }) as typeof JSON.stringify;
     const p = fakePanel([], 0);
     try {
-      await makeProvider().openCompare([Uri.file(imageFixture())] as never, p.panel);
+      await makeProvider().openCompare([Uri.file(imageFixture(tmpRoots, 'ic-openpath-'))] as never, p.panel);
       await p.ready();
     } finally {
       JSON.stringify = realStringify;
@@ -526,7 +517,7 @@ describe('open and close leave no handles behind (src/imageCompareProvider.ts)',
 
   async function openPanel(): Promise<ReturnType<typeof fakePanel>> {
     const p = fakePanel([], 0);
-    await makeProvider().openCompare([Uri.file(imageFixture())] as never, p.panel);
+    await makeProvider().openCompare([Uri.file(imageFixture(tmpRoots, 'ic-openpath-'))] as never, p.panel);
     await p.ready();
     return p;
   }

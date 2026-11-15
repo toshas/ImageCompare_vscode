@@ -188,10 +188,16 @@ export class ImageCompareProvider {
     await vscode.commands.executeCommand('revealInExplorer', uri);
   }
 
+  /** The one post path for a state; a released state's post is dropped and resolves `false`, as an undeliverable one does (docs/session-files.md: released-state-never-posts). */
+  private postToPanel(state: PanelState, msg: unknown): Thenable<boolean> {
+    if (state.disposed) return Promise.resolve(false);
+    return state.panel.webview.postMessage(msg);
+  }
+
   /** The webview words every notice; the host only reports what happened (docs/standalone.md: affordances-rendered-by-the-webview). */
   private postNotice(state: PanelState, event: NoticeEvent): void {
     const msg: ExtensionMessage = { type: 'notice', event };
-    state.panel.webview.postMessage(msg);
+    this.postToPanel(state, msg);
   }
 
   /** The image section targets the displayed file; the pill section (or a missing file) falls back to the modality path. */
@@ -360,7 +366,7 @@ export class ImageCompareProvider {
   }
 
 
-  /** Release the comparison bound to this panel, if any, before the panel is reused (docs/session-files.md: session-edit-reloads). */
+  /** Release the comparison bound to this panel, if any, before the panel is reused (docs/session-files.md: session-edit-reloads, docs/session-files.md: released-state-never-posts). */
   releasePanel(panel: vscode.WebviewPanel): void {
     this.releasers.get(panel)?.();
   }
@@ -412,7 +418,7 @@ export class ImageCompareProvider {
         if (state.openMarks) state.openMarks.readyAt = Date.now();
         state.webviewReady = true;
         for (const msg of state.pendingDebugMessages) {
-          state.panel.webview.postMessage({ type: '_debug', msg });
+          this.postToPanel(state, { type: '_debug', msg });
         }
         state.pendingDebugMessages = [];
         await this.sendInitData(state);
@@ -519,7 +525,7 @@ export class ImageCompareProvider {
       tupleIndex,
       modalityIndex
     };
-    state.panel.webview.postMessage(msg);
+    this.postToPanel(state, msg);
 
     await this.saveResults(state);
   }
@@ -544,7 +550,7 @@ export class ImageCompareProvider {
     // Remove eagerly rather than waiting on a watcher event, which may be up to a sweep away (docs/file-watching.md: self-writes-never-wait).
     await deleteSlotFlow<ImageFile>(state.scanResult, state.winners, tupleIndex, modalityIndex, {
       deleteFile: async img => { await vscode.workspace.fs.delete(img.uri); },
-      post: msg => state.panel.webview.postMessage(msg),
+      post: msg => this.postToPanel(state, msg),
       // A load that resolved before the delete re-populated this slot; clear it or it is served as a ghost.
       onSlotRemoved: (t, m) => this.invalidateSlot(state, t, m),
       removeTuple: idx => this.removeTuple(state, idx),
@@ -658,7 +664,7 @@ export class ImageCompareProvider {
         if (state.disposed) throw new TaskCancelled();
         return saveUri.fsPath;
       },
-      post: msg => { state.panel.webview.postMessage(msg); },
+      post: msg => { this.postToPanel(state, msg); },
       // A closed panel is not a failure: every other pooled await filters this the same way.
       isCancelled: err => err instanceof TaskCancelled || state.disposed,
     });
@@ -691,7 +697,7 @@ export class ImageCompareProvider {
       isAborted: () => state.disposed,
       // Place the crop now — a self-write never waits on its own event (docs/file-watching.md: self-writes-never-wait).
       arriveFile: saved => { this.handleFileCreated(state, saved.uri); },
-      post: msg => { state.panel.webview.postMessage(msg); }
+      post: msg => { this.postToPanel(state, msg); }
     });
   }
 
@@ -842,7 +848,7 @@ export class ImageCompareProvider {
       modalityIndex: asOriginal(modalityIndex),
       error
     };
-    state.panel.webview.postMessage(msg);
+    this.postToPanel(state, msg);
   }
 
   /**
@@ -959,7 +965,7 @@ ${lead}
       marks.modalities = allModalities.length;
     }
 
-    state.panel.webview.postMessage(initMessage);
+    this.postToPanel(state, initMessage);
     if (marks) marks.initPostedAt = Date.now();
     this.generateAllThumbnails(state);
   }
@@ -1191,7 +1197,7 @@ ${lead}
     }
     // User-facing bytes occupy the budget too, so speculation yields to them (docs/loading-architecture.md: user-pushes-never-withheld).
     if (!state.transport.active) {
-      state.panel.webview.postMessage(msg);
+      this.postToPanel(state, msg);
       return;
     }
     const bytes = msg.bytes.byteLength;
@@ -1208,7 +1214,7 @@ ${lead}
       state.transport.noteDelivered(bytes);
       this.drainDeferredImagePosts(state);
     };
-    const posted = state.panel.webview.postMessage(msg);
+    const posted = this.postToPanel(state, msg);
     watchdog = setTimeout(release, TRANSPORT_ACK_TIMEOUT_MS);
     // Tracked so dispose can clear it; an un-acked push would otherwise retain the panel (docs/loading-architecture.md: speculation-yields-the-wire).
     (state.ackWatchdogs ??= new Set()).add(watchdog);
@@ -1333,7 +1339,7 @@ ${lead}
       if (!imageFile) {
         if (state.disposed || reply.kind !== 'error') return;
         const msg: ExtensionMessage = { type: 'imageError', tupleIndex, modalityIndex, error: reply.error };
-        state.panel.webview.postMessage(msg);
+        this.postToPanel(state, msg);
         return;
       }
       if (reply.kind === 'image') {
@@ -1369,7 +1375,7 @@ ${lead}
           modalityIndex: asOriginal(errSlot.modalityIndex),
           error: reply.error
         };
-        state.panel.webview.postMessage(msg);
+        this.postToPanel(state, msg);
         return;
       }
       this.postVacatedSlotError(state, tupleIndex, modalityIndex, reply.error);
@@ -1400,7 +1406,7 @@ ${lead}
           modalityIndex: asOriginal(errSlot.modalityIndex),
           error: message
         };
-        state.panel.webview.postMessage(msg);
+        this.postToPanel(state, msg);
         return;
       }
       this.postVacatedSlotError(state, tupleIndex, modalityIndex, message);
@@ -1553,19 +1559,19 @@ ${lead}
       state.wire.thumbBytes += tight.byteLength;
       debugVerbose('[IC-WIRE]', () => `thumbnail t=${tupleIndex} m=${modalityIndex} ${formatBytes(tight.byteLength)} ${mime} total=${formatBytes(state.wire.thumbBytes)}`);
     }
-    state.panel.webview.postMessage(msg);
+    this.postToPanel(state, msg);
   }
 
   private sendThumbnailErrorMessage(state: PanelState, tupleIndex: number, modalityIndex: number, error: string): void {
     if (state.disposed) return;
     const msg: ExtensionMessage = { type: 'thumbnailError', tupleIndex: asTuple(tupleIndex), modalityIndex: asOriginal(modalityIndex), error };
-    state.panel.webview.postMessage(msg);
+    this.postToPanel(state, msg);
   }
 
   private sendProgressMessage(state: PanelState, current: number, total: number): void {
     if (state.disposed) return;
     const msg: ExtensionMessage = { type: 'thumbnailProgress', current, total };
-    state.panel.webview.postMessage(msg);
+    this.postToPanel(state, msg);
   }
 
   private getHtmlContent(webview: vscode.Webview): string {
@@ -1856,7 +1862,7 @@ ${lead}
     if (state.disposed || missing === (state.rootMissing ?? false)) return;
     state.rootMissing = missing;
     this.debugMsg(state, `root ${missing ? 'missing' : 'back'}: ${state.baseUri.fsPath}`);
-    state.panel.webview.postMessage({ type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });
+    this.postToPanel(state, { type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });
   }
 
   private startDeletePolling(state: PanelState): void {
@@ -2049,7 +2055,7 @@ ${lead}
 
               // Strip, winner clear, empty-tuple vs fileDeleted, then the column-empty check — the shared commit (docs/file-watching.md: delete-message-order).
               commitSlotRemoval(state.scanResult, state.winners, currentTupleIndex, currentModIdx, {
-                post: msg => state.panel.webview.postMessage(msg),
+                post: msg => this.postToPanel(state, msg),
                 // A load that resolved inside the window re-populated this slot; clear it or it is served as a ghost.
                 onSlotRemoved: (t, m) => this.invalidateSlot(state, t, m),
                 removeTuple: idx => this.removeTuple(state, idx),
@@ -2077,7 +2083,7 @@ ${lead}
   private removeTuple(state: PanelState, tupleIndex: TupleIndex): void {
     if (state.disposed) return;
     removeTupleStep(state.scanResult, state.winners, state.currentTupleIndex, tupleIndex, {
-      post: msg => state.panel.webview.postMessage(msg),
+      post: msg => this.postToPanel(state, msg),
       // Provider-only index-keyed caches shift with the splice (docs/file-watching.md: reindex-in-lockstep).
       onTupleRemoved: removed => {
         const newLoadedImages = new Map<string, LoadedImage>();
@@ -2127,7 +2133,7 @@ ${lead}
    */
   private removeModality(state: PanelState, modalityIndex: number): void {
     removeModalityStep(state.scanResult, state.winners, modalityIndex, {
-      post: msg => state.panel.webview.postMessage(msg),
+      post: msg => this.postToPanel(state, msg),
       onModalityRemoved: (modality, removed) => {
         this.unwatchModalityDir(state, modality);
         // Cleared wholesale: every key past the removed column is wrong, and the column is gone.
@@ -2180,7 +2186,7 @@ ${lead}
         tupleIndex,
         modalityIndex
       };
-      state.panel.webview.postMessage(msg);
+      this.postToPanel(state, msg);
 
       if (tupleIndex === state.currentTupleIndex) {
         this.sendImage(state, tupleIndex, modalityIndex);
@@ -2219,7 +2225,7 @@ ${lead}
         tupleIndex,
         modalityIndex
       };
-      state.panel.webview.postMessage(msg);
+      this.postToPanel(state, msg);
 
       if (tupleIndex === state.currentTupleIndex) {
         this.sendImage(state, tupleIndex, modalityIndex);
@@ -2329,7 +2335,7 @@ ${lead}
     if (plan.kind === 'slot-fill') {
       this.regenerateThumbnail(state, plan.tupleIndex, plan.modalityIndex);
       // imageInfo fills a slot the webview did not know about; each later post-crop file posts this after the first file's tupleAdded (docs/crop-and-pptx.md: post-crop-message-order).
-      state.panel.webview.postMessage(applied.message);
+      this.postToPanel(state, applied.message);
       return;
     }
 
@@ -2356,7 +2362,7 @@ ${lead}
     state.currentTupleIndex = asTuple(applied.currentTupleIndex);
 
     // The first post-crop create lands here: its sparse tupleAdded opens the canon sequence (docs/crop-and-pptx.md: post-crop-message-order).
-    state.panel.webview.postMessage(applied.message);
+    this.postToPanel(state, applied.message);
 
     this.regenerateThumbnail(state, insertIndex, plan.modalityIndex);
   }
@@ -2392,7 +2398,7 @@ ${lead}
       }
     }
 
-    state.panel.webview.postMessage(message);
+    this.postToPanel(state, message);
 
     // Winner indices may have shifted.
     if (state.votingEnabled && state.winners.size > 0) {
@@ -2431,7 +2437,7 @@ ${lead}
     if (!debugEnabled()) return;
     debug('[IC-EXT]', () => msg);
     if (state.webviewReady) {
-      state.panel.webview.postMessage({ type: '_debug', msg });
+      this.postToPanel(state, { type: '_debug', msg });
     } else {
       // Bounded: a slow remote open queued thousands, then replayed them into the renderer console at 'ready' (docs/testing.md).
       if (state.pendingDebugMessages.length >= PENDING_DEBUG_MAX) state.pendingDebugMessages.shift();

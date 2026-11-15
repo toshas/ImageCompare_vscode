@@ -2068,8 +2068,8 @@ const mutations = [
     name: 'provider: the ready mark taken after the pending-debug flush (the flush migrates from `other` into boot)',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/openRollup.test.ts',
-    find: "        if (state.openMarks) state.openMarks.readyAt = Date.now();\n        state.webviewReady = true;\n        for (const msg of state.pendingDebugMessages) {\n          state.panel.webview.postMessage({ type: '_debug', msg });\n        }\n        state.pendingDebugMessages = [];",
-    replace: "        state.webviewReady = true;\n        for (const msg of state.pendingDebugMessages) {\n          state.panel.webview.postMessage({ type: '_debug', msg });\n        }\n        state.pendingDebugMessages = [];\n        if (state.openMarks) state.openMarks.readyAt = Date.now();",
+    find: "        if (state.openMarks) state.openMarks.readyAt = Date.now();\n        state.webviewReady = true;\n        for (const msg of state.pendingDebugMessages) {\n          this.postToPanel(state, { type: '_debug', msg });\n        }\n        state.pendingDebugMessages = [];",
+    replace: "        state.webviewReady = true;\n        for (const msg of state.pendingDebugMessages) {\n          this.postToPanel(state, { type: '_debug', msg });\n        }\n        state.pendingDebugMessages = [];\n        if (state.openMarks) state.openMarks.readyAt = Date.now();",
     killedBy: 'ready-mark placement test (the flush belongs to `other`; boot ends where the handler begins)'
   },
   {
@@ -3069,8 +3069,8 @@ const mutations = [
     name: 'root edge: the folder no longer named',
     file: 'src/imageCompareProvider.ts',
     suite: 'test/unit/pollCost.test.ts',
-    find: "    state.panel.webview.postMessage({ type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });",
-    replace: "    state.panel.webview.postMessage({ type: 'rootMissing', path: null });",
+    find: "    this.postToPanel(state, { type: 'rootMissing', path: missing ? state.baseUri.fsPath : null });",
+    replace: "    this.postToPanel(state, { type: 'rootMissing', path: null });",
     killedBy: 'root-gone test (the extension knows the path, and a nameless notice is the vague one it replaced)'
   },
   {
@@ -3722,6 +3722,14 @@ const mutations = [
     find: '    this.disposed = true;\n    if (this.pending !== undefined) this.io.timers.clearTimer(this.pending);',
     replace: '',
     killedBy: 'dispose test (no read, no reload and no armed timer after the tab closes)'
+  },
+  {
+    name: 'released state: the one post path forwards a released state\'s post (docs/session-files.md: released-state-never-posts)',
+    file: 'src/imageCompareProvider.ts',
+    suite: 'test/unit/releasedStatePosts.test.ts',
+    find: '    if (state.disposed) return Promise.resolve(false);\n    return state.panel.webview.postMessage(msg);',
+    replace: '    return state.panel.webview.postMessage(msg);',
+    killedBy: 'slot-delete test (a delete that finishes after the release posts nothing)'
   }
 ];
 

@@ -1917,6 +1917,10 @@
             {
               "suite": "unit",
               "match": "session reload gate (sessionReload.ts, real code)"
+            },
+            {
+              "suite": "unit",
+              "match": "a released comparison state never posts to its panel"
             }
           ]
         },

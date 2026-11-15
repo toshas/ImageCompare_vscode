@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { Uri } from '../mocks/vscode';
 import { newSweepAimPolicy } from '../../src/imageCompareProvider';
 import { TransportBudget, resolveTransportBudgetBytes } from '../../src/transportBudget';
@@ -21,6 +24,17 @@ export function thumbnailServiceStub(
     thumbTierStats: emptyTierStats,
     thumbPackLoadStat: emptyPackLoadStat
   };
+}
+
+/** Two modalities, two tuples: deleting one slot leaves its tuple and its column alive, so the delete posts `fileDeleted`. */
+export function imageFixture(tmpRoots: string[], prefix: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tmpRoots.push(root);
+  for (const mod of ['gt', 'pred']) {
+    fs.mkdirSync(path.join(root, mod));
+    for (const n of ['a.png', 'b.png']) fs.writeFileSync(path.join(root, mod, n), '');
+  }
+  return root;
 }
 
 export interface PanelStateOptions {

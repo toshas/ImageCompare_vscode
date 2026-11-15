@@ -331,6 +331,9 @@ digit-jumpable, but skipped by arrow-key cycling and as a Space-flip target. The
   The old comparison state (watchers, timers, pool work, message and dispose subscriptions) is
   released before the new open. At most one open runs per tab, and a trigger during one is checked
   again when it settles. Unchanged bytes never reload, so a `touch` or a reveal costs one read.
+- **`released-state-never-posts`** — after a tab's comparison state is released, nothing that state
+  started posts to the tab. A release keeps the panel, and an old post names the old session's
+  slots. Every post for a state goes through one guarded function, the runners' `post` included.
 - **`prune-double-guard`** — prune skips both open tabs and `openSessionUris`, and stays deferred.
   Either guard alone loses the reload race.
 - **`filename-is-tab-title`** — generated session filenames come from `suggestSessionFileName()`. VS

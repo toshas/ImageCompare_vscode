@@ -539,12 +539,10 @@ fixed.
   order-fragile (any earlier test that activates burns the window) and costs 16s of wall clock:
   unattractive rather than impossible. Calling `activate` directly would break the activation test
   beside it. Pinning it needs the function exported, a production change, not a test one.
-- **The session-reload wiring.** No layer tests these sites:
-  - the two triggers in `resolveCustomEditor`: the session-file watcher and the tab turning active;
-  - the gate's dispose on close;
-  - `releasePanel` in the provider.
+- **The session-reload wiring.** No layer tests the gate's dispose on close or the two triggers in `resolveCustomEditor`: the session-file watcher and the tab turning active.
 
-  `test/unit/sessionReload.test.ts` pins the decisions.
+  `test/unit/sessionReload.test.ts` pins the decisions, and `test/unit/releasedStatePosts.test.ts`
+  drives the provider's `releasePanel`.
 - **The webview's pixels.** The Playwright layer drives the real bundle but asserts logic through
   the state hook — no pixel snapshots — so canvas rendering and visual layout are verified by eye
   (the demo gallery and the manual checks below).
@@ -1415,6 +1413,11 @@ fixed.
 - **An open session tab ignored edits to its session file** *(fixed)* — VS Code only reveals an open
   custom editor, so a rewritten `.imagecompare` never reached its tab. `sessionReload.ts` now reloads
   it in place, pinned by `test/unit/sessionReload.test.ts` (`docs/session-files.md: session-edit-reloads`).
+
+- **A released comparison posted into its reloaded tab** *(fixed)* — a reload keeps the panel, so a
+  slot delete that finished after the release posted `fileDeleted` with the old session's indices.
+  Every post now goes through one guarded function, pinned by `test/unit/releasedStatePosts.test.ts`
+  (`docs/session-files.md: released-state-never-posts`).
 
 ## The generated-output rule
 
