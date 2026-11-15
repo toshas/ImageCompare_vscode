@@ -95,6 +95,7 @@ This is a VSCode extension for comparing multiple images with multiple modalitie
 - **`ppmxParser.ts`** - Custom float32 grayscale image format parser
 - **`types.ts`** - Shared TypeScript interfaces and message types
 - **`webview/main.ts`** - WebView UI (carousel, zoom/pan, keyboard navigation, floating panel, winner voting)
+- **`webview/comparisonModel.ts`** - The comparison model: tuples, one record per modality in original order, the display `order`, winners and hidden in original indices; each structural change one pure function returning the new model and its index remap → `docs/tuple-matching.md`
 - **`webview/emptyNotice.ts`** - What an emptied comparison says instead of drawing — the terminal notice, and the folder-gone wording → `docs/loading-architecture.md`
 - **`webview/modalityVisibility.ts`** - Hidden-pill keyboard-cycling target selection → `docs/session-files.md`
 - **`webview/axisScroll.ts`** - The one rule every scrollable axis obeys — centre the selection (optionally snapped to the item pitch), clamp to the content — plus what a wheel notch is worth with Alt held, linear and multiplicative → `docs/loading-architecture.md`

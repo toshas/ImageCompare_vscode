@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loadInited, getState, outbound, lastOutbound, send } from './helpers';
+import { loadInited, getState, outbound, lastOutbound, send, focusViewer } from './helpers';
 import { DEFAULT_SPEC } from '../fixtures/messages';
 
 // Pins the PPTX button contract (docs/crop-and-pptx.md, "No votes exports the whole view"):
@@ -35,4 +35,18 @@ test('pptxError clears the busy state and allows a new export', async ({ page })
   expect((await getState(page)).pptxBusy).toBe(false);
   await page.locator('#pptx-btn').click();
   expect((await outbound(page, 'exportPptx')).length).toBe(2);
+});
+
+// The standalone adapter holds the posted message by reference and reads modalityOrder across
+// awaits, as the harness's outbound log does; a move after the click must not reach the export.
+test('a pill move after the click leaves the posted export order unchanged', async ({ page }) => {
+  await loadInited(page, { ...DEFAULT_SPEC, modalities: ['A', 'B', 'C', 'D'] });
+  await page.locator('#pptx-btn').click();
+  await focusViewer(page);
+  await page.keyboard.press(']');
+  await page.keyboard.press(']');
+  expect((await getState(page)).modalityOrder).toEqual([1, 2, 0, 3]);
+  const held = await page.evaluate(() =>
+    (window as any).__ic_outbound.find((m: any) => m?.type === 'exportPptx').modalityOrder.slice());
+  expect(held).toEqual([0, 1, 2, 3]);
 });

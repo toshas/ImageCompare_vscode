@@ -231,16 +231,17 @@ with an empty `name` has no bytes behind it.
 
 ## Trap 2: original vs display modality index
 
-The webview lets the user reorder modality columns. `modalityOrder[displayIdx] = originalIdx`
-is the only mapping, and it lives in the webview: the extension's `modalities` array is *always* in
-original order. The extension does see display order in one place: `exportPptx` carries
-`modalityOrder` on the wire, and `pptxDeck.ts`'s `buildDeck` iterates it so slides come out in the
-user's column order. It only reads it through, never stores it.
+The webview lets the user reorder modality columns. The model's `order` (`modalityOrder` on the
+wire) is the only mapping: `order[displayIdx] = originalIdx`. It lives in the webview. The
+extension's `modalities` array is *always* in original order. The extension does see display order
+in one place: `exportPptx` carries `modalityOrder` on the wire, and `pptxDeck.ts`'s `buildDeck`
+iterates it so slides come out in the user's column order. It only reads it through, never stores
+it.
 
 The branded index types in `types.ts` now encode which space each value lives in. The wire is
-original. `winners` is *display* in the webview (`main.ts`) and *original* in the extension
-(`PanelState.winners`), so the same field name means a different space on each side. The brand is
-not uniform coverage; the main classes it does not reach:
+original. `winners` is original on both sides: in the webview's model (`comparisonModel.ts`) and in
+the extension (`PanelState.winners`). The brand is not uniform coverage; the main classes it does
+not reach:
 
 - **String keys.** The thumbnail cache key `${tupleIndex}-${originalModIdx}` is a string.
 - **`Record<number, …>` keys.** `init.winners` and `winnersReset.winners` are keyed by plain `number`
@@ -253,44 +254,37 @@ not uniform coverage; the main classes it does not reach:
   plumbing is largely unbranded even though the wire types are not.
 
 The sanctioned conversions are the exception rather than the rule. `toDisplay`/`toOriginal` are used
-at seven sites in `main.ts`, and raw `modalityOrder[…]` indexing appears at about twice as many. The
+at five sites in `main.ts`, and raw `model.order[…]` indexing appears at about twice as many. The
 brand documents intent at the boundaries; it does not police every hop.
 
 `results.txt` sidesteps the whole question by persisting modality *names* and tuple *names*.
 `mapWinnersToIndices` re-resolves them to original indices at load. That is deliberate: indices are
 not durable across a rescan, names are.
 
-### Mutating a display-ordered array with a wire index (`unpermute-before-splice`)
+### The webview's comparison model
 
-Trap 2 above is about *lookup*; mutation is where this broke. `modalities`, `modalityColors` and
-`modalityPaths` are **display**-ordered arrays, and TS cannot brand-restrict `T[]` index access. A
-handler splicing them at a wire (original) index corrupts a permuted array, correct only until the
-first reorder. The two handlers resolve this differently:
+`webview/comparisonModel.ts` keeps the comparison in one index space. Each modality is one record
+(name, path, colour) in original (wire) order. `winners` and `hidden` also hold original indices.
+Display order is only `order`. The model stores no display-ordered value, so a move changes `order`
+and nothing else. (`main.ts` derives its display-ordered `images` from `loadedTuples` on each render.)
 
-- `handleModalityRemoved` un-permutes all three through the *previous* `modalityOrder`
-  (`restoreOriginalOrder`), splices at the wire index, and resets the order to identity.
-- `handleModalityAdded` never un-permutes. It converts the wire index to a *display* position
-  (`displayOrderAfterInsert`) and splices the display arrays there, because the user's arrangement
-  must survive the insert (`rearrangement-survives-insert` below). `modalityColors` is instead
-  rebuilt by permuting the wire payload (original-order over the post-insert set) through the
-  preserved order.
+Each structural change is one pure function. It returns the new model and a remap: `tuple`,
+`modality` (original space) and `display`. `main.ts` applies the remap to its slot caches
+(`loadedTuples`, `thumbnailUrls`) and to the current and previous modality. It keeps these two as
+display indices.
 
-(`images` is display-ordered too but needs no un-permute: both handlers reset it to `[]` and reload,
-never splice it.)
+The trap that is left is the display remap. A display index names a slot of the *previous* order:
 
-The second half is carrying display-space *values* across each handler's order change: they were
-indices into the old permutation. `winners`, `currentModalityIndex` and `previousModalityIndex` are
-mapped through `prevOrder` on remove (`carryIndex`). On add they merely shift at the insertion's
-display position, since the permutation itself is preserved. A value carried across a space change
-*unmapped* is the bug.
+- a removal maps it through the previous order to an original index and shifts that. The order then
+  resets to identity, so the result is also the display index. If the code reads the display index
+  as an original, it is correct only for the identity order;
+- an insert keeps the order (`rearrangement-survives-insert` below), so a display index shifts only
+  at the insertion point that `displayOrderAfterInsert` returns;
+- a move maps it through `movedIndex`.
 
-**Neither half is caught by the compiler**; be clear about this before deleting anything here. A
-stale display index and a fresh one are both `DisplayModalityIndex`, so carrying one straight across
-the reset is a same-type assignment. Deleting the `restoreOriginalOrder` calls just splices a
-`string[]`. The brand rejects *mixing spaces*: assigning an `OriginalModalityIndex` where a
-`DisplayModalityIndex` is expected is a TS2322/TS2345, a different mistake from this section's.
-Nothing but the code comments and this doc keeps the un-permute and the carry alive
-(`unpermute-before-splice`).
+The compiler catches none of these, because a stale `DisplayModalityIndex` has the same type as a
+fresh one. `test/unit/comparisonModel.test.ts` runs each operation on a permuted order, and
+`scripts/mutation-check.mjs` breaks each remap.
 
 ## Invariants
 
@@ -361,10 +355,3 @@ Nothing but the code comments and this doc keeps the un-permute and the carry al
   original-order predecessor (`displayOrderAfterInsert`, pure and suite-pinned), and existing
   display indices only shift at the insertion point. Resetting to identity order was the old
   behavior and reads as data loss to a user who curated an order.
-- **`unpermute-before-splice`** — a handler holding an original (wire) index must un-permute a
-  display-ordered array (`modalities[wireIndex]` and friends) before splicing it. It must carry
-  display-space values through the *previous* `modalityOrder` before resetting it. **Both halves are
-  invisible to the type system**: TS can't brand-restrict `T[]` index access, and a stale
-  `DisplayModalityIndex` is type-identical to a fresh one. Deleting either produces a clean build and
-  a bug that appears only after the first column reorder. See "Mutating a display-ordered array with
-  a wire index".

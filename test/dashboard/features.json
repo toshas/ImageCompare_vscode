@@ -251,6 +251,10 @@
             {
               "suite": "unit",
               "match": "files, tupleDeleted, refresh, save"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the row and its vote, and moves every later row up one"
             }
           ]
         },
@@ -301,6 +305,10 @@
             {
               "suite": "unit",
               "match": "posts pptxError exactly once"
+            },
+            {
+              "suite": "webview",
+              "match": "a pill move after the click leaves the posted export order unchanged"
             }
           ]
         },
@@ -484,6 +492,10 @@
             {
               "suite": "webview",
               "match": "a pill drag moves both the pill name and its path tooltip"
+            },
+            {
+              "suite": "unit",
+              "match": "read every per-modality value through the order"
             }
           ]
         },
@@ -512,6 +524,14 @@
             {
               "suite": "webview",
               "match": "custom order and focus survive an insert"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the arrangement: the new column lands beside its original-order predecessor"
+            },
+            {
+              "suite": "unit",
+              "match": "shifts display indices only at and after the insertion point"
             }
           ]
         },
@@ -578,6 +598,14 @@
             {
               "suite": "webview",
               "match": "dragging a pill 0 -> 2 moves it, the pills between close up"
+            },
+            {
+              "suite": "unit",
+              "match": "votes and hidden stay original-indexed and so follow their columns"
+            },
+            {
+              "suite": "unit",
+              "match": "moves the selection with its column"
             }
           ]
         },
@@ -667,6 +695,10 @@
             {
               "suite": "webview",
               "match": "clicking a carousel winner circle posts setWinner"
+            },
+            {
+              "suite": "unit",
+              "match": "a set keeps the entry position, a clear drops it"
             }
           ]
         },
@@ -704,6 +736,10 @@
             {
               "suite": "unit",
               "match": "winners serialize through the shared format"
+            },
+            {
+              "suite": "unit",
+              "match": "a reset replaces every vote from the wire record"
             }
           ]
         }
@@ -1110,6 +1146,14 @@
             {
               "suite": "unit",
               "match": "defaults colors to the positional palette"
+            },
+            {
+              "suite": "unit",
+              "match": "keeps the wire order, the tuples object and the votes"
+            },
+            {
+              "suite": "unit",
+              "match": "falls back to the positional palette when the host sends no colours"
             }
           ]
         },
@@ -1144,6 +1188,10 @@
             {
               "suite": "unit",
               "match": "a run of hidden pills is skipped in one step"
+            },
+            {
+              "suite": "unit",
+              "match": "a toggle shows a hidden column or hides a visible one"
             }
           ]
         },
@@ -1621,6 +1669,10 @@
             {
               "suite": "unit",
               "match": "shifts winners and the current index up"
+            },
+            {
+              "suite": "unit",
+              "match": "shifts every row at or after the insert, the votes with them"
             }
           ]
         },
@@ -1729,6 +1781,14 @@
             {
               "suite": "unit",
               "match": "adds nothing a second time when the next sweep sees the same recreated tree"
+            },
+            {
+              "suite": "unit",
+              "match": "carries each display index through the previous order"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the column from votes, hidden and every tuple"
             }
           ]
         },

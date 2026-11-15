@@ -8,26 +8,26 @@ Code:
 - `webview/pillReorder.ts`: pure; the move permutation, the drop slot, the per-pill shift.
 - `webview/pillDrag.ts`: the pill row's pointer gestures.
 - `webview/touchInput.ts`: the image's and the strip's touch gestures.
+- `webview/comparisonModel.ts`: pure; `modalityMoved`, the move's new order and its remap.
 - `webview/main.ts`: `moveModality`, `setupTouch`, `carouselOffsetPx`.
 - `webviewShell.ts`: the `touch-ui` styles, the ▦ button, the help rows.
 
 Pinned by:
-- `test/unit/pillReorder.test.ts` (Vitest, mutation-gated);
+- `test/unit/pillReorder.test.ts` and `test/unit/comparisonModel.test.ts` (Vitest, mutation-gated);
 - `test/webview/pill-drag.spec.ts` and `test/webview/touch-layout.spec.ts` (Playwright on the real
   bundle).
 
 ## A reorder is one move
 
 `[` / `]` move the current modality one slot; dropping a dragged pill moves *that* pill to the slot
-it was dropped on. Both go through `moveModality(from, to)`. It splices every display-ordered array
-(`modalities`, `modalityColors`, `modalityPaths`, `modalityOrder`). It remaps every display index
-held anywhere else through the same permutation (`movedIndex`): each tuple's vote, the Space-peek
-target, the current modality.
+it was dropped on. Both go through `moveModality(from, to)`. It changes only the order: votes and
+hidden pills hold original indices, so they follow their columns. It remaps the two display indices
+`main.ts` holds through the same permutation (`movedIndex`): the Space-peek target and the current
+modality.
 
 A move is not a swap: the pills between `from` and `to` close up by one. A swap-shaped remap gets
-this wrong. Votes are stored by display index, so it would re-attribute votes in
-`results.txt` without any visible error. The shown modality follows its modality: dragging some
-other pill never changes what is on screen.
+this wrong and moves the selection to another pill. The shown modality follows its modality:
+dragging some other pill never changes what is on screen.
 
 ## The drag
 
@@ -129,9 +129,9 @@ device decides, not the host. A device in the touch layout adds `touch-ui` to `b
 ## Invariants
 
 - **`reorder-is-one-move`** — every reorder, `[` / `]` and a pill drop alike, goes through
-  `moveModality(from, to)`, and every display index outside the spliced arrays (votes, the Space-peek
-  target, the current modality) is remapped through `movedIndex`; the modalities between `from` and
-  `to` shift by one. A swap-shaped remap re-attributes votes in `results.txt` silently.
+  `moveModality(from, to)`. It changes only the order. It remaps the Space-peek target and the
+  current modality through `movedIndex`, and the modalities between `from` and `to` shift by one. A
+  swap-shaped remap moves the selection to another pill, and no check fails.
 - **`drag-commits-once`** — while a pill is lifted only inline transforms change, and only on pills
   that change side; the row and the strip are rebuilt once, on the drop.
 - **`row-owns-touch`** — the pill row is `touch-action: none` and cancels `touchstart`; it pans, flings

@@ -4,8 +4,7 @@
  */
 
 import * as crop from './crop';
-import { nextVisibleModality, isVoteClickable, displayOrderAfterInsert } from './modalityVisibility';
-import { shiftIndexAfterRemoval } from '../watcherLogic';
+import { nextVisibleModality, isVoteClickable } from './modalityVisibility';
 import { ThumbUrlCache, BLANK_THUMB } from './thumbUrlCache';
 import { ColumnReportGate, LOAD_DEBOUNCE_MS, SlotRank, rankCovers, tupleArrivalPlan } from './tupleLoadPlan';
 import { emptyNotice } from './emptyNotice';
@@ -21,11 +20,37 @@ import { closeContextMenu, isContextMenuOpen, openContextMenu } from './contextM
 import { NoticeEvent, buildNotice } from './noticeChannel';
 import { centreOffset, scrollStep, wheelPixels, zoomFactor } from './axisScroll';
 import { ColumnWindow, MIN_TILE_PITCH, columnLeft, columnPoolSize, columnWindow } from './columnWindow';
-import { movedIndex } from './pillReorder';
 import { installPillDrag } from './pillDrag';
 import { installTouchInput } from './touchInput';
 import { buildSavedView, planRestore } from './viewState';
 import type { DeleteUnit } from '../modePolicy';
+import {
+  Change,
+  ComparisonModel,
+  DisplayModalityIndex,
+  EMPTY_MODEL,
+  OriginalModalityIndex,
+  TupleIndex,
+  TupleInfo,
+  asDisplay,
+  asOriginal,
+  asTuple,
+  hiddenByDisplay,
+  hiddenToggled,
+  modalityAdded,
+  modalityAt,
+  modalityMoved,
+  modalityRemoved,
+  modelFromInit,
+  reorderImagesForDisplay,
+  toDisplay,
+  toOriginal,
+  tupleAdded,
+  tupleRemoved,
+  winnerAt,
+  winnerSet,
+  winnersReset,
+} from './comparisonModel';
 
 // VSCode API
 declare function acquireVsCodeApi(): {
@@ -37,20 +62,6 @@ declare function acquireVsCodeApi(): {
 const vscode = acquireVsCodeApi();
 
 // Types (duplicated from extension for webview isolation)
-interface ImageInfo {
-  name: string;
-  modality: string;
-  tupleIndex: TupleIndex;
-  modalityIndex: OriginalModalityIndex;
-  /** The host cannot delete this file; absent means deletable. */
-  readOnly?: true;
-}
-
-interface TupleInfo {
-  name: string;
-  images: ImageInfo[];
-}
-
 interface WebViewConfig {
   thumbnailSize: number;
   prefetchCount: number;
@@ -63,27 +74,6 @@ interface LoadedImage {
   modality: string;
   width: number;
   height: number;
-}
-
-const MODALITY_COLORS = [
-  '#0f0', '#f60', '#0af', '#f0f', '#ff0', '#f44', '#4f4', '#44f'
-];
-
-// Branded index spaces, re-declared from src/types.ts (docs/tuple-matching.md trap 2).
-type OriginalModalityIndex = number & { readonly __brand: 'OriginalModalityIndex' };
-type DisplayModalityIndex = number & { readonly __brand: 'DisplayModalityIndex' };
-// Tuple index is a single space (no display/original split); the brand guards it against modality indices.
-type TupleIndex = number & { readonly __brand: 'TupleIndex' };
-// Mint a brand at a real boundary (a wire value known to be original/display, or a fresh tuple/display position).
-const asOriginal = (n: number): OriginalModalityIndex => n as OriginalModalityIndex;
-const asDisplay = (n: number): DisplayModalityIndex => n as DisplayModalityIndex;
-const asTuple = (n: number): TupleIndex => n as TupleIndex;
-// The only sanctioned conversions: modalityOrder is the one bridge (order[display] = original).
-function toOriginal(display: DisplayModalityIndex, order: readonly OriginalModalityIndex[]): OriginalModalityIndex {
-  return order[display];
-}
-function toDisplay(original: OriginalModalityIndex, order: readonly OriginalModalityIndex[]): DisplayModalityIndex {
-  return asDisplay(order.indexOf(original));
 }
 
 // DOM Elements
@@ -149,10 +139,7 @@ const PLACEHOLDER_THUMB = (() => {
 })();
 
 // State
-let tuples: TupleInfo[] = [];
-let modalities: string[] = [];
-let modalityPaths: string[] = [];
-let modalityColors: string[] = [];
+let model: ComparisonModel = EMPTY_MODEL;
 let config: WebViewConfig = { thumbnailSize: 100, prefetchCount: 3, keepZoomOnTupleChange: false };
 
 let currentTupleIndex: TupleIndex = asTuple(0);
@@ -185,7 +172,6 @@ function carouselOffsetPx(): number {
 }
 
 let isMultiTupleMode = false;
-let modalityOrder: OriginalModalityIndex[] = []; // maps display position -> original modality index
 let loadDebounceTimer: number | null = null; // debounce timer for loading full images
 let lastNavAt = 0; // timestamp of the previous tuple navigation (for leading-edge debounce)
 // Armed on arrival, cleared by the next navigation: siblings of a tuple scrolled past are never asked for (docs/loading-architecture.md: siblings-dwell-gated).
@@ -193,11 +179,6 @@ let siblingDwellTimer: number | null = null;
 // Slots asked for and not yet answered, each with the rank it was asked at, so a repaint cannot re-ask but a promotion can (docs/loading-architecture.md: siblings-dwell-gated, request-rank-upgrades).
 const requestedSlots = new Map<string, SlotRank>();
 
-// Winner voting state
-let winners: Map<TupleIndex, DisplayModalityIndex> = new Map(); // tupleIndex -> modalityIndex (display index)
-// Presentation only — nothing but pill styling, the menu label, and keyboard cycling reads this set (docs/session-files.md: hidden-is-presentation-only).
-let hiddenModalities: Set<OriginalModalityIndex> = new Set();
-const hiddenByDisplay = (): boolean[] => modalityOrder.map(o => hiddenModalities.has(o));
 let votingEnabled = false;
 
 // Busy until the provider answers; safe only because it always does (docs/crop-and-pptx.md: export-always-answers).
@@ -228,18 +209,18 @@ if (typeof window !== 'undefined' && (window as unknown as { __ic_test_enabled?:
     getState: () => ({
       currentTupleIndex,
       currentModalityIndex,
-      currentTupleName: tuples[currentTupleIndex]?.name ?? null,
-      tupleCount: tuples.length,
-      modalityCount: modalities.length,
-      modalityOrder: modalityOrder.slice(),
-      modalityPaths: modalityPaths.slice(),
-      hiddenModalities: Array.from(hiddenModalities),
+      currentTupleName: model.tuples[currentTupleIndex]?.name ?? null,
+      tupleCount: model.tuples.length,
+      modalityCount: model.modalities.length,
+      modalityOrder: model.order.slice(),
+      modalityPaths: model.order.map(o => model.modalities[o].path),
+      hiddenModalities: Array.from(model.hidden),
       zoom,
       panX,
       panY,
       cropMode: crop.cropMode,
       cropRect: crop.cropRect ? { ...crop.cropRect } : null,
-      winners: Array.from(winners.entries()),
+      winners: Array.from(model.winners, ([t, o]) => [t, toDisplay(o, model.order)]),
       votingEnabled,
       deleteUnit,
       pptxBusy,
@@ -260,7 +241,7 @@ let fpDragStartTop = 0;
 function updateStatus(name: string, info: string, tupleIndex?: number) {
   let prefix = '';
   if (isMultiTupleMode && tupleIndex !== undefined) {
-    prefix = `[${tupleIndex + 1}/${tuples.length}] `;
+    prefix = `[${tupleIndex + 1}/${model.tuples.length}] `;
   }
   statusNameEl.textContent = prefix + name;
   statusInfoEl.textContent = info;
@@ -381,24 +362,22 @@ function setupEventListeners() {
     const tupleIndices: TupleIndex[] = [];
     // Original space: the wire is always the original index (docs/tuple-matching.md: wire-index-is-original).
     const winnerModalityIndices: (OriginalModalityIndex | null)[] = [];
-    for (let i = 0; i < tuples.length; i++) {
+    for (let i = 0; i < model.tuples.length; i++) {
       const t = asTuple(i);
-      if (winners.has(t)) {
+      if (model.winners.has(t)) {
         tupleIndices.push(t);
-        // winners holds display indices; convert to original before sending.
-        const displayIdx = winners.get(t);
-        winnerModalityIndices.push(displayIdx === undefined ? null : (toOriginal(displayIdx, modalityOrder) ?? null));
+        winnerModalityIndices.push(model.winners.get(t) ?? null);
       }
     }
     if (tupleIndices.length === 0) {
       // No votes: export the whole view, null winner per tuple (docs/crop-and-pptx.md).
-      for (let i = 0; i < tuples.length; i++) {
+      for (let i = 0; i < model.tuples.length; i++) {
         tupleIndices.push(asTuple(i));
         winnerModalityIndices.push(null);
       }
     }
     setPptxBusy(true);
-    vscode.postMessage({ type: 'exportPptx', tupleIndices, winnerModalityIndices, modalityOrder });
+    vscode.postMessage({ type: 'exportPptx', tupleIndices, winnerModalityIndices, modalityOrder: model.order });
   });
 }
 
@@ -410,7 +389,7 @@ function deleteCurrent() {
     vscode.postMessage({
       type: 'deleteImage',
       tupleIndex: currentTupleIndex,
-      modalityIndex: toOriginal(currentModalityIndex, modalityOrder),
+      modalityIndex: toOriginal(currentModalityIndex, model.order),
     });
     return;
   }
@@ -428,9 +407,9 @@ function applyDeleteUnitToAffordances(): void {
 
 /** Whether what Del would remove holds a file the host flagged read-only: the image on screen, or any real file of the row. */
 function deleteTargetReadOnly(): boolean {
-  const tuple = tuples[currentTupleIndex];
+  const tuple = model.tuples[currentTupleIndex];
   if (!tuple) return false;
-  if (deleteUnit === 'image') return tuple.images[toOriginal(currentModalityIndex, modalityOrder)]?.readOnly === true;
+  if (deleteUnit === 'image') return tuple.images[toOriginal(currentModalityIndex, model.order)]?.readOnly === true;
   return tuple.images.some(img => img.name !== '' && img.readOnly === true);
 }
 
@@ -571,27 +550,13 @@ window.addEventListener('message', (event) => {
 });
 
 function handleWinnerUpdated(message: { tupleIndex: TupleIndex; modalityIndex: OriginalModalityIndex | null }) {
-  if (message.modalityIndex === null) {
-    winners.delete(message.tupleIndex);
-  } else {
-    // Original modality index -> display index (modalityOrder[displayIdx] = originalIdx).
-    const displayIdx = toDisplay(message.modalityIndex, modalityOrder);
-    if (displayIdx !== -1) {
-      winners.set(message.tupleIndex, displayIdx);
-    }
-  }
+  model = winnerSet(model, message.tupleIndex, message.modalityIndex);
   updateCarouselWinners();
   updateModalitySelector();
 }
 
 function handleWinnersReset(message: { winners: Record<number, OriginalModalityIndex> }) {
-  winners = new Map();
-  for (const [tupleIdx, originalModalityIdx] of Object.entries(message.winners)) {
-    const displayIdx = toDisplay(originalModalityIdx, modalityOrder);
-    if (displayIdx !== -1) {
-      winners.set(asTuple(parseInt(tupleIdx, 10)), displayIdx);
-    }
-  }
+  model = winnersReset(model, message.winners);
   updateCarouselWinners();
   updateModalitySelector();
 }
@@ -604,25 +569,12 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   applyCapabilitiesToHelp();
   applyDeleteUnitToAffordances();
   // Reset all state for new comparison
-  tuples = message.tuples;
-  modalities = message.modalities;
-  modalityPaths = message.modalityPaths;
+  model = modelFromInit(message);
   labelsExplicit = message.labelsExplicit;
   config = message.config;
-  modalityColors = message.modalityColors && message.modalityColors.length === modalities.length
-    ? message.modalityColors.slice()
-    : modalities.map((_, i) => MODALITY_COLORS[i % MODALITY_COLORS.length]);
-  modalityOrder = modalities.map((_, i) => asOriginal(i)); // Initialize order: [0, 1, 2, ...]
 
   votingEnabled = message.votingEnabled;
   applyHostAffordances();
-  winners = new Map();
-  if (message.winners) {
-    for (const [tupleIdx, modalityIdx] of Object.entries(message.winners)) {
-      // order is identity here, so toDisplay is an identity remap; keep the conversion explicit.
-      winners.set(asTuple(parseInt(tupleIdx, 10)), toDisplay(modalityIdx, modalityOrder));
-    }
-  }
 
   currentTupleIndex = asTuple(0);
   currentModalityIndex = asDisplay(0);
@@ -631,7 +583,6 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   images = [];
   loadedTuples.clear();
   thumbnailUrls.clear();
-  hiddenModalities.clear();
   rootMissingPath = null; // a fresh comparison inherits no previous root's verdict
   // Index-keyed and every index just changed identity; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
@@ -654,7 +605,7 @@ function handleInit(message: { tuples: TupleInfo[]; modalities: string[]; modali
   canvasEl.classList.remove('preview');
   imageLoaderEl.classList.remove('active');
 
-  isMultiTupleMode = tuples.length > 1;
+  isMultiTupleMode = model.tuples.length > 1;
 
   // Open wide enough for every modality column at 30px, within a 40%-of-window budget.
   CAROUSEL_WIDTH = Math.max(220, Math.min(carouselFitWidth(30), Math.floor(window.innerWidth * 0.4)));
@@ -687,15 +638,15 @@ function restoreView(): void {
   if (!viewRestorePending) return;
   viewRestorePending = false;
   // Without the host's word the webview never touches its state (docs/standalone.md: view-kept-only-where-stated).
-  if (!capabilities.restoresView || !tuples.length || !modalities.length) return;
+  if (!capabilities.restoresView || !model.tuples.length || !model.modalities.length) return;
   const saved = vscode.getState();
   if (saved === undefined || saved === null) return;
   // Names in, indices out: nothing below sees the saved view itself (docs/standalone.md: view-restored-by-name).
-  const plan = planRestore(saved, modalities, tuples.map(t => t.name));
+  const plan = planRestore(saved, model.modalities.map(r => r.name), model.tuples.map(t => t.name));
   // Each slot through moveModality's remap, the row and the strip rebuilt once for the whole order.
-  if (plan.order.map((o, d) => moveModality(modalityOrder.indexOf(asOriginal(o)), d, false)).some(Boolean)) rebuildAfterMove();
+  if (plan.order.map((o, d) => moveModality(model.order.indexOf(asOriginal(o)), d, false)).some(Boolean)) rebuildAfterMove();
   for (const o of plan.hidden) runMenuAction('toggleHidden', { section: 'pill', tupleIndex: currentTupleIndex, modalityIndex: o });
-  const display = toDisplay(asOriginal(plan.modality), modalityOrder);
+  const display = toDisplay(asOriginal(plan.modality), model.order);
   if (plan.tuple !== currentTupleIndex || display !== currentModalityIndex) goToTupleAndModality(asTuple(plan.tuple), display);
   zoom = plan.zoom;
   panX = plan.panX;
@@ -709,7 +660,7 @@ function saveView(): void {
   viewSaveTimer = null;
   // No write without the host's word, nor before the one read (docs/standalone.md: view-kept-only-where-stated).
   if (!capabilities.restoresView || viewRestorePending) return;
-  vscode.setState(buildSavedView(modalities, hiddenByDisplay(), tuples[currentTupleIndex]?.name ?? null, currentModalityIndex, zoom, panX, panY));
+  vscode.setState(buildSavedView(model.order.map(o => model.modalities[o].name), hiddenByDisplay(model), model.tuples[currentTupleIndex]?.name ?? null, currentModalityIndex, zoom, panX, panY));
 }
 
 /** Coalesces a burst of view changes (a pan, a drag) into one write within 250 ms of the first. */
@@ -788,7 +739,7 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; b
     // The decoded Image element holds the pixels; the URL is only needed until then.
     URL.revokeObjectURL(blobUrl);
     // Deferred callback: the tuple may have been deleted while this decoded.
-    const tuple = tuples[message.tupleIndex];
+    const tuple = model.tuples[message.tupleIndex];
     const imageInfo = tuple && tuple.images[message.modalityIndex];
     if (!imageInfo) return;
 
@@ -812,7 +763,7 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; b
     loadedTuples.set(message.tupleIndex, tupleImages);
 
     if (message.tupleIndex === currentTupleIndex) {
-      images = reorderImagesForDisplay(tupleImages);
+      images = reorderImagesForDisplay(tupleImages, model.order);
       render();
 
       const allLoaded = images.every(img => img !== undefined);
@@ -837,7 +788,7 @@ function handleImage(message: { tupleIndex: TupleIndex; modalityIndex: number; b
     decodeRetried.add(key);
     // Re-derive the original priority: omitting `sibling` would promote a sibling's retry to VISIBLE.
     const onScreen = message.tupleIndex === currentTupleIndex &&
-      modalityOrder[currentModalityIndex] === message.modalityIndex;
+      model.order[currentModalityIndex] === message.modalityIndex;
     // forceReload is required: without it the retry is served the same cached, undecodable bytes.
     requestSlot(asTuple(message.tupleIndex), asOriginal(message.modalityIndex), onScreen ? 'visible' : 'sibling', true);
   };
@@ -849,7 +800,7 @@ function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: numb
   console.warn(`Image unavailable for ${message.tupleIndex}-${message.modalityIndex}: ${message.error}`);
 
   // Ignore if the tuple was removed while this was in flight.
-  if (message.tupleIndex >= tuples.length) return;
+  if (message.tupleIndex >= model.tuples.length) return;
 
   const tupleImages = loadedTuples.get(message.tupleIndex) || [];
   while (tupleImages.length <= message.modalityIndex) {
@@ -859,7 +810,7 @@ function handleImageError(message: { tupleIndex: TupleIndex; modalityIndex: numb
   loadedTuples.set(message.tupleIndex, tupleImages);
 
   if (message.tupleIndex === currentTupleIndex) {
-    images = reorderImagesForDisplay(tupleImages);
+    images = reorderImagesForDisplay(tupleImages, model.order);
     render();
 
     // A fully-loaded tuple (missing slots included) unblocks prefetch.
@@ -919,7 +870,7 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
   });
   
   if (message.tupleIndex === currentTupleIndex) {
-    images = tupleImages ? reorderImagesForDisplay(tupleImages) : [];
+    images = tupleImages ? reorderImagesForDisplay(tupleImages, model.order) : [];
     // If current modality was deleted, try to switch to another
     if (!images[currentModalityIndex] || (images[currentModalityIndex] as any).missing) {
       const availableIdx = images.findIndex(img => img && !(img as any).missing);
@@ -933,7 +884,7 @@ function handleFileDeleted(message: { tupleIndex: TupleIndex; modalityIndex: num
 
 function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: number; imageInfo?: any }) {
   // Update the tuple's image info if provided (e.g. a new file was added to an existing tuple)
-  const tuple = tuples[message.tupleIndex];
+  const tuple = model.tuples[message.tupleIndex];
   if (message.imageInfo && tuple && tuple.images[message.modalityIndex]) {
     tuple.images[message.modalityIndex].name = message.imageInfo.name;
   }
@@ -954,58 +905,54 @@ function handleFileRestored(message: { tupleIndex: TupleIndex; modalityIndex: nu
 
   // If this is the current tuple, update display and request the restored image
   if (message.tupleIndex === currentTupleIndex) {
-    images = tupleImages ? reorderImagesForDisplay(tupleImages) : [];
+    images = tupleImages ? reorderImagesForDisplay(tupleImages, model.order) : [];
     render();
     // Request the image so it actually loads (instead of just showing spinner)
     requestSlot(asTuple(message.tupleIndex), asOriginal(message.modalityIndex), 'visible');
   }
 }
 
+/** Adopts a structural change: the slot caches and the selection follow its remap. */
+function applyChange(change: Change): void {
+  const { remap } = change;
+  model = change.model;
+  // Re-index the caches instead of clearing them — a wholesale clear blanks every loaded thumbnail and prefetched neighbour on screen.
+  const shifted = new Map<TupleIndex, LoadedImage[]>();
+  for (const [t, imgs] of loadedTuples) {
+    const t2 = remap.tuple(t);
+    if (t2 === null) continue;
+    const slots: LoadedImage[] = [];
+    imgs.forEach((img, o) => {
+      const o2 = remap.modality(asOriginal(o));
+      if (o2 !== null) slots[o2] = img;
+    });
+    shifted.set(t2, slots);
+  }
+  loadedTuples = shifted;
+  // A slot the remap drops is nobody's, so the re-key revokes its url.
+  thumbnailUrls.rekey((t, o) => {
+    const t2 = remap.tuple(asTuple(t));
+    const o2 = remap.modality(asOriginal(o));
+    return t2 === null || o2 === null ? null : `${t2}-${o2}`;
+  });
+  // The viewed and peeked modalities are display indices of the old order; one whose column is gone falls back to the first.
+  currentModalityIndex = remap.display(currentModalityIndex) ?? asDisplay(0);
+  previousModalityIndex = remap.display(previousModalityIndex) ?? asDisplay(0);
+}
+
 function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
   // decodeRetried is index-keyed and a removal shifts every later index; clearing is cheaper than re-indexing.
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
-  tuples.splice(message.tupleIndex, 1);
-  loadedTuples.delete(message.tupleIndex);
+  applyChange(tupleRemoved(model, message.tupleIndex));
 
-  const newLoadedTuples = new Map<TupleIndex, LoadedImage[]>();
-  for (const [idx, imgs] of loadedTuples) {
-    if (idx > message.tupleIndex) {
-      newLoadedTuples.set(asTuple(idx - 1), imgs);
-    } else {
-      newLoadedTuples.set(idx, imgs);
-    }
-  }
-  loadedTuples.clear();
-  for (const [idx, imgs] of newLoadedTuples) {
-    loadedTuples.set(idx, imgs);
-  }
-
-  // Re-index thumbnail urls (shift indices down); the removed row's are nobody's, so they are revoked.
-  thumbnailUrls.rekey((tIdx, mIdx) =>
-    tIdx === message.tupleIndex ? null : `${tIdx > message.tupleIndex ? tIdx - 1 : tIdx}-${mIdx}`);
-
-  const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
-  for (const [tIdx, mIdx] of winners) {
-    if (tIdx > message.tupleIndex) {
-      newWinners.set(asTuple(tIdx - 1), mIdx);
-    } else if (tIdx < message.tupleIndex) {
-      newWinners.set(tIdx, mIdx);
-    }
-    // tIdx === message.tupleIndex: discard
-  }
-  winners.clear();
-  for (const [tIdx, mIdx] of newWinners) {
-    winners.set(tIdx, mIdx);
-  }
-
-  if (currentTupleIndex >= tuples.length) {
-    currentTupleIndex = asTuple(Math.max(0, tuples.length - 1));
+  if (currentTupleIndex >= model.tuples.length) {
+    currentTupleIndex = asTuple(Math.max(0, model.tuples.length - 1));
   } else if (currentTupleIndex > message.tupleIndex) {
     currentTupleIndex--;
   }
 
-  isMultiTupleMode = tuples.length > 1;
+  isMultiTupleMode = model.tuples.length > 1;
   buildCarousel();
 
   // Unconditional: at zero rows loadTuple raises the notice instead, and nothing else would (docs/loading-architecture.md: empty-comparison-is-terminal).
@@ -1014,44 +961,18 @@ function handleTupleDeleted(message: { tupleIndex: TupleIndex }) {
 
 function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex }) {
   // A row arriving into an empty comparison becomes the view; nothing else re-aims it (docs/loading-architecture.md: empty-comparison-is-terminal).
-  const wasEmpty = tuples.length === 0;
+  const wasEmpty = model.tuples.length === 0;
   // decodeRetried is index-keyed and an insertion shifts every later index; clearing is cheaper than re-indexing.
   decodeRetried.clear();
   requestedSlots.clear(); // same index-shift reason: a stale mark would suppress the slot's re-request
-  tuples.splice(message.tupleIndex, 0, message.tuple);
-
-  const newLoadedTuples = new Map<TupleIndex, LoadedImage[]>();
-  for (const [idx, imgs] of loadedTuples) {
-    if (idx >= message.tupleIndex) {
-      newLoadedTuples.set(asTuple(idx + 1), imgs);
-    } else {
-      newLoadedTuples.set(idx, imgs);
-    }
-  }
-  loadedTuples.clear();
-  for (const [idx, imgs] of newLoadedTuples) {
-    loadedTuples.set(idx, imgs);
-  }
-
-  // Re-index thumbnail urls (shift indices up); nothing is dropped, so nothing is revoked.
-  thumbnailUrls.rekey((tIdx, mIdx) => `${tIdx >= message.tupleIndex ? tIdx + 1 : tIdx}-${mIdx}`);
-
-  const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
-  for (const [tIdx, mIdx] of winners) {
-    if (tIdx >= message.tupleIndex) {
-      newWinners.set(asTuple(tIdx + 1), mIdx);
-    } else {
-      newWinners.set(tIdx, mIdx);
-    }
-  }
-  winners = newWinners;
+  applyChange(tupleAdded(model, message.tupleIndex, message.tuple));
 
   // The >= guard mirrors the extension side (docs/file-watching.md: mutation-never-strands-view).
   if (currentTupleIndex >= message.tupleIndex) {
     currentTupleIndex++;
   }
 
-  isMultiTupleMode = tuples.length > 1;
+  isMultiTupleMode = model.tuples.length > 1;
 
   if (isMultiTupleMode) {
     updateCarouselThumbSize();
@@ -1069,53 +990,8 @@ function handleTupleAdded(message: { tuple: TupleInfo; tupleIndex: TupleIndex })
 
 function handleModalityAdded(message: { modality: string; modalityPath: string; modalityColors: string[]; modalityIndex: OriginalModalityIndex }) {
   // A column arriving into a comparison with none becomes the view, as a row does (docs/loading-architecture.md: empty-comparison-is-terminal).
-  const hadNoColumns = modalities.length === 0;
-  // The user's arrangement survives the insert; the new column lands beside its original-order predecessor (docs/tuple-matching.md: rearrangement-survives-insert).
-  const inserted = displayOrderAfterInsert(modalityOrder, message.modalityIndex);
-  const displayPos = inserted.displayPos;
-  modalities.splice(displayPos, 0, message.modality);
-  modalityPaths.splice(displayPos, 0, message.modalityPath);
-  // message.modalityColors is original-order over the post-insert set; permute into the preserved display order.
-  modalityColors = inserted.order.map(o => message.modalityColors[o]);
-
-  // winners hold display indices: the arrangement is preserved, so only slots at/after the insertion point shift.
-  const shiftedWinners = new Map<TupleIndex, DisplayModalityIndex>();
-  for (const [tIdx, displayIdx] of winners) {
-    shiftedWinners.set(tIdx, asDisplay(displayIdx >= displayPos ? displayIdx + 1 : displayIdx));
-  }
-  winners = shiftedWinners;
-
-  // Original-index-keyed, so it shifts with the splice like everything else (docs/file-watching.md: reindex-in-lockstep).
-  hiddenModalities = new Set([...hiddenModalities].map(o => asOriginal(o >= message.modalityIndex ? o + 1 : o)));
-
-  modalityOrder = inserted.order.map(o => asOriginal(o));
-
-  // Focus stays where the user is; only its display index may shift.
-  currentModalityIndex = asDisplay(currentModalityIndex >= displayPos ? currentModalityIndex + 1 : currentModalityIndex);
-  previousModalityIndex = asDisplay(previousModalityIndex >= displayPos ? previousModalityIndex + 1 : previousModalityIndex);
-  
-  for (let t = 0; t < tuples.length; t++) {
-    const tuple = tuples[t];
-    const placeholder: ImageInfo = {
-      name: '', // Empty name marks a missing slot, keeping webview tuples dense (docs/tuple-matching.md: sparse-vs-dense-tuples)
-      modality: message.modality,
-      tupleIndex: asTuple(t),
-      modalityIndex: message.modalityIndex
-    };
-    tuple.images.splice(message.modalityIndex, 0, placeholder);
-
-    for (let i = message.modalityIndex + 1; i < tuple.images.length; i++) {
-      tuple.images[i].modalityIndex = asOriginal(i);
-    }
-  }
-  
-  // Re-index the caches instead of clearing them, like the tuple handlers do — a wholesale clear blanks every loaded thumbnail and prefetched neighbour on screen.
-  for (const [idx, imgs] of loadedTuples) {
-    const shifted: LoadedImage[] = [];
-    imgs.forEach((img, i) => { shifted[i >= message.modalityIndex ? i + 1 : i] = img; });
-    loadedTuples.set(idx, shifted);
-  }
-  thumbnailUrls.rekey((tIdx, mIdx) => `${tIdx}-${mIdx >= message.modalityIndex ? mIdx + 1 : mIdx}`);
+  const hadNoColumns = model.modalities.length === 0;
+  applyChange(modalityAdded(model, message));
   images = [];
   // Index-keyed and every modality index just shifted; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
@@ -1130,7 +1006,7 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
   // Re-request every row: existing cells repaint in place from the extension's memory cache; only the new column generates.
   vscode.postMessage({
     type: 'requestThumbnails',
-    tupleIndices: Array.from({ length: tuples.length }, (_, i) => i)
+    tupleIndices: Array.from({ length: model.tuples.length }, (_, i) => i)
   });
 
   // The shift above aimed past the only column there is; the returning content takes the view.
@@ -1144,72 +1020,7 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
 }
 
 function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }) {
-  // Un-permute before splicing a wire index, and carry display-space state before the reset below (docs/tuple-matching.md: unpermute-before-splice).
-  const prevOrder = modalityOrder;
-  modalities = restoreOriginalOrder(modalities, prevOrder);
-  modalityColors = restoreOriginalOrder(modalityColors, prevOrder);
-  modalityPaths = restoreOriginalOrder(modalityPaths, prevOrder);
-
-  const removedModality = modalities[message.modalityIndex];
-
-  modalities.splice(message.modalityIndex, 1);
-  modalityColors.splice(message.modalityIndex, 1);
-  modalityPaths.splice(message.modalityIndex, 1);
-
-  // Old display index -> new index; drop the removed modality, shift later ones down (new space is identity).
-  const carryIndex = (displayIdx: DisplayModalityIndex): number => {
-    const originalIdx = prevOrder[displayIdx];
-    if (originalIdx === undefined || originalIdx === message.modalityIndex) return -1;
-    return originalIdx > message.modalityIndex ? originalIdx - 1 : originalIdx;
-  };
-
-  const shiftedWinners = new Map<TupleIndex, DisplayModalityIndex>();
-  for (const [tIdx, displayIdx] of winners) {
-    const carried = carryIndex(displayIdx);
-    if (carried >= 0) shiftedWinners.set(tIdx, asDisplay(carried));
-  }
-  winners = shiftedWinners;
-
-  // Original-index-keyed, so it shifts with the splice like everything else (docs/file-watching.md: reindex-in-lockstep).
-  const shiftedHidden = new Set<OriginalModalityIndex>();
-  for (const o of hiddenModalities) {
-    const sh = shiftIndexAfterRemoval(o, message.modalityIndex);
-    if (sh !== null) shiftedHidden.add(asOriginal(sh));
-  }
-  hiddenModalities = shiftedHidden;
-
-  // Reset modalityOrder to default [0, 1, 2, ...] - the arrays above are back in original order
-  modalityOrder = modalities.map((_, i) => asOriginal(i));
-
-  // The viewed/peeked modalities are display indices in the old order; carry them into the new space.
-  currentModalityIndex = asDisplay(Math.max(0, carryIndex(currentModalityIndex)));
-  previousModalityIndex = asDisplay(Math.max(0, carryIndex(previousModalityIndex)));
-
-  if (currentModalityIndex >= modalities.length) {
-    currentModalityIndex = asDisplay(Math.max(0, modalities.length - 1));
-  }
-  if (previousModalityIndex >= modalities.length) {
-    previousModalityIndex = asDisplay(Math.max(0, modalities.length - 1));
-  }
-
-  for (const tuple of tuples) {
-    tuple.images = tuple.images.filter(img => img.modality !== removedModality);
-    tuple.images.forEach((img, i) => {
-      img.modalityIndex = asOriginal(i);
-    });
-  }
-  
-  // Re-index the caches instead of clearing them, like the tuple handlers do — a wholesale clear blanks every loaded thumbnail and prefetched neighbour on screen.
-  for (const [idx, imgs] of loadedTuples) {
-    const shifted: LoadedImage[] = [];
-    imgs.forEach((img, i) => {
-      if (i !== message.modalityIndex) shifted[i > message.modalityIndex ? i - 1 : i] = img;
-    });
-    loadedTuples.set(idx, shifted);
-  }
-  // The removed column's urls are nobody's, so the re-key revokes them.
-  thumbnailUrls.rekey((tIdx, mIdx) =>
-    mIdx === message.modalityIndex ? null : `${tIdx}-${mIdx > message.modalityIndex ? mIdx - 1 : mIdx}`);
+  applyChange(modalityRemoved(model, message.modalityIndex));
   images = [];
   // Index-keyed and every later modality index just shifted; a stale bit would cost a slot its one retry.
   decodeRetried.clear();
@@ -1223,31 +1034,11 @@ function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }
   
   vscode.postMessage({
     type: 'requestThumbnails',
-    tupleIndices: Array.from({ length: tuples.length }, (_, i) => i)
+    tupleIndices: Array.from({ length: model.tuples.length }, (_, i) => i)
   });
   
   // Reload the current tuple so the removed column never strands the view (docs/file-watching.md: mutation-never-strands-view).
   loadTuple(currentTupleIndex);
-}
-
-
-// Inverse of the modalityOrder permutation for the label arrays: order[displayIdx] = originalIdx.
-function restoreOriginalOrder<T>(displayArr: T[], order: number[]): T[] {
-  const original = new Array<T>(order.length);
-  for (let displayIdx = 0; displayIdx < order.length; displayIdx++) {
-    original[order[displayIdx]] = displayArr[displayIdx];
-  }
-  return original;
-}
-
-function reorderImagesForDisplay(originalImages: LoadedImage[]): (LoadedImage | undefined)[] {
-  const reordered: (LoadedImage | undefined)[] = new Array(modalityOrder.length);
-  for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
-    const originalIdx = modalityOrder[displayIdx];
-    // Handle out-of-bounds access (originalImages might be shorter than modalityOrder)
-    reordered[displayIdx] = originalIdx < originalImages.length ? originalImages[originalIdx] : undefined;
-  }
-  return reordered;
 }
 
 // Bounds the webview cache, which prefetch keeps pushing ±prefetchCount neighbours into.
@@ -1289,7 +1080,7 @@ function requestSlot(tupleIndex: TupleIndex, modalityIndex: OriginalModalityInde
 function loadTuple(index: TupleIndex) {
   // Ahead of the range guard, which at zero rows returns before anything can raise the notice; also the single site that clears it (docs/loading-architecture.md: empty-comparison-is-terminal).
   if (applyEmptyNotice()) return;
-  if (index < 0 || index >= tuples.length) return;
+  if (index < 0 || index >= model.tuples.length) return;
 
   // Only an actual tuple change resets the view — re-index paths reload the same tuple and must not.
   if (index !== currentTupleIndex && !config.keepZoomOnTupleChange) {
@@ -1303,7 +1094,7 @@ function loadTuple(index: TupleIndex) {
   evictDistantWebviewTuples();
   // Reset to the target tuple's cache so no stale frame from the previous tuple can show.
   const cachedForIndex = loadedTuples.get(index);
-  images = cachedForIndex ? reorderImagesForDisplay(cachedForIndex) : new Array(modalityOrder.length).fill(undefined);
+  images = cachedForIndex ? reorderImagesForDisplay(cachedForIndex, model.order) : new Array(model.order.length).fill(undefined);
 
   // Tell the extension immediately, so it can cancel stale loads.
   vscode.postMessage({
@@ -1338,7 +1129,7 @@ function loadTuple(index: TupleIndex) {
 
   const cachedSlots = loadedTuples.get(index);
   const allCached = !!cachedSlots &&
-    tuples[index].images.every((_, i) => cachedSlots[i] !== undefined);
+    model.tuples[index].images.every((_, i) => cachedSlots[i] !== undefined);
   if (allCached) {
     postTupleFullyLoaded(index);
     return;
@@ -1348,9 +1139,9 @@ function loadTuple(index: TupleIndex) {
   const planFor = () => {
     const have = loadedTuples.get(index);
     return tupleArrivalPlan({
-      modalityOrder,
+      modalityOrder: model.order,
       currentDisplayIndex: currentModalityIndex,
-      isHidden: o => hiddenModalities.has(asOriginal(o)),
+      isHidden: o => model.hidden.has(asOriginal(o)),
       isCached: o => !!have && have[o] !== undefined
     });
   };
@@ -1390,9 +1181,9 @@ function visibleCarouselRows(): number {
 function postCurrentModality(displayModalityIndex: DisplayModalityIndex) {
   vscode.postMessage({
     type: 'setCurrentModality',
-    modalityOrder: modalityOrder.slice(),
+    modalityOrder: model.order.slice(),
     currentDisplayIndex: displayModalityIndex,
-    hiddenModalities: Array.from(hiddenModalities),
+    hiddenModalities: Array.from(model.hidden),
     visibleRows: visibleCarouselRows()
   });
 }
@@ -1408,16 +1199,16 @@ function postTupleFullyLoaded(tupleIndex: TupleIndex) {
   vscode.postMessage({
     type: 'tupleFullyLoaded',
     tupleIndex,
-    modalityOrder: modalityOrder.slice(),
+    modalityOrder: model.order.slice(),
     currentDisplayIndex: currentModalityIndex,
-    hiddenModalities: Array.from(hiddenModalities),
+    hiddenModalities: Array.from(model.hidden),
     visibleRows: visibleCarouselRows()
   });
 }
 
 function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: number) {
   // Thumbnails are keyed by original modality index, not display index.
-  const originalModIdx = modalityOrder[displayModalityIndex];
+  const originalModIdx = model.order[displayModalityIndex];
   const thumbnailKey = `${tupleIndex}-${originalModIdx}`;
   const thumbnailDataUrl = thumbnailUrls.get(thumbnailKey);
   
@@ -1447,7 +1238,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
         const centerOffsetX = carouselOffset / 2;
         canvasEl.style.transform = `translate(calc(-50% + ${panX + centerOffsetX}px), calc(-50% + ${panY}px))`;
 
-        const tuple = tuples[tupleIndex];
+        const tuple = model.tuples[tupleIndex];
         updateStatus(`${tuple.name} | Loading...`, `Zoom: ${zoom.toFixed(1)}x`, tupleIndex);
       }
     };
@@ -1456,7 +1247,7 @@ function showPreviewOrLoading(tupleIndex: TupleIndex, displayModalityIndex: numb
     // No thumbnail yet — a drawn placeholder beats a blank white canvas.
     drawCanvasNotice('Loading...');
 
-    const modalityName = modalities[displayModalityIndex] || 'Image';
+    const modalityName = modalityAt(model, displayModalityIndex)?.name || 'Image';
     updateStatus(`${modalityName}: Loading...`, `Zoom: ${zoom.toFixed(1)}x`, tupleIndex);
   }
 
@@ -1476,11 +1267,11 @@ const TOUCH_MIN_TILE_PX = 56;
 
 /** Carousel width that fits every modality column at perTile px (6px row padding each side, scrollbar gutter, 2px gaps). */
 function carouselFitWidth(perTile: number): number {
-  return 2 * CAROUSEL_ROW_PAD + SCROLLBAR_GUTTER + modalities.length * perTile + (modalities.length - 1) * CAROUSEL_TILE_GAP;
+  return 2 * CAROUSEL_ROW_PAD + SCROLLBAR_GUTTER + model.modalities.length * perTile + (model.modalities.length - 1) * CAROUSEL_TILE_GAP;
 }
 
 function updateCarouselThumbSize(snapToDevicePixels = true) {
-  const numModalities = modalities.length;
+  const numModalities = model.modalities.length;
   const availableWidth = CAROUSEL_WIDTH - 2 * CAROUSEL_ROW_PAD - SCROLLBAR_GUTTER - (numModalities - 1) * CAROUSEL_TILE_GAP;
   // Fractional, not floored: integer steps made every tile snap visibly during a resize drag.
   CAROUSEL_THUMB_SIZE = availableWidth / numModalities;
@@ -1513,7 +1304,7 @@ function buildCarousel() {
   carouselWallEl = null;
   carouselThumbEl = null;
 
-  if (!isMultiTupleMode || tuples.length <= 1) {
+  if (!isMultiTupleMode || model.tuples.length <= 1) {
     carouselEl.classList.remove('active');
     carouselResizeEl.classList.remove('active');
     viewerEl.classList.remove('has-carousel');
@@ -1526,7 +1317,7 @@ function buildCarousel() {
   viewerEl.classList.add('has-carousel');
   viewerEl.style.setProperty('--carousel-offset', carouselOffsetPx() + 'px');
 
-  carouselColPool = columnPoolSize(CAROUSEL_WIDTH, modalityOrder.length);
+  carouselColPool = columnPoolSize(CAROUSEL_WIDTH, model.order.length);
 
   // Virtual shell: an arithmetically sized wall plus the custom scrollbar; rows materialize in ensureVisibleCarouselRows.
   carouselWallEl = document.createElement('div');
@@ -1562,21 +1353,18 @@ function updateCarouselSelection(centerOnCurrent = true) {
 function toggleWinner(tupleIndex: TupleIndex, displayModalityIndex: DisplayModalityIndex) {
   if (!votingEnabled) return;
 
-  const currentWinner = winners.get(tupleIndex);
-
   // The extension's modalities array is in original order, not display order.
-  const originalModalityIndex = modalityOrder[displayModalityIndex];
+  const originalModalityIndex = model.order[displayModalityIndex];
 
-  if (currentWinner === displayModalityIndex) {
-    winners.delete(tupleIndex);
+  if (model.winners.get(tupleIndex) === originalModalityIndex) {
+    model = winnerSet(model, tupleIndex, null);
     vscode.postMessage({
       type: 'setWinner',
       tupleIndex,
       modalityIndex: null
     });
   } else {
-    // Store the display index locally, send the original to the extension.
-    winners.set(tupleIndex, displayModalityIndex);
+    model = winnerSet(model, tupleIndex, originalModalityIndex);
     vscode.postMessage({
       type: 'setWinner',
       tupleIndex,
@@ -1619,7 +1407,7 @@ function carouselColumnPitch(): number {
 
 // No phase-lock pad: it showed as a blank strip at the bottom, and its mod-based size sawtoothed during resize, bouncing the bottom clamp.
 function carouselContentHeight(): number {
-  return tuples.length * carouselRowHeight();
+  return model.tuples.length * carouselRowHeight();
 }
 
 function carouselMaxOffset(): number {
@@ -1662,9 +1450,9 @@ function ensureVisibleCarouselRows() {
   ensureColumnCapacity();
   const viewH = carouselEl.clientHeight;
   const first = Math.max(0, Math.floor(carouselOffset / rowH) - CAROUSEL_OVERSCAN);
-  const last = Math.min(tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
+  const last = Math.min(model.tuples.length - 1, Math.floor((carouselOffset + viewH) / rowH) + CAROUSEL_OVERSCAN);
   // Sized for the smallest possible row (MIN_TILE_PITCH), not the current one: a pool-size change remaps the whole ring (slot = j % pool) and rebinds every row — a visible hitch mid-resize (docs/loading-architecture.md: columns-virtualize-like-rows).
-  const needed = Math.min(tuples.length, Math.max(last - first + 1, Math.ceil(viewH / MIN_TILE_PITCH) + 2 * CAROUSEL_OVERSCAN + 2));
+  const needed = Math.min(model.tuples.length, Math.max(last - first + 1, Math.ceil(viewH / MIN_TILE_PITCH) + 2 * CAROUSEL_OVERSCAN + 2));
   while (carouselRowPool.length < needed) {
     const el = createCarouselRowShell();
     carouselRowPool.push(el);
@@ -1720,7 +1508,7 @@ let carouselColPool = 0;
  * the caller's own fill, and a rebind against a stale ring collides columns onto one slot.
  */
 function ensureColumnCapacity(): void {
-  const want = columnPoolSize(CAROUSEL_WIDTH, modalityOrder.length);
+  const want = columnPoolSize(CAROUSEL_WIDTH, model.order.length);
   if (want <= carouselColPool) return;
   carouselColPool = want;
   for (const row of carouselRowPool) row.remove();
@@ -1772,7 +1560,7 @@ function currentColumnWindow(): { first: number; last: number } {
     carouselHScrollEl?.clientWidth || CAROUSEL_WIDTH,
     carouselColumnPitch(),
     CAROUSEL_ROW_PAD,
-    modalityOrder.length
+    model.order.length
   );
 }
 
@@ -1786,7 +1574,7 @@ function carouselTileFor(tupleIndex: number, originalModalityIndex: number): HTM
   if (pool === 0) return null;
   const rowSlot = tupleIndex % pool;
   if (carouselRowBound[rowSlot] !== tupleIndex) return null;
-  const displayIdx = modalityOrder.indexOf(asOriginal(originalModalityIndex));
+  const displayIdx = model.order.indexOf(asOriginal(originalModalityIndex));
   if (displayIdx < 0) return null;
   const parts = rowParts.get(carouselRowPool[rowSlot]);
   if (!parts || parts.containers.length === 0) return null;
@@ -1830,7 +1618,7 @@ function pumpCarouselImages(): void {
       const displayIdx = parts.colBound[slot];
       if (displayIdx < 0) continue;
       const img = parts.imgs[slot];
-      const url = thumbnailUrls.get(`${tupleIdx}-${modalityOrder[displayIdx]}`);
+      const url = thumbnailUrls.get(`${tupleIdx}-${model.order[displayIdx]}`);
       if (!url || img.getAttribute('src') === url) continue;
       img.src = url;
       img.classList.remove('placeholder');
@@ -1859,7 +1647,7 @@ function bindCarouselRow(el: HTMLElement, tupleIdx: number, win: ColumnWindow) {
       parts.colBound[slot] = -1;
     }
   }
-  const winnerIdx = winners.get(asTuple(tupleIdx));
+  const winnerIdx = winnerAt(model, asTuple(tupleIdx));
   const pitch = carouselColumnPitch();
   for (let displayIdx = first; displayIdx <= last; displayIdx++) {
     // The ring mapping itself (docs/loading-architecture.md: columns-virtualize-like-rows).
@@ -1879,7 +1667,7 @@ function bindCarouselTile(
 ): void {
   const container = parts.containers[slot];
   const img = parts.imgs[slot];
-  const originalIdx = modalityOrder[displayIdx];
+  const originalIdx = model.order[displayIdx];
   if (parts.colBound[slot] !== displayIdx) {
     container.style.display = '';
     img.dataset.displayIndex = String(displayIdx);
@@ -2091,12 +1879,13 @@ function buildModalitySelector() {
   closeContextMenu();
   modalitySelectorEl.innerHTML = '';
 
-  // modalities/modalityColors/modalityPaths are already in display order after any reordering.
-  for (let displayIdx = 0; displayIdx < modalityOrder.length; displayIdx++) {
+  // Each pill shows the record its display position names.
+  for (let displayIdx = 0; displayIdx < model.order.length; displayIdx++) {
     const btn = document.createElement('button');
+    const record = modalityAt(model, displayIdx)!;
     btn.className = 'modality-btn';
-    btn.textContent = pillLabel(modalities[displayIdx]);
-    btn.style.background = modalityColors[displayIdx];
+    btn.textContent = pillLabel(record.name);
+    btn.style.background = record.color;
     btn.dataset.displayIndex = String(displayIdx);
 
 
@@ -2121,7 +1910,7 @@ modalitySelectorEl.addEventListener('mouseover', (e) => {
   const btn = (e.target as HTMLElement)?.closest?.('.modality-btn') as HTMLElement | null;
   if (!btn) return;
   const displayIdx = parseInt(btn.dataset.displayIndex || '0', 10);
-  showPillTooltip(modalityPaths[displayIdx], btn);
+  showPillTooltip(modalityAt(model, displayIdx)?.path ?? '', btn);
 });
 modalitySelectorEl.addEventListener('mouseout', (e) => {
   const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
@@ -2133,11 +1922,11 @@ modalitySelectorEl.addEventListener('mouseout', (e) => {
 function contextTargetFor(target: HTMLElement | null): MenuContext | null {
   const pill = target?.closest?.('.modality-btn') as HTMLElement | null;
   if (pill) {
-    const original = modalityOrder[parseInt(pill.dataset.displayIndex || '0', 10)];
-    return { section: 'pill', tupleIndex: currentTupleIndex, modalityIndex: original, hidden: hiddenModalities.has(original) };
+    const original = model.order[parseInt(pill.dataset.displayIndex || '0', 10)];
+    return { section: 'pill', tupleIndex: currentTupleIndex, modalityIndex: original, hidden: model.hidden.has(original) };
   }
   if (target?.closest?.('#viewer')) {
-    return { section: 'image', tupleIndex: currentTupleIndex, modalityIndex: modalityOrder[currentModalityIndex] };
+    return { section: 'image', tupleIndex: currentTupleIndex, modalityIndex: model.order[currentModalityIndex] };
   }
   return null;
 }
@@ -2158,9 +1947,7 @@ function runMenuAction(action: MenuActionId, target: MenuContext): void {
       copyCurrentImage();
       break;
     case 'toggleHidden': {
-      const original = asOriginal(target.modalityIndex);
-      if (hiddenModalities.has(original)) hiddenModalities.delete(original);
-      else hiddenModalities.add(original);
+      model = hiddenToggled(model, asOriginal(target.modalityIndex));
       updateModalitySelector();
       break;
     }
@@ -2172,9 +1959,10 @@ function runMenuAction(action: MenuActionId, target: MenuContext): void {
 function updateModalitySelector() {
   // Every view change repaints the pills — order, hide, tuple, modality, and render() on zoom and pan.
   scheduleViewSave();
-  const winCounts: number[] = new Array(modalities.length).fill(0);
+  const winCounts: number[] = new Array(model.modalities.length).fill(0);
   if (votingEnabled) {
-    for (const [_, modalityIdx] of winners) {
+    for (const o of model.winners.values()) {
+      const modalityIdx = toDisplay(o, model.order);
       if (modalityIdx >= 0 && modalityIdx < winCounts.length) {
         winCounts[modalityIdx]++;
       }
@@ -2185,8 +1973,8 @@ function updateModalitySelector() {
   buttons.forEach((btn) => {
     const displayIdx = parseInt((btn as HTMLElement).dataset.displayIndex || '0', 10);
     // Re-read on every update because [ ] reordering changes which original modality this position shows.
-    const originalIdx = modalityOrder[displayIdx];
-    btn.classList.toggle('hidden-modality', hiddenModalities.has(originalIdx));
+    const originalIdx = model.order[displayIdx];
+    btn.classList.toggle('hidden-modality', model.hidden.has(originalIdx));
     if (displayIdx === currentModalityIndex) {
       btn.classList.add('active');
       btn.classList.remove('inactive');
@@ -2196,7 +1984,7 @@ function updateModalitySelector() {
     }
 
     // Written only when it changed: replacing the text node on every render repainted the pill mid-transition, which is what read as flicker (docs/loading-architecture.md: selection-centres-on-navigation).
-    const truncName = pillLabel(modalities[displayIdx]);
+    const truncName = pillLabel(modalityAt(model, displayIdx)!.name);
     const label = votingEnabled && winCounts[displayIdx] > 0 ? `${truncName} (${winCounts[displayIdx]})` : truncName;
     if (btn.textContent !== label) btn.textContent = label;
   });
@@ -2208,32 +1996,10 @@ function moveCurrentModality(direction: number) {
 
 /** Move the modality at display `currentPos` to `newPos`, the ones between closing up; `[`/`]` and a pill drop both land here (docs/pointer-input.md: reorder-is-one-move). */
 function moveModality(currentPos: number, newPos: number, rebuild = true): boolean {
-  if (newPos < 0 || newPos >= modalities.length || newPos === currentPos) return false;
-  const move = <T>(a: T[]) => { a.splice(newPos, 0, a.splice(currentPos, 1)[0]); };
-  const remap = (k: number) => asDisplay(movedIndex(k, currentPos, newPos));
-
-  move(modalities);
-
-  move(modalityColors);
-
-  // Move in paths so the pill tooltip stays attached to its modality
-  move(modalityPaths);
-
-  move(modalityOrder);
-
-  if (votingEnabled) {
-    const newWinners = new Map<TupleIndex, DisplayModalityIndex>();
-    for (const [tupleIndex, winnerIdx] of winners) {
-      newWinners.set(tupleIndex, remap(winnerIdx));
-    }
-    winners = newWinners;
-  }
-
-  // Keep the Space-peek target attached to its modality across the move.
-  previousModalityIndex = remap(previousModalityIndex);
-
-  currentModalityIndex = remap(currentModalityIndex);
-  // render() re-derives `images` from the cache using the new modalityOrder.
+  const change = modalityMoved(model, currentPos, newPos);
+  if (!change) return false;
+  applyChange(change);
+  // render() re-derives `images` from the cache using the new order.
   if (rebuild) rebuildAfterMove();
   return true;
 }
@@ -2254,7 +2020,7 @@ function rebuildAfterMove(): void {
  * showing, and it is the only site that hides the canvas (docs/loading-architecture.md: empty-comparison-is-terminal).
  */
 function applyEmptyNotice(): boolean {
-  const notice = emptyNotice({ tupleCount: tuples.length, modalityCount: modalities.length, missingRootPath: rootMissingPath });
+  const notice = emptyNotice({ tupleCount: model.tuples.length, modalityCount: model.modalities.length, missingRootPath: rootMissingPath });
   emptyNoticeEl.classList.toggle('active', notice !== null);
   canvasEl.classList.toggle('hidden', notice !== null);
   if (!notice) return false;
@@ -2277,8 +2043,8 @@ function render() {
   // Re-derive from the cache; module-level `images` holds a previous tuple's frames (docs/loading-architecture.md: render-from-loaded-tuples).
   const cached = loadedTuples.get(currentTupleIndex);
   images = cached && cached.length > 0
-    ? reorderImagesForDisplay(cached)
-    : new Array(modalityOrder.length).fill(undefined);
+    ? reorderImagesForDisplay(cached, model.order)
+    : new Array(model.order.length).fill(undefined);
 
   const currentImage = images[currentModalityIndex];
 
@@ -2295,12 +2061,12 @@ function render() {
       drawCanvasNotice('Image not available');
       canvasEl.classList.remove('preview');
       imageLoaderEl.classList.remove('active');
-      const modalityName = modalities[currentModalityIndex] || 'Image';
+      const modalityName = modalityAt(model, currentModalityIndex)?.name || 'Image';
       updateStatus(`${modalityName}: not available`, `Zoom: ${zoom.toFixed(1)}x`, currentTupleIndex);
     } else {
       showPreviewOrLoading(currentTupleIndex, currentModalityIndex);
       // A flip pays one VISIBLE load rather than a spinner nobody clears — before the dwell a first request, after it an upgrade of the tail's (docs/loading-architecture.md: siblings-dwell-gated, request-rank-upgrades).
-      const onScreenSlot = modalityOrder[currentModalityIndex];
+      const onScreenSlot = model.order[currentModalityIndex];
       if (loadDebounceTimer === null && onScreenSlot !== undefined) requestSlot(currentTupleIndex, onScreenSlot, 'visible');
     }
     return;
@@ -2383,7 +2149,7 @@ function renderThumbnail(img: HTMLImageElement, imgW: number, imgH: number, view
 // Event handlers
 /** ←/→ and a sideways swipe. Cycling skips hidden pills; click and digit jump still reach them (docs/session-files.md: hidden-is-presentation-only). */
 function stepModality(dir: 1 | -1): void {
-  const target = nextVisibleModality(currentModalityIndex, dir, hiddenByDisplay());
+  const target = nextVisibleModality(currentModalityIndex, dir, hiddenByDisplay(model));
   if (target !== currentModalityIndex) {
     previousModalityIndex = currentModalityIndex;
     currentModalityIndex = asDisplay(target);
@@ -2442,11 +2208,11 @@ function setupTouch(): void {
     stepModality,
     stepTuple: (dir) => {
       const next = currentTupleIndex + dir;
-      if (isMultiTupleMode && next >= 0 && next < tuples.length) loadTuple(asTuple(next));
+      if (isMultiTupleMode && next >= 0 && next < model.tuples.length) loadTuple(asTuple(next));
     },
     flipStart: () => {
       if (!images.length || previousModalityIndex === currentModalityIndex) return;
-      if (hiddenModalities.has(modalityOrder[previousModalityIndex])) return;
+      if (model.hidden.has(model.order[previousModalityIndex])) return;
       touchFlipped = true;
       swapWithPrevious();
     },
@@ -2523,7 +2289,7 @@ function handleKeyDown(e: KeyboardEvent) {
     case 'Space':
       e.preventDefault();
       // A hidden flip *target* is skipped; flipping back to a hidden current the user clicked into still works (docs/session-files.md: hidden-is-presentation-only).
-      if (!spaceDown && !hiddenModalities.has(modalityOrder[previousModalityIndex])) {
+      if (!spaceDown && !model.hidden.has(model.order[previousModalityIndex])) {
         spaceDown = true;
         swapWithPrevious();
       }
@@ -2555,7 +2321,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
     case 'ArrowDown':
       e.preventDefault();
-      if (isMultiTupleMode && currentTupleIndex < tuples.length - 1) {
+      if (isMultiTupleMode && currentTupleIndex < model.tuples.length - 1) {
         loadTuple(asTuple(currentTupleIndex + 1));
       }
       break;
@@ -2564,7 +2330,7 @@ function handleKeyDown(e: KeyboardEvent) {
     case 'Digit5': case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9':
       e.preventDefault();
       const idx = parseInt(e.code.replace('Digit', ''), 10) - 1;
-      if (idx < modalities.length && idx !== currentModalityIndex) {
+      if (idx < model.modalities.length && idx !== currentModalityIndex) {
         previousModalityIndex = currentModalityIndex;
         currentModalityIndex = asDisplay(idx);
         render();

@@ -666,6 +666,86 @@ const mutations = [
     killedBy: 'failure-tone test (a failure is toned error and offers nothing)'
   },
   {
+    name: 'comparisonModel: a removal carries display indices as if they were original (the previous order ignored)',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '      const o = m.order[d];',
+    replace: '      const o = asOriginal(d);',
+    killedBy: 'removal carry test (shown C A D B, A removed: display 0 -> 1, 3 -> 0)'
+  },
+  {
+    name: 'comparisonModel: an insert resets the arrangement to identity',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    order: inserted.order.map(asOriginal),',
+    replace: '    order: inserted.order.map((_, i) => asOriginal(i)),',
+    killedBy: 'insert arrangement test (C A D B + E at original 1 -> C A E D B)'
+  },
+  {
+    name: 'comparisonModel: an insert leaves the display index at the insertion point unshifted',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    display: d => asDisplay(d >= displayPos ? d + 1 : d),',
+    replace: '    display: d => asDisplay(d > displayPos ? d + 1 : d),',
+    killedBy: 'insert display-shift test (D at display 2 moves to 3)'
+  },
+  {
+    name: 'comparisonModel: a move remaps original-indexed votes as if they were display indices',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    modality: same,\n    display: d => asDisplay(movedIndex(d, from, to)),',
+    replace: '    modality: o => asOriginal(movedIndex(o, from, to)),\n    display: d => asDisplay(movedIndex(d, from, to)),',
+    killedBy: 'move test (votes stay [[0, 3], [2, 1], [1, 0]] in original space)'
+  },
+  {
+    name: 'comparisonModel: a move leaves the selection behind its column',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    display: d => asDisplay(movedIndex(d, from, to)),',
+    replace: '    display: same,',
+    killedBy: 'move selection test (0 -> 2 maps displays to [2, 0, 1, 3])'
+  },
+  {
+    name: 'comparisonModel: a tuple insert leaves the row at the insertion point (and its vote) unshifted',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '  const tupleMap = (t: TupleIndex) => asTuple(t >= at ? t + 1 : t);',
+    replace: '  const tupleMap = (t: TupleIndex) => asTuple(t > at ? t + 1 : t);',
+    killedBy: 'tuple-added test (the vote on t1 moves to row 2)'
+  },
+  {
+    name: 'comparisonModel: a tuple removal leaves later rows (and their votes) unshifted',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '  const tupleMap = (t: TupleIndex) => (t === at ? null : asTuple(t > at ? t - 1 : t));',
+    replace: '  const tupleMap = (t: TupleIndex) => (t === at ? null : asTuple(t));',
+    killedBy: 'tuple-removed test (the vote on t2 moves to row 1)'
+  },
+  {
+    name: 'comparisonModel: an insert leaves original indices at the wire index unshifted (docs/file-watching.md: reindex-in-lockstep)',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    modality: o => asOriginal(o >= w ? o + 1 : o),',
+    replace: '    modality: o => asOriginal(o > w ? o + 1 : o),',
+    killedBy: 'insert remap test (original 1 moves to 2; hidden [3, 0] -> [4, 0])'
+  },
+  {
+    name: 'comparisonModel: the hidden set is not carried through the remap (docs/file-watching.md: reindex-in-lockstep)',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    if (o2 !== null) hidden.add(o2);',
+    replace: '    if (o2 !== null) hidden.add(o);',
+    killedBy: 'insert and removal tests (hidden [3, 0] -> [4, 0] on insert, -> [2] on removal)'
+  },
+  {
+    name: 'comparisonModel: a removal drops the column but shifts no later index (docs/file-watching.md: reindex-in-lockstep)',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '    const shifted = shiftIndexAfterRemoval(o, removed);',
+    replace: '    const shifted = o === removed ? null : o;',
+    killedBy: 'removal tests (originals [null, 0, 1, 2]; votes [[0, 2], [2, 0]])'
+  },
+  {
     name: 'modalityVisibility: insert anchor broken (new modality always lands first)',
     file: 'src/webview/modalityVisibility.ts',
     suite: 'test/unit/modalityVisibility.test.ts',

@@ -122,6 +122,7 @@ The Vitest and Playwright configs live next to their tests (invoked via `--confi
 | `columnWindow` | real source | The column axis's virtualization arithmetic: a pool bounded by the viewport rather than the modality count (and capped by the columns that exist), sized from the narrowest possible tile so a resize never remaps the ring, the visible range with its overscan and both clamps, and where a column sits given the row's padding — all against hand-computed geometry for the 265 x 136 field grid |
 | `axisScroll` | real source | The one rule every scrollable axis obeys: centring computed from hand-derived geometry, clamping at both ends and on a short axis, the pitch snap that makes consecutive items differ by exactly one pitch, and Alt — multiplying a linear scroll but *compounding* the zoom step (`1.03**5`, not `1 + 0.03*5`), which is the arithmetic that keeps "faster" meaning the same on every axis |
 | `pillReorder` | real source | What a pill move does, against hand-written permutations: the moved one lands at `to` and the pills between close up by one in both directions (not a swap — the shape that re-attributes votes), a vote strictly between `from` and `to` following its pill; the drop slot's binary search passing a neighbour only strictly beyond its midpoint, clamping beyond either end, from either end slot, over uneven widths; and each other pill's slide sign and range while one is lifted |
+| `comparisonModel` | real source | The webview's comparison model, every operation after init on a permuted order (shown C A D B), against hand-worked arrays: init's palette fallback; tuple add and remove shifting votes; an insert keeping the arrangement and shifting display indices only at its point; a removal carrying display indices through the previous order; a move changing only the order while votes stay original and the selection follows `movedIndex`; vote set, clear and reset; hidden toggled in insertion order; no operation mutating its input |
 | `viewState` | real source | A published page's saved view, against hand-worked listings: names saved, never indices; a saved order applied by name onto a listing whose original order differs, a gone name skipped, an unseen modality appended in listing order, a gone tuple or modality left at its default (the first tuple, the first visible modality), zoom clamped to 0.1-50, non-finite numbers ignored, and any malformed save restoring every default without throwing |
 | `tupleLoadPlan` | real source | The webview's arrival policy: arrival requests only the on-screen modality, sibling order by display distance (rearranged order, hidden pills skipped as targets *and* steps, forward-first ties), cached slots dropped, nearest-two-vs-tail split |
 | `parallelScan` | real source | The open scan's directory IO, with latency and entry order simulated in the `vscode` mock: all 11 modality dirs listed in one wave, the fan-out capped at 16, caller order preserved when the dirs finish slowest-first and across waves, and the serial loop's behaviours kept (image-less dirs omitted, per-directory natural sort, a listing failure still rejecting with the earliest failure in input order). Also: a scrambled 12-directory completion order carried through `buildInitPayload` — positional `modalityColors` and every dense tuple's slot→modality map, which is what a silent column reshuffle would move |
@@ -548,6 +549,14 @@ fixed.
   identical and silent.
 
 ## Findings (caught by this testbed)
+
+- **A pill move during a PPTX export changed the deck in the standalone page** *(fixed)* — the
+  webview posted its live `modalityOrder` array in `exportPptx` and spliced that same array on each
+  move. The standalone adapter takes the message by reference and `pptxDeck.ts` reads the order
+  across awaits, so a move during an export reordered, repeated or skipped columns. The extension
+  clones each posted message and could not reach it. The comparison model's order is copy-on-write,
+  so a posted order never changes; pinned by `a pill move after the click leaves the posted export
+  order unchanged` in `test/webview/pptx-export.spec.ts`.
 
 - **A lifted pill overshot the row's far end on CI only** *(fixed)* — `webview/pillDrag.ts` built the
   lift's clamp, the drop midpoints and the slide shift from whole-pixel `offsetLeft`/`offsetWidth`,
