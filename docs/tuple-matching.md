@@ -268,6 +268,14 @@ not durable across a rescan, names are.
 Display order is only `order`. The model stores no display-ordered value, so a move changes `order`
 and nothing else. (`main.ts` derives its display-ordered `images` from `loadedTuples` on each render.)
 
+Before the model, `main.ts` kept:
+- names, paths and colours in display order;
+- winners and the current and previous modality as display indices;
+- hidden and four caches by original index.
+
+Five handlers re-indexed all of it by hand, and the compiler caught no mistake. "Modality reorder
+lost the tooltip path" in `docs/testing.md` Findings was that failure.
+
 Each structural change is one pure function. It returns the new model and a remap: `tuple`,
 `modality` (original space) and `display`. `main.ts` applies the remap to its slot caches
 (`loadedTuples`, `thumbnailUrls`) and to the current and previous modality. It keeps these two as
@@ -275,16 +283,17 @@ display indices.
 
 The trap that is left is the display remap. A display index names a slot of the *previous* order:
 
-- a removal maps it through the previous order to an original index and shifts that. The order then
-  resets to identity, so the result is also the display index. If the code reads the display index
-  as an original, it is correct only for the identity order;
+- a removal keeps the order (`rearrangement-survives-removal` below). It maps a display index
+  through the previous order to an original index, shifts that, and looks up where the new order
+  shows it. If the code reads the display index as an original, it is correct only for the identity
+  order;
 - an insert keeps the order (`rearrangement-survives-insert` below), so a display index shifts only
   at the insertion point that `displayOrderAfterInsert` returns;
 - a move maps it through `movedIndex`.
 
 The compiler catches none of these, because a stale `DisplayModalityIndex` has the same type as a
-fresh one. `test/unit/comparisonModel.test.ts` runs each operation on a permuted order, and
-`scripts/mutation-check.mjs` breaks each remap.
+fresh one. `test/unit/comparisonModel.test.ts` runs each operation after init on a permuted order,
+and `scripts/mutation-check.mjs` breaks each remap.
 
 ## Invariants
 
@@ -355,3 +364,7 @@ fresh one. `test/unit/comparisonModel.test.ts` runs each operation on a permuted
   original-order predecessor (`displayOrderAfterInsert`, pure and suite-pinned), and existing
   display indices only shift at the insertion point. Resetting to identity order was the old
   behavior and reads as data loss to a user who curated an order.
+- **`rearrangement-survives-removal`** — a removed modality must not reset the user's pill
+  arrangement either. The new order is the old one without the removed column, each later original
+  index shifted down by one. The focused modality and the winners stay with their columns, and the
+  removed column's display index maps to null.

@@ -671,7 +671,23 @@ const mutations = [
     suite: 'test/unit/comparisonModel.test.ts',
     find: '      const o = m.order[d];',
     replace: '      const o = asOriginal(d);',
-    killedBy: 'removal carry test (shown C A D B, A removed: display 0 -> 1, 3 -> 0)'
+    killedBy: 'removal arrangement test (shown C A D B, A removed: display 0 -> 0, 2 -> 1, 3 -> 2)'
+  },
+  {
+    name: 'comparisonModel: a removal resets the arrangement to identity (docs/tuple-matching.md: rearrangement-survives-removal)',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '  return changed(m, { tuples, modalities: records, order }, {',
+    replace: '  return changed(m, { tuples, modalities: records, order: records.map((_, i) => asOriginal(i)) }, {',
+    killedBy: 'removal arrangement test (C A D B, A removed -> C D B, order [1, 2, 0])'
+  },
+  {
+    name: 'comparisonModel: a removal lands each display index as if the new order were identity (docs/tuple-matching.md: rearrangement-survives-removal)',
+    file: 'src/webview/comparisonModel.ts',
+    suite: 'test/unit/comparisonModel.test.ts',
+    find: '      return carried === null ? null : toDisplay(carried, order);',
+    replace: '      return carried === null ? null : asDisplay(carried);',
+    killedBy: 'removal arrangement test (display remap [0, null, 1, 2, null], not [1, null, 2, 0, null])'
   },
   {
     name: 'comparisonModel: an insert resets the arrangement to identity',

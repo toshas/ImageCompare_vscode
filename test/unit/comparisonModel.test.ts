@@ -145,15 +145,15 @@ describe('comparison model (comparisonModel.ts, real code)', () => {
   });
 
   describe('modality removed', () => {
-    // A (original 0) goes while shown C A D B; the order resets to identity: B C D.
-    it('carries each display index through the previous order, not as if it were original', () => {
+    // A (original 0) goes while shown C A D B; the arrangement is kept: C D B, renumbered B=0 C=1 D=2.
+    it('keeps the arrangement: the order loses the removed column and each display index follows its column', () => {
       const m = base();
       const before = structuredClone(m);
       const { model, remap } = modalityRemoved(m, asOriginal(0));
-      expect(model.order).toEqual([0, 1, 2]);
-      expect(names(model)).toEqual(['B', 'C', 'D']);
-      // C (display 0) is now display 1, A is gone, D stays at 2, B (display 3) is now 0.
-      expect(displays(remap.display, 5)).toEqual([1, null, 2, 0, null]);
+      expect(model.order).toEqual([1, 2, 0]);
+      expect(names(model)).toEqual(['C', 'D', 'B']);
+      // C stays at display 0, A is gone, D (display 2) is now 1, B (display 3) is now 2.
+      expect(displays(remap.display, 5)).toEqual([0, null, 1, 2, null]);
       expect([0, 1, 2, 3].map(o => remap.modality(asOriginal(o)))).toEqual([null, 0, 1, 2]);
       expect(m).toEqual(before);
     });

@@ -536,6 +536,20 @@
           ]
         },
         {
+          "id": "reorder-remove-preserve",
+          "name": "Removed modality preserves user rearrangement + focus",
+          "tests": [
+            {
+              "suite": "unit",
+              "match": "keeps the arrangement: the order loses the removed column"
+            },
+            {
+              "suite": "unit",
+              "match": "drops the column from votes, hidden and every tuple"
+            }
+          ]
+        },
+        {
           "id": "reorder-drag-mouse",
           "name": "Drag a pill to reorder (mouse)",
           "tests": [
@@ -589,7 +603,7 @@
           "tests": [
             {
               "suite": "unit",
-              "match": "a vote on a pill strictly between from and to follows that pill"
+              "match": "an index strictly between from and to follows its pill"
             },
             {
               "suite": "unit",
@@ -1781,14 +1795,6 @@
             {
               "suite": "unit",
               "match": "adds nothing a second time when the next sweep sees the same recreated tree"
-            },
-            {
-              "suite": "unit",
-              "match": "carries each display index through the previous order"
-            },
-            {
-              "suite": "unit",
-              "match": "drops the column from votes, hidden and every tuple"
             }
           ]
         },

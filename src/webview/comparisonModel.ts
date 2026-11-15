@@ -160,7 +160,7 @@ export function modalityAdded(
   });
 }
 
-/** The column at original index `removed` dropped; the order resets to identity, as it always has. */
+/** The column at original index `removed` dropped; the rest of the order keeps its arrangement. */
 export function modalityRemoved(m: ComparisonModel, removed: OriginalModalityIndex): Change {
   const removedName = m.modalities[removed]?.name;
   const records = m.modalities.slice();
@@ -173,14 +173,16 @@ export function modalityRemoved(m: ComparisonModel, removed: OriginalModalityInd
     const shifted = shiftIndexAfterRemoval(o, removed);
     return shifted === null ? null : asOriginal(shifted);
   };
-  return changed(m, { tuples, modalities: records, order: records.map((_, i) => asOriginal(i)) }, {
+  // The user's arrangement survives the removal; the other columns close up around it (docs/tuple-matching.md: rearrangement-survives-removal).
+  const order = m.order.map(modality).filter((o): o is OriginalModalityIndex => o !== null);
+  return changed(m, { tuples, modalities: records, order }, {
     tuple: same,
     modality,
-    // A display index names a slot of the previous order; the new order is identity, so its original is its display index.
+    // A display index names a slot of the previous order; its column's new display position is where it lands.
     display: d => {
       const o = m.order[d];
       const carried = o === undefined ? null : modality(o);
-      return carried === null ? null : asDisplay(carried);
+      return carried === null ? null : toDisplay(carried, order);
     },
   });
 }

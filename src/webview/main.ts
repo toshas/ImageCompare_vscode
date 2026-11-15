@@ -1020,6 +1020,7 @@ function handleModalityAdded(message: { modality: string; modalityPath: string; 
 }
 
 function handleModalityRemoved(message: { modalityIndex: OriginalModalityIndex }) {
+  // applyChange carries the current and previous modality through the removal's display remap (docs/tuple-matching.md: rearrangement-survives-removal).
   applyChange(modalityRemoved(model, message.modalityIndex));
   images = [];
   // Index-keyed and every later modality index just shifted; a stale bit would cost a slot its one retry.

@@ -330,7 +330,7 @@ digit-jumpable, but skipped by arrow-key cycling and as a Space-flip target. The
   `ScanResult` field has exactly one sanctioned reader, `findMatchingDeletedFile()`, where the row
   count is genuinely the question: sibling-directory rename matching means nothing in single-tuple
   mode. The webview's same-named module-local in `src/webview/main.ts` is not this field. It is
-  recomputed there from `tuples.length > 1` as a row-count convenience for the UI, so a grep for the
+  recomputed there from `model.tuples.length > 1` as a row-count convenience for the UI, so a grep for the
   identifier finds readers this invariant does not cover. Using it as a mode test silently disabled
   voting and new-file pickup for any *single-tuple* multi-directory comparison. The deleted-path case
   broke separately, from reading the caller's raw URI list instead of `roots`.

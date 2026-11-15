@@ -16,7 +16,7 @@ describe('pill reorder (pillReorder.ts, real code)', () => {
       expect([0, 1, 2, 3, 4].map((k) => movedIndex(k, 3, 1))).toEqual([0, 2, 3, 1, 4]);
     });
 
-    it('a vote on a pill strictly between from and to follows that pill, not the moved one', () => {
+    it('an index strictly between from and to follows its pill, not the moved one', () => {
       // Vote on C (index 2); A moves 0 -> 3 in [A, B, C, D, E] -> [B, C, D, A, E]: C is now at 1.
       expect(movedIndex(2, 0, 3)).toBe(1);
       // Vote on B (index 1); E moves 4 -> 0 in [A, B, C, D, E] -> [E, A, B, C, D]: B is now at 2.
